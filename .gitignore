@@ -1,0 +1,28 @@
+# IDE and OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+
+# .NET
+**/bin/
+**/obj/
+
+# Node / Vite
+**/node_modules/
+**/dist/
+**/.vite/
+
+# Environment and secrets
+**/.env
+**/.env.*
+!**/.env.example
+**/appsettings.Development.json
+**/appsettings.Production.json
+
+# Runtime uploads and logs
+**/wwwroot/uploads/*
+!**/wwwroot/uploads/.gitkeep
+*.log

@@ -1,0 +1,454 @@
+using System;
+using System.Collections.Generic;
+using AIStudyHub.Domain.Entities;
+using AIStudyHub.Application.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace AIStudyHub.Infrastructure.Persistence;
+
+public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
+{
+    public StudyHubDbContext()
+    {
+    }
+
+    public StudyHubDbContext(DbContextOptions<StudyHubDbContext> options)
+        : base(options)
+    {
+    }
+
+    public virtual DbSet<Bookmark> Bookmarks { get; set; }
+
+    public virtual DbSet<ChatMessage> ChatMessages { get; set; }
+
+    public virtual DbSet<ChatSession> ChatSessions { get; set; }
+
+    public virtual DbSet<Document> Documents { get; set; }
+
+    public virtual DbSet<DocumentExtractedText> DocumentExtractedTexts { get; set; }
+
+    public virtual DbSet<DocumentReport> DocumentReports { get; set; }
+
+    public virtual DbSet<Folder> Folders { get; set; }
+
+    public virtual DbSet<Friendship> Friendships { get; set; }
+
+    public virtual DbSet<ReportReasonConfig> ReportReasonConfigs { get; set; }
+
+    public virtual DbSet<Subscription> Subscriptions { get; set; }
+
+    public virtual DbSet<Transaction> Transactions { get; set; }
+
+    public virtual DbSet<User> Users { get; set; }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+    }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Bookmark>(entity =>
+        {
+            entity.HasKey(e => e.BookmarkId).HasName("PK__bookmark__D9C65802B76AD4EB");
+
+            entity.ToTable("bookmarks");
+
+            entity.HasIndex(e => new { e.UserId, e.DocumentId }, "UQ_user_document").IsUnique();
+
+            entity.Property(e => e.BookmarkId).HasColumnName("bookmark_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.Document).WithMany(p => p.Bookmarks)
+                .HasForeignKey(d => d.DocumentId)
+                .HasConstraintName("FK__bookmarks__docum__7A672E12");
+
+            entity.HasOne(d => d.User).WithMany(p => p.Bookmarks)
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__bookmarks__user___797309D9");
+        });
+
+        modelBuilder.Entity<ChatMessage>(entity =>
+        {
+            entity.HasKey(e => e.MessageId).HasName("PK__chat_mes__0BBF6EE6E95120F9");
+
+            entity.ToTable("chat_messages");
+
+            entity.Property(e => e.MessageId).HasColumnName("message_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.Display)
+                .HasDefaultValue(true)
+                .HasColumnName("display");
+            entity.Property(e => e.MessageContent).HasColumnName("message_content");
+            entity.Property(e => e.Sender)
+                .HasMaxLength(10)
+                .HasColumnName("sender");
+            entity.Property(e => e.SessionId).HasColumnName("session_id");
+
+            entity.HasOne(d => d.Session).WithMany(p => p.ChatMessages)
+                .HasForeignKey(d => d.SessionId)
+                .HasConstraintName("FK__chat_mess__sessi__04E4BC85");
+        });
+
+        modelBuilder.Entity<ChatSession>(entity =>
+        {
+            entity.HasKey(e => e.SessionId).HasName("PK__chat_ses__69B13FDC4864A485");
+
+            entity.ToTable("chat_sessions");
+
+            entity.Property(e => e.SessionId).HasColumnName("session_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.IsPinned)
+                .HasDefaultValue(false)
+                .HasColumnName("is_pinned");
+            entity.Property(e => e.SessionName)
+                .HasMaxLength(255)
+                .HasColumnName("session_name");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.User).WithMany(p => p.ChatSessions)
+                .HasForeignKey(d => d.UserId)
+                .HasConstraintName("FK__chat_sess__user___7F2BE32F");
+        });
+
+        modelBuilder.Entity<Document>(entity =>
+        {
+            entity.HasKey(e => e.DocumentId).HasName("PK__document__9666E8AC7D9D1A38");
+
+            entity.ToTable("documents", tb => tb.HasTrigger("trg_documents_updated_at"));
+
+            entity.HasIndex(e => e.ShareLinkToken, "UQ__document__80F6B1287778587F").IsUnique();
+
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.AiParsingStatus)
+                .HasMaxLength(20)
+                .HasDefaultValue("PENDING")
+                .HasColumnName("ai_parsing_status");
+            entity.Property(e => e.BookmarkCount)
+                .HasDefaultValue(0)
+                .HasColumnName("bookmark_count");
+            entity.Property(e => e.CloudStorageUrl)
+                .HasMaxLength(500)
+                .HasColumnName("cloud_storage_url");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.DownloadCount)
+                .HasDefaultValue(0)
+                .HasColumnName("download_count");
+            entity.Property(e => e.FileExtension)
+                .HasMaxLength(10)
+                .HasColumnName("file_extension");
+            entity.Property(e => e.FileSizeMb)
+                .HasColumnType("decimal(5, 2)")
+                .HasColumnName("file_size_mb");
+            entity.Property(e => e.FolderId)
+                .HasDefaultValueSql("(NULL)")
+                .HasColumnName("folder_id");
+            entity.Property(e => e.IsFlagged)
+                .HasDefaultValue(false)
+                .HasColumnName("is_flagged");
+            entity.Property(e => e.ShareLinkToken)
+                .HasMaxLength(100)
+                .HasColumnName("share_link_token");
+            entity.Property(e => e.SharingPermission)
+                .HasMaxLength(20)
+                .HasDefaultValue("PRIVATE")
+                .HasColumnName("sharing_permission");
+            entity.Property(e => e.Title)
+                .HasMaxLength(255)
+                .HasColumnName("title");
+            entity.Property(e => e.TotalReportScore)
+                .HasDefaultValue(0.0m)
+                .HasColumnType("decimal(5, 2)")
+                .HasColumnName("total_report_score");
+            entity.Property(e => e.UpdatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("updated_at");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.Folder).WithMany(p => p.Documents)
+                .HasForeignKey(d => d.FolderId)
+                .HasConstraintName("FK__documents__folde__73BA3083");
+
+            entity.HasOne(d => d.User).WithMany(p => p.Documents)
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__documents__user___72C60C4A");
+        });
+
+        modelBuilder.Entity<DocumentExtractedText>(entity =>
+        {
+            entity.HasKey(e => e.ExtractionId).HasName("PK__document__BCC16E1649B63322");
+
+            entity.ToTable("document_extracted_text");
+
+            entity.HasIndex(e => e.DocumentId, "UQ__document__9666E8AD5264E5FA").IsUnique();
+
+            entity.Property(e => e.ExtractionId).HasColumnName("extraction_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.ExtractedText).HasColumnName("extracted_text");
+
+            entity.HasOne(d => d.Document).WithOne(p => p.DocumentExtractedText)
+                .HasForeignKey<DocumentExtractedText>(d => d.DocumentId)
+                .HasConstraintName("FK__document___docum__10566F31");
+        });
+
+        modelBuilder.Entity<DocumentReport>(entity =>
+        {
+            entity.HasKey(e => e.ReportId).HasName("PK__document__779B7C58B6B4C46C");
+
+            entity.ToTable("document_reports");
+
+            entity.HasIndex(e => new { e.DocumentId, e.ReporterId }, "UQ_document_reporter").IsUnique();
+
+            entity.Property(e => e.ReportId).HasColumnName("report_id");
+            entity.Property(e => e.AdditionalDetails)
+                .HasMaxLength(500)
+                .HasColumnName("additional_details");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.ReasonCode)
+                .HasMaxLength(50)
+                .HasColumnName("reason_code");
+            entity.Property(e => e.ReporterId).HasColumnName("reporter_id");
+            entity.Property(e => e.ResolvedAt).HasColumnName("resolved_at");
+            entity.Property(e => e.ResolvedByAdminId).HasColumnName("resolved_by_admin_id");
+            entity.Property(e => e.Status)
+                .HasMaxLength(20)
+                .HasDefaultValue("PENDING")
+                .HasColumnName("status");
+
+            entity.HasOne(d => d.Document).WithMany(p => p.DocumentReports)
+                .HasForeignKey(d => d.DocumentId)
+                .HasConstraintName("FK__document___docum__245D67DE");
+
+            entity.HasOne(d => d.ReasonCodeNavigation).WithMany(p => p.DocumentReports)
+                .HasForeignKey(d => d.ReasonCode)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__document___reaso__2645B050");
+
+            entity.HasOne(d => d.Reporter).WithMany(p => p.DocumentReportReporters)
+                .HasForeignKey(d => d.ReporterId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__document___repor__25518C17");
+
+            entity.HasOne(d => d.ResolvedByAdmin).WithMany(p => p.DocumentReportResolvedByAdmins)
+                .HasForeignKey(d => d.ResolvedByAdminId)
+                .HasConstraintName("FK__document___resol__2739D489");
+        });
+
+        modelBuilder.Entity<Folder>(entity =>
+        {
+            entity.HasKey(e => e.FolderId).HasName("PK__folders__0045071B08AC39F5");
+
+            entity.ToTable("folders");
+
+            entity.Property(e => e.FolderId).HasColumnName("folder_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.FolderName)
+                .HasMaxLength(100)
+                .HasColumnName("folder_name");
+            entity.Property(e => e.ParentFolderId)
+                .HasDefaultValueSql("(NULL)")
+                .HasColumnName("parent_folder_id");
+            entity.Property(e => e.SharingPermission)
+                .HasMaxLength(20)
+                .HasDefaultValue("PRIVATE")
+                .HasColumnName("sharing_permission");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.ParentFolder).WithMany(p => p.InverseParentFolder)
+                .HasForeignKey(d => d.ParentFolderId)
+                .HasConstraintName("FK__folders__parent___6477ECF3");
+
+            entity.HasOne(d => d.User).WithMany(p => p.Folders)
+                .HasForeignKey(d => d.UserId)
+                .HasConstraintName("FK__folders__user_id__6383C8BA");
+        });
+
+        modelBuilder.Entity<Friendship>(entity =>
+        {
+            entity.HasKey(e => e.FriendshipId).HasName("PK__friendsh__BC802BCF248A674B");
+
+            entity.ToTable("friendships", tb => tb.HasTrigger("trg_friendships_updated_at"));
+
+            entity.HasIndex(e => new { e.RequesterId, e.AddresseeId }, "UQ_friendship").IsUnique();
+
+            entity.Property(e => e.FriendshipId).HasColumnName("friendship_id");
+            entity.Property(e => e.AddresseeId).HasColumnName("addressee_id");
+            entity.Property(e => e.BlockerId).HasColumnName("blocker_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.RequesterId).HasColumnName("requester_id");
+            entity.Property(e => e.Status)
+                .HasMaxLength(20)
+                .HasDefaultValue("PENDING")
+                .HasColumnName("status");
+            entity.Property(e => e.UpdatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("updated_at");
+
+            entity.HasOne(d => d.Addressee).WithMany(p => p.FriendshipAddressees)
+                .HasForeignKey(d => d.AddresseeId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__friendshi__addre__18EBB532");
+
+            entity.HasOne(d => d.Blocker).WithMany(p => p.FriendshipBlockers)
+                .HasForeignKey(d => d.BlockerId)
+                .HasConstraintName("FK_friendships_blocker");
+
+            entity.HasOne(d => d.Requester).WithMany(p => p.FriendshipRequesters)
+                .HasForeignKey(d => d.RequesterId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__friendshi__reque__17F790F9");
+        });
+
+        modelBuilder.Entity<ReportReasonConfig>(entity =>
+        {
+            entity.HasKey(e => e.ReasonCode).HasName("PK__report_r__3CA7EBEAB962CFAE");
+
+            entity.ToTable("report_reason_configs");
+
+            entity.Property(e => e.ReasonCode)
+                .HasMaxLength(50)
+                .HasColumnName("reason_code");
+            entity.Property(e => e.AutoFlagThreshold)
+                .HasColumnType("decimal(5, 2)")
+                .HasColumnName("auto_flag_threshold");
+            entity.Property(e => e.BaseScore)
+                .HasColumnType("decimal(5, 2)")
+                .HasColumnName("base_score");
+            entity.Property(e => e.Description)
+                .HasMaxLength(255)
+                .HasColumnName("description");
+            entity.Property(e => e.SeverityLevel)
+                .HasMaxLength(20)
+                .HasColumnName("severity_level");
+        });
+
+        modelBuilder.Entity<Subscription>(entity =>
+        {
+            entity.HasKey(e => e.TierId).HasName("PK__subscrip__9D52AF9C4432F8CD");
+
+            entity.ToTable("subscriptions");
+
+            entity.HasIndex(e => e.TierName, "UQ__subscrip__10845677F3F410E0").IsUnique();
+
+            entity.Property(e => e.TierId).HasColumnName("tier_id");
+            entity.Property(e => e.AiPromptLimitPerDay).HasColumnName("ai_prompt_limit_per_day");
+            entity.Property(e => e.MaxStorageMb).HasColumnName("max_storage_mb");
+            entity.Property(e => e.Price)
+                .HasDefaultValue(0.00m)
+                .HasColumnType("decimal(10, 2)")
+                .HasColumnName("price");
+            entity.Property(e => e.TierName)
+                .HasMaxLength(50)
+                .HasColumnName("tier_name");
+            entity.Property(e => e.TotalStorageMb).HasColumnName("total_storage_mb");
+        });
+
+        modelBuilder.Entity<Transaction>(entity =>
+        {
+            entity.HasKey(e => e.TransactionId).HasName("PK__transact__85C600AF9446ED91");
+
+            entity.ToTable("transactions");
+
+            entity.Property(e => e.TransactionId).HasColumnName("transaction_id");
+            entity.Property(e => e.Amount)
+                .HasColumnType("decimal(10, 2)")
+                .HasColumnName("amount");
+            entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
+            entity.Property(e => e.StartedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("started_at");
+            entity.Property(e => e.Status)
+                .HasMaxLength(20)
+                .HasDefaultValue("PENDING")
+                .HasColumnName("status");
+            entity.Property(e => e.Type)
+                .HasMaxLength(20)
+                .HasColumnName("type");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.User).WithMany(p => p.Transactions)
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__transacti__user___0B91BA14");
+        });
+
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.HasKey(e => e.UserId).HasName("PK__users__B9BE370FF7FCE835");
+
+            entity.ToTable("users", tb => tb.HasTrigger("trg_users_updated_at"));
+
+            entity.HasIndex(e => e.Email, "UQ__users__AB6E6164FC555B14").IsUnique();
+
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.AiPromptsToday)
+                .HasDefaultValue(0)
+                .HasColumnName("ai_prompts_today");
+            entity.Property(e => e.Balance)
+                .HasDefaultValue(0)
+                .HasColumnName("balance");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("created_at");
+            entity.Property(e => e.DowngradeNoticePending).HasColumnName("downgrade_notice_pending");
+            entity.Property(e => e.Email)
+                .HasMaxLength(100)
+                .HasColumnName("email");
+            entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(e => e.ExpiryNotified).HasColumnName("expiry_notified");
+            entity.Property(e => e.LastPromptReset)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime")
+                .HasColumnName("last_prompt_reset");
+            entity.Property(e => e.PasswordHash)
+                .HasMaxLength(255)
+                .HasColumnName("password_hash");
+            entity.Property(e => e.Role)
+                .HasMaxLength(10)
+                .HasDefaultValue("STUDENT")
+                .HasColumnName("role");
+            entity.Property(e => e.Status)
+                .HasMaxLength(10)
+                .HasDefaultValue("ACTIVE")
+                .HasColumnName("status");
+            entity.Property(e => e.TierId)
+                .HasDefaultValue(2)
+                .HasColumnName("tier_id");
+            entity.Property(e => e.UpdatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnName("updated_at");
+            entity.Property(e => e.Username)
+                .HasMaxLength(50)
+                .HasColumnName("username");
+
+            entity.HasOne(d => d.Tier).WithMany(p => p.Users)
+                .HasForeignKey(d => d.TierId)
+                .HasConstraintName("FK__users__tier_id__5BE2A6F2");
+        });
+
+        OnModelCreatingPartial(modelBuilder);
+    }
+
+    partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
+}

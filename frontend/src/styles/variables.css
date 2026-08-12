@@ -1,0 +1,47 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* Color Palette - Cyber obsidian & Neon glows */
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #11111a;
+  --bg-tertiary: #161625;
+  --bg-glass: rgba(16, 16, 26, 0.6);
+  --bg-glass-hover: rgba(22, 22, 37, 0.75);
+
+  --accent-purple: #9d4edd;
+  --accent-blue: #00b4d8;
+  --accent-blue-rgb: 0, 180, 216;
+  --accent-purple-rgb: 157, 78, 221;
+  --accent-glow: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+
+  --border-neon: rgba(157, 78, 221, 0.15);
+  --border-neon-active: rgba(0, 180, 216, 0.4);
+
+  /* Text Colors */
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+
+  /* Semantic Colors */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+
+  /* Card and Border Radius */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+
+  /* Shadow & Glows */
+  --shadow-neon: 0 0 15px rgba(157, 78, 221, 0.2);
+  --shadow-neon-active: 0 0 25px rgba(0, 180, 216, 0.35);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+
+  /* Transition speeds */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Dimensions */
+  --sidebar-width: 260px;
+}
+

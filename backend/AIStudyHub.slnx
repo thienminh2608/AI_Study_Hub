@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AIStudyHub.Api/AIStudyHub.Api.csproj" />
+    <Project Path="src/AIStudyHub.Application/AIStudyHub.Application.csproj" />
+    <Project Path="src/AIStudyHub.Domain/AIStudyHub.Domain.csproj" />
+    <Project Path="src/AIStudyHub.Infrastructure/AIStudyHub.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AIStudyHub.IntegrationTests/AIStudyHub.IntegrationTests.csproj" />
+    <Project Path="tests/AIStudyHub.UnitTests/AIStudyHub.UnitTests.csproj" />
+  </Folder>
+</Solution>
