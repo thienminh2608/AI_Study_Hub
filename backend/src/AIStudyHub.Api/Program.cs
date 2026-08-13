@@ -132,7 +132,15 @@ using (var scope = app.Services.CreateScope())
         IF OBJECT_ID('moderation_appeals', 'U') IS NULL
             CREATE TABLE moderation_appeals (appeal_id INT IDENTITY PRIMARY KEY, report_id INT NOT NULL UNIQUE, submitted_by_user_id INT NOT NULL, explanation NVARCHAR(2000) NOT NULL, evidence_url NVARCHAR(1000) NULL, status VARCHAR(20) NOT NULL DEFAULT 'PENDING', reviewed_by_user_id INT NULL, review_note NVARCHAR(1000) NULL, created_at DATETIME2 NOT NULL DEFAULT GETDATE(), reviewed_at DATETIME2 NULL, CONSTRAINT FK_moderation_appeal_report FOREIGN KEY(report_id) REFERENCES document_reports(report_id) ON DELETE CASCADE);
         IF OBJECT_ID('moderation_notices', 'U') IS NULL
-            CREATE TABLE moderation_notices (notice_id BIGINT IDENTITY PRIMARY KEY, user_id INT NOT NULL, document_id INT NOT NULL, report_id INT NULL, type VARCHAR(30) NOT NULL, title NVARCHAR(200) NOT NULL, message NVARCHAR(1500) NOT NULL, can_appeal BIT NOT NULL DEFAULT 0, is_read BIT NOT NULL DEFAULT 0, created_at DATETIME2 NOT NULL DEFAULT GETDATE(), CONSTRAINT FK_moderation_notice_user FOREIGN KEY(user_id) REFERENCES users(user_id));
+            CREATE TABLE moderation_notices (notice_id BIGINT IDENTITY PRIMARY KEY, user_id INT NOT NULL, document_id INT NULL, report_id INT NULL, transaction_id INT NULL, related_user_id INT NULL, action_url NVARCHAR(500) NULL, type VARCHAR(50) NOT NULL, title NVARCHAR(200) NOT NULL, message NVARCHAR(1500) NOT NULL, can_appeal BIT NOT NULL DEFAULT 0, is_read BIT NOT NULL DEFAULT 0, created_at DATETIME2 NOT NULL DEFAULT GETDATE(), CONSTRAINT FK_moderation_notice_user FOREIGN KEY(user_id) REFERENCES users(user_id));
+        IF OBJECT_ID('moderation_notices', 'U') IS NOT NULL
+        BEGIN
+            ALTER TABLE moderation_notices ALTER COLUMN document_id INT NULL;
+            IF COL_LENGTH('moderation_notices', 'transaction_id') IS NULL ALTER TABLE moderation_notices ADD transaction_id INT NULL;
+            IF COL_LENGTH('moderation_notices', 'related_user_id') IS NULL ALTER TABLE moderation_notices ADD related_user_id INT NULL;
+            IF COL_LENGTH('moderation_notices', 'action_url') IS NULL ALTER TABLE moderation_notices ADD action_url NVARCHAR(500) NULL;
+            ALTER TABLE moderation_notices ALTER COLUMN type VARCHAR(50) NOT NULL;
+        END
         IF OBJECT_ID('document_activities', 'U') IS NULL
         BEGIN
             CREATE TABLE document_activities (

@@ -2,13 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { Lock, Mail, Loader } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, Loader } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
 
   const { login, user, loading } = useAuth();
   const navigate = useNavigate();
@@ -37,8 +39,8 @@ export const Login: React.FC = () => {
 
     setSubmitting(true);
     try {
-      const response = await api.auth.login({ email, password });
-      await login(response.token);
+      const response = await api.auth.login({ email, password, rememberMe });
+      await login(response.token, rememberMe, response.refreshToken);
       navigate(
         response.role?.trim().toUpperCase() === 'ADMIN'
           ? '/admin'
@@ -94,15 +96,35 @@ export const Login: React.FC = () => {
             <div className="input-icon-wrapper">
               <Lock size={18} className="input-icon" />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 className="input-control"
                 disabled={submitting}
               />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+              >
+                {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+              </button>
             </div>
           </div>
+
+          <label className="remember-login">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+            />
+            <span>
+              <strong>Ghi nhớ đăng nhập</strong>
+              <small>Tự động gia hạn phiên đăng nhập trên thiết bị này.</small>
+            </span>
+          </label>
 
           <button type="submit" className="btn-primary auth-submit" disabled={submitting}>
             {submitting ? <Loader className="spin" size={18} /> : 'Đăng nhập'}
@@ -233,6 +255,15 @@ export const Login: React.FC = () => {
         .input-icon-wrapper .input-control {
           padding-left: 2.75rem;
         }
+        .input-icon-wrapper .input-control[type='password'],
+        .input-icon-wrapper .input-control[type='text'] { padding-right: 3rem; }
+        .password-toggle { position:absolute;right:.65rem;top:50%;transform:translateY(-50%);width:36px;height:36px;display:grid;place-items:center;border:1px solid rgba(0,180,216,.25);border-radius:8px;background:rgba(0,180,216,.12);color:#67e8f9;cursor:pointer; }
+        .password-toggle:hover { background:rgba(0,180,216,.22);border-color:var(--accent-blue);color:white;box-shadow:0 0 12px rgba(0,180,216,.2); }
+        .remember-login { display:flex!important;align-items:flex-start;gap:.7rem;color:var(--text-primary)!important;cursor:pointer; }
+        .remember-login input { width:17px;height:17px;margin-top:.15rem;accent-color:var(--accent-blue); }
+        .remember-login span { display:grid;gap:.18rem; }
+        .remember-login strong { font-size:.86rem; }
+        .remember-login small { color:var(--text-muted);font-size:.74rem;font-weight:400; }
 
         .auth-submit {
           margin-top: 0.5rem;

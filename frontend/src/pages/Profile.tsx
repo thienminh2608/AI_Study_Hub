@@ -6,6 +6,8 @@ import { User, Mail, Shield, Coins, Calendar, Loader, Key, Pencil, Save, X } fro
 
 export const Profile: React.FC = () => {
   const { user, refreshUser } = useAuth();
+  const normalizedRole = user?.role?.trim().toUpperCase();
+  const isStaff = normalizedRole === 'ADMIN' || normalizedRole === 'MODERATOR';
   const [editingUsername, setEditingUsername] = useState(false);
   const [username, setUsername] = useState(user?.username ?? '');
   const [savingUsername, setSavingUsername] = useState(false);
@@ -166,9 +168,9 @@ export const Profile: React.FC = () => {
               )}
             </div>
             <span
-              className={`badge ${user?.role === 'ADMIN' ? 'admin' : user?.tierId === 3 ? 'premium' : 'free'}`}
+              className={`badge ${normalizedRole === 'ADMIN' ? 'admin' : normalizedRole === 'MODERATOR' ? 'moderator' : user?.tierId === 3 ? 'premium' : 'free'}`}
             >
-              {user?.role === 'ADMIN' ? 'ADMIN' : user?.tierId === 3 ? 'PREMIUM' : 'FREE'}
+              {isStaff ? normalizedRole : user?.tierId === 3 ? 'PREMIUM' : 'FREE'}
             </span>
           </div>
 
@@ -180,20 +182,20 @@ export const Profile: React.FC = () => {
                 <span className="val">{user?.email}</span>
               </div>
             </div>
-            <div className="info-row">
-              <Coins size={16} className="info-row-icon" />
-              <div className="info-details balance-details">
-                <span className="label">Số dư khả dụng</span>
-                <div className="profile-balance-actions">
-                  <span className="val balance">{(user?.balance || 0).toLocaleString()}đ</span>
-                  {user?.role !== 'ADMIN' && (
+            {!isStaff && (
+              <div className="info-row">
+                <Coins size={16} className="info-row-icon" />
+                <div className="info-details balance-details">
+                  <span className="label">Số dư khả dụng</span>
+                  <div className="profile-balance-actions">
+                    <span className="val balance">{(user?.balance || 0).toLocaleString()}đ</span>
                     <Link to="/wallet?deposit=1" className="profile-deposit-link">
                       Nạp tiền
                     </Link>
-                  )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
             <div className="info-row">
               <Shield size={16} className="info-row-icon" />
               <div className="info-details">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 import { useAuth } from '../context/AuthContext';
 import { ArrowLeft, Trash2, Share2, AlertOctagon, Loader, Lock, Download } from 'lucide-react';
 import { FileTypeIcon } from '../components/FileTypeIcon';
@@ -26,6 +27,7 @@ interface DocumentDetails {
 }
 
 export const DocumentViewer: React.FC = () => {
+  const { notify } = useUiFeedback();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -71,7 +73,7 @@ export const DocumentViewer: React.FC = () => {
       const textData = await api.document.getText(documentId);
       setExtractedText(textData.extractedText);
     } catch (err: any) {
-      alert(err.message || 'Lỗi khi tải chi tiết tài liệu.');
+      notify(err.message || 'Lỗi khi tải chi tiết tài liệu.', 'error');
       navigate('/');
     } finally {
       setLoading(false);
@@ -100,7 +102,7 @@ export const DocumentViewer: React.FC = () => {
       setDoc(updated);
       setSharingPermission(updated.sharingPermission);
     } catch (err: any) {
-      alert(err.message || 'Cập nhật quyền chia sẻ thất bại.');
+      notify(err.message || 'Cập nhật quyền chia sẻ thất bại.', 'error');
     } finally {
       setUpdatingPermission(false);
     }
@@ -113,7 +115,7 @@ export const DocumentViewer: React.FC = () => {
       await api.document.delete(doc.documentId);
       navigate('/');
     } catch (err: any) {
-      alert(err.message || 'Không thể xóa tài liệu.');
+      notify(err.message || 'Không thể xóa tài liệu.', 'error');
     }
   };
 
@@ -143,12 +145,12 @@ export const DocumentViewer: React.FC = () => {
         reasonCode: reportReason,
         additionalDetails: reportDetails.trim(),
       });
-      alert('Đã gửi báo cáo vi phạm tài liệu thành công. Cảm ơn phản hồi của bạn!');
+      notify('Đã gửi báo cáo vi phạm tài liệu thành công. Cảm ơn phản hồi của bạn!', 'success');
       setShowReportModal(false);
       setReportDetails('');
       setFormError('');
     } catch (err: any) {
-      alert(err.message || 'Gửi báo cáo thất bại.');
+      notify(err.message || 'Gửi báo cáo thất bại.', 'error');
     } finally {
       setReporting(false);
     }
@@ -170,7 +172,7 @@ export const DocumentViewer: React.FC = () => {
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err: any) {
-      alert(err.message || 'Không thể tải file.');
+      notify(err.message || 'Không thể tải file.', 'error');
     }
   };
 

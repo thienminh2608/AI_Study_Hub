@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -38,6 +38,38 @@ export const Wallet: React.FC = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [transferConfig, setTransferConfig] = useState<TransferConfiguration | null>(null);
+  const [sortKey, setSortKey] = useState<keyof Transaction>('startedAt');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const sortedTransactions = useMemo(
+    () =>
+      [...transactions].sort((left, right) => {
+        const a = left[sortKey] ?? '',
+          b = right[sortKey] ?? '';
+        const result =
+          typeof a === 'number' && typeof b === 'number'
+            ? a - b
+            : String(a).localeCompare(String(b), 'vi');
+        return sortDirection === 'asc' ? result : -result;
+      }),
+    [transactions, sortKey, sortDirection],
+  );
+  const sortHeader = (key: keyof Transaction, label: string) => (
+    <button
+      className={`sortable-header ${sortKey === key ? 'active' : ''}`}
+      onClick={() => {
+        if (sortKey === key) setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+        else {
+          setSortKey(key);
+          setSortDirection('asc');
+        }
+      }}
+    >
+      {label}
+      <span aria-hidden="true">
+        {sortKey === key ? (sortDirection === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
+      </span>
+    </button>
+  );
 
   const loadTransactions = async () => {
     try {
@@ -261,16 +293,16 @@ export const Wallet: React.FC = () => {
             <table className="tx-table">
               <thead>
                 <tr>
-                  <th>Mã giao dịch</th>
-                  <th>Loại</th>
-                  <th>Số tiền</th>
-                  <th>Trạng thái</th>
-                  <th>Thời gian khởi tạo</th>
-                  <th>Hoàn thành lúc</th>
+                  <th>{sortHeader('transactionId', 'Mã giao dịch')}</th>
+                  <th>{sortHeader('type', 'Loại')}</th>
+                  <th>{sortHeader('amount', 'Số tiền')}</th>
+                  <th>{sortHeader('status', 'Trạng thái')}</th>
+                  <th>{sortHeader('startedAt', 'Thời gian khởi tạo')}</th>
+                  <th>{sortHeader('completedAt', 'Hoàn thành lúc')}</th>
                 </tr>
               </thead>
               <tbody>
-                {transactions.map((tx) => {
+                {sortedTransactions.map((tx) => {
                   const isDeposit = tx.type === 'DEPOSIT' || tx.amount > 0;
                   return (
                     <tr key={tx.transactionId}>

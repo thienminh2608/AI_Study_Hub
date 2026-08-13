@@ -166,6 +166,371 @@ a:hover {
   color: var(--text-muted);
 }
 
+select,
+select.input-control {
+  color-scheme: dark;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+select option,
+select optgroup {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.notification-bell {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.5rem;
+  z-index: 1500;
+}
+
+.notification-trigger,
+.icon-button {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+
+.notification-trigger {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  box-shadow: var(--glass-shadow);
+}
+
+.notification-trigger:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.notification-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border: 2px solid var(--bg-primary);
+  border-radius: 999px;
+  background: var(--danger);
+  color: white;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 15px;
+}
+
+.notification-popover {
+  position: absolute;
+  top: 52px;
+  right: 0;
+  width: min(390px, calc(100vw - 2rem));
+  overflow: hidden;
+  background: rgba(17, 17, 26, 0.98);
+}
+
+.notification-popover header,
+.notification-popover footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+}
+
+.notification-popover header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.notification-popover footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.notification-popover header div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.notification-popover header small {
+  color: var(--text-muted);
+}
+.notification-popover .icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+.notification-scroll {
+  max-height: min(430px, calc(100vh - 180px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.notification-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+.notification-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  text-shadow: none;
+}
+.notification-item.unread {
+  background: rgba(var(--accent-blue-rgb), 0.08);
+}
+.notification-type-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(var(--accent-blue-rgb), 0.1);
+  color: var(--accent-blue);
+}
+.notification-item.unread .notification-type-icon {
+  box-shadow: 0 0 12px rgba(var(--accent-blue-rgb), 0.18);
+}
+.notification-item > span:last-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+.notification-item small {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notification-item time {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.notification-empty {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+.popover-action,
+.notification-popover footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.popover-action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.sortable-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sortable-header span {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.sortable-header:hover,
+.sortable-header.active {
+  color: var(--accent-blue);
+}
+.report-statistics {
+  margin: 0.9rem 0;
+  padding: 1rem;
+}
+.report-statistics h4 {
+  margin-bottom: 0.75rem;
+}
+.compact-stat-table th,
+.compact-stat-table td {
+  text-align: center;
+}
+.compact-stat-table td {
+  color: var(--accent-blue);
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+.table-scroll {
+  width: 100%;
+  overflow: auto;
+}
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.admin-table th {
+  padding: 0.75rem 1rem;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.admin-table td {
+  padding: 0.85rem 1rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.85rem;
+}
+.admin-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.document-admin-table {
+  min-width: 1120px;
+}
+.document-title-button {
+  max-width: 280px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--accent-blue);
+  font-weight: 700;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.document-title-button:hover {
+  color: var(--accent-purple);
+}
+.document-row-actions {
+  display: flex;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+.document-row-actions .btn-secondary {
+  padding: 0.5rem 0.7rem;
+  font-size: 0.76rem;
+}
+.document-row-actions .btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .notification-bell {
+    top: 1.5rem;
+    right: 1.5rem;
+  }
+}
+
+.app-toast-stack {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  z-index: 5000;
+  display: grid;
+  gap: 0.65rem;
+  width: min(390px, calc(100vw - 2rem));
+  pointer-events: none;
+}
+.app-toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(17, 17, 26, 0.97);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary);
+  pointer-events: auto;
+  animation: slideUp 0.2s ease;
+}
+.app-toast.success > svg {
+  color: var(--success);
+}
+.app-toast.error > svg {
+  color: var(--danger);
+}
+.app-toast.info > svg {
+  color: var(--accent-blue);
+}
+.app-toast button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.app-toast span {
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.app-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(3, 7, 18, 0.84);
+  backdrop-filter: blur(8px);
+}
+.app-confirm-modal {
+  width: min(470px, 100%);
+  padding: 1.4rem;
+  background: rgba(17, 17, 26, 0.98);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1rem;
+}
+.app-confirm-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.12);
+}
+.app-confirm-icon.danger {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.12);
+}
+.app-confirm-modal h3 {
+  margin: 0 0 0.45rem;
+}
+.app-confirm-modal p {
+  color: var(--text-secondary);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.app-confirm-modal footer {
+  grid-column: 1/-1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
+}
+.app-confirm-modal .btn-danger {
+  padding: 0.75rem 1.1rem;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+  cursor: pointer;
+}
+
 /* Layout Framework */
 .dashboard-grid {
   display: grid;

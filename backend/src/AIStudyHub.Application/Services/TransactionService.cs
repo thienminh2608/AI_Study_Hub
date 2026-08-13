@@ -58,7 +58,23 @@ public class TransactionService : ITransactionService
         };
 
         _dbContext.Transactions.Add(tx);
-        return await _dbContext.SaveChangesAsync() > 0;
+        await _dbContext.SaveChangesAsync();
+        var username = await _dbContext.Users.Where(u => u.UserId == userId).Select(u => u.Username).FirstAsync();
+        var admins = await _dbContext.Users.Where(u => u.Role == "ADMIN" && u.Status == "ACTIVE").Select(u => u.UserId).ToListAsync();
+        _dbContext.ModerationNotices.AddRange(admins.Select(adminId => new ModerationNotice
+        {
+            UserId = adminId,
+            TransactionId = tx.TransactionId,
+            Type = "TRANSACTION_PENDING",
+            Title = "Giao dịch mới cần duyệt",
+            Message = $"Giao dịch #{tx.TransactionId} của {username}: {tx.Amount:N0}đ đang chờ phê duyệt.",
+            ActionUrl = $"/admin?tab=transactions&q={tx.TransactionId}&status=PENDING",
+            IsRead = false,
+            CreatedAt = _clock.Now
+        }));
+        if (admins.Count > 0)
+            await _dbContext.SaveChangesAsync();
+        return true;
     }
 
     public async Task<bool> UpdateTransactionStatusAsync(int transactionId, string newStatus)
@@ -89,6 +105,18 @@ public class TransactionService : ITransactionService
                     user.Balance = (user.Balance ?? 0) + (int)tx.Amount;
                 }
             }
+
+            _dbContext.ModerationNotices.Add(new ModerationNotice
+            {
+                UserId = tx.UserId,
+                TransactionId = tx.TransactionId,
+                Type = "TRANSACTION_RESOLVED",
+                Title = newStatus == "SUCCESS" ? "Giao dịch đã hoàn thành" : "Giao dịch đã bị hủy",
+                Message = $"Mã giao dịch: #{tx.TransactionId}\nSố tiền: {tx.Amount:N0}đ\nTrạng thái: {newStatus}\nNgày hoàn thành: {tx.CompletedAt:dd/MM/yyyy HH:mm}",
+                ActionUrl = "/wallet",
+                IsRead = false,
+                CreatedAt = _clock.Now
+            });
 
             await _dbContext.SaveChangesAsync();
             await dbTransaction.CommitAsync();

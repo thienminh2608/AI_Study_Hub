@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
 import {
   AlertCircle,
@@ -43,7 +44,13 @@ const statusLabel: Record<string, string> = {
 };
 
 export const ModeratorDashboard: React.FC = () => {
-  const [tab, setTab] = useState<Tab>('queue');
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const [tab, setTab] = useState<Tab>(
+    requestedTab === 'reports' || requestedTab === 'appeals' || requestedTab === 'history'
+      ? requestedTab
+      : 'queue',
+  );
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -55,6 +62,26 @@ export const ModeratorDashboard: React.FC = () => {
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [decisionError, setDecisionError] = useState('');
+  const [sortKey, setSortKey] = useState('time');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(key);
+      setSortDirection('asc');
+    }
+  };
+  const sortHeader = (key: string, label: string) => (
+    <button
+      className={`sortable-header ${sortKey === key ? 'active' : ''}`}
+      onClick={() => toggleSort(key)}
+    >
+      {label}
+      <span aria-hidden="true">
+        {sortKey === key ? (sortDirection === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
+      </span>
+    </button>
+  );
 
   const request = (nextTab = tab) =>
     nextTab === 'queue'
@@ -88,15 +115,33 @@ export const ModeratorDashboard: React.FC = () => {
 
   const filtered = useMemo(
     () =>
-      items.filter((item) => {
-        const haystack = JSON.stringify(item).toLocaleLowerCase('vi');
-        const keyword = query.trim().toLocaleLowerCase('vi');
-        const itemStatus = item.moderationStatus || item.status || item.newStatus || '';
-        return (
-          (!keyword || haystack.includes(keyword)) && (status === 'ALL' || itemStatus === status)
-        );
-      }),
-    [items, query, status],
+      items
+        .filter((item) => {
+          const haystack = JSON.stringify(item).toLocaleLowerCase('vi');
+          const keyword = query.trim().toLocaleLowerCase('vi');
+          const itemStatus = item.moderationStatus || item.status || item.newStatus || '';
+          return (
+            (!keyword || haystack.includes(keyword)) && (status === 'ALL' || itemStatus === status)
+          );
+        })
+        .sort((left, right) => {
+          const value = (item: any) =>
+            sortKey === 'content'
+              ? item.title || item.documentTitle || item.actorName || ''
+              : sortKey === 'time'
+                ? item.moderationSubmittedAt || item.createdAt || ''
+                : sortKey === 'status'
+                  ? item.moderationStatus || item.status || item.newStatus || ''
+                  : (item[sortKey] ?? '');
+          const a = value(left),
+            b = value(right);
+          const result =
+            typeof a === 'number' && typeof b === 'number'
+              ? a - b
+              : String(a).localeCompare(String(b), 'vi');
+          return sortDirection === 'asc' ? result : -result;
+        }),
+    [items, query, status, sortKey, sortDirection],
   );
   const counts = {
     pending: items.filter((x) =>
@@ -265,10 +310,10 @@ export const ModeratorDashboard: React.FC = () => {
             <table className="moderator-table">
               <thead>
                 <tr>
-                  <th>Nội dung</th>
+                  <th>{sortHeader('content', 'Nội dung')}</th>
                   <th>Phân loại</th>
-                  <th>Trạng thái</th>
-                  <th>Thời gian</th>
+                  <th>{sortHeader('status', 'Trạng thái')}</th>
+                  <th>{sortHeader('time', 'Thời gian')}</th>
                   <th className="actions-col">Thao tác</th>
                 </tr>
               </thead>

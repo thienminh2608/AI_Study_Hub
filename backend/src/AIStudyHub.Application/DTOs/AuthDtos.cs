@@ -37,6 +37,7 @@ public class ResetPasswordDto
 public class AuthResponseDto
 {
     public string Token { get; set; } = null!;
+    public string? RefreshToken { get; set; }
     public int UserId
     {
         get; set;
@@ -52,4 +53,9 @@ public class AuthResponseDto
     {
         get; set;
     }
+}
+
+public class RefreshTokenDto
+{
+    public string RefreshToken { get; set; } = null!;
 }

@@ -12,10 +12,12 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 
 type AdminConfigTab = 'documents' | 'report-config' | 'system-config' | 'transfer-config';
 
 export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) => {
+  const { confirm, notify } = useUiFeedback();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -31,6 +33,23 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
     autoFlagThreshold: 3,
     description: '',
   });
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(key);
+      setDirection('asc');
+    }
+  };
+  const sortHeader = (key: string, label: string) => (
+    <button
+      className={`sortable-header ${sortKey === key ? 'active' : ''}`}
+      onClick={() => toggleSort(key)}
+      aria-label={`Sắp xếp theo ${label}`}
+    >
+      {label}
+      <span aria-hidden="true">{sortKey === key ? (direction === 'asc' ? ' ↑' : ' ↓') : ' ↕'}</span>
+    </button>
+  );
 
   const load = async () => {
     setLoading(true);
@@ -92,16 +111,22 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
       current.map((item, position) => (position === index ? { ...item, [key]: value } : item)),
     );
   const updateDocument = async (doc: any) => {
-    await api.admin.updateDocumentVisibility(
-      doc.documentId,
-      doc.sharingPermission === 'PUBLIC' ? 'PRIVATE' : 'PUBLIC',
-    );
+    if (doc.sharingPermission === 'PRIVATE') return;
+    await api.admin.updateDocumentVisibility(doc.documentId, 'PRIVATE');
     await load();
   };
   const deleteDocument = async (id: number) => {
-    if (window.confirm('Xóa vĩnh viễn tài liệu này?')) {
+    if (
+      await confirm({
+        title: 'Xóa tài liệu',
+        message: 'Xóa vĩnh viễn tài liệu này?',
+        confirmLabel: 'Xóa tài liệu',
+        danger: true,
+      })
+    ) {
       await api.admin.deleteDocument(id);
       await load();
+      notify('Đã xóa tài liệu.', 'success');
     }
   };
   const addReason = async (event: React.FormEvent) => {
@@ -117,9 +142,17 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
     await load();
   };
   const removeReason = async (code: string) => {
-    if (window.confirm(`Xóa lý do ${code}?`)) {
+    if (
+      await confirm({
+        title: 'Xóa lý do báo cáo',
+        message: `Xóa lý do ${code}?`,
+        confirmLabel: 'Xóa',
+        danger: true,
+      })
+    ) {
       await api.admin.deleteReportReason(code);
       await load();
+      notify(`Đã xóa lý do ${code}.`, 'success');
     }
   };
 
@@ -315,62 +348,92 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
             <option value="PRIVATE">Riêng tư</option>
           </select>
         )}
-        <select
-          className="input-control"
-          aria-label="Sắp xếp theo"
-          value={sortKey}
-          onChange={(e) => setSortKey(e.target.value)}
-        >
-          {sortOptions.map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          className="input-control"
-          aria-label="Chiều sắp xếp"
-          value={direction}
-          onChange={(e) => setDirection(e.target.value as 'asc' | 'desc')}
-        >
-          <option value="asc">Tăng dần</option>
-          <option value="desc">Giảm dần</option>
-        </select>
+        {tab !== 'documents' && (
+          <>
+            <select
+              className="input-control"
+              aria-label="Sắp xếp theo"
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value)}
+            >
+              {sortOptions.map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input-control"
+              aria-label="Chiều sắp xếp"
+              value={direction}
+              onChange={(e) => setDirection(e.target.value as 'asc' | 'desc')}
+            >
+              <option value="asc">Tăng dần</option>
+              <option value="desc">Giảm dần</option>
+            </select>
+          </>
+        )}
       </div>
 
       {tab === 'documents' && (
-        <div className="admin-config-list">
-          {visible.map((doc) => (
-            <div className="admin-config-row" key={doc.documentId}>
-              <div>
-                <strong>
-                  {doc.title}.{doc.fileExtension}
-                </strong>
-                <small>
-                  {doc.uploaderName} · {doc.bookmarkCount ?? 0} lượt lưu · {doc.downloadCount ?? 0}{' '}
-                  lượt tải · {doc.viewCount ?? 0} lượt xem
-                </small>
-              </div>
-              <span className={`config-status ${doc.sharingPermission}`}>
-                {doc.sharingPermission}
-              </span>
-              <button
-                className="btn-secondary"
-                onClick={() => api.admin.getDocumentDetail(doc.documentId).then(setDetail)}
-              >
-                Chi tiết
-              </button>
-              <button className="btn-secondary" onClick={() => updateDocument(doc)}>
-                {doc.sharingPermission === 'PUBLIC' ? 'Chuyển riêng tư' : 'Công khai'}
-              </button>
-              <button
-                className="btn-secondary danger"
-                onClick={() => deleteDocument(doc.documentId)}
-              >
-                Xóa
-              </button>
-            </div>
-          ))}
+        <div className="table-scroll">
+          <table className="admin-table document-admin-table">
+            <thead>
+              <tr>
+                <th>{sortHeader('documentId', 'ID')}</th>
+                <th>{sortHeader('title', 'Tên tài liệu')}</th>
+                <th>{sortHeader('uploaderName', 'Người đăng')}</th>
+                <th>{sortHeader('createdAt', 'Ngày đăng')}</th>
+                <th>{sortHeader('bookmarkCount', 'Lượt lưu')}</th>
+                <th>{sortHeader('viewCount', 'Lượt xem')}</th>
+                <th>{sortHeader('downloadCount', 'Lượt tải')}</th>
+                <th>{sortHeader('sharingPermission', 'Trạng thái')}</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((doc) => (
+                <tr key={doc.documentId}>
+                  <td className="monospace-text">#{doc.documentId}</td>
+                  <td>
+                    <button
+                      className="document-title-button"
+                      onClick={() => api.admin.getDocumentDetail(doc.documentId).then(setDetail)}
+                    >
+                      {doc.title}.{doc.fileExtension}
+                    </button>
+                  </td>
+                  <td>{doc.uploaderName}</td>
+                  <td>{doc.createdAt ? new Date(doc.createdAt).toLocaleString('vi-VN') : '—'}</td>
+                  <td>{doc.bookmarkCount ?? 0}</td>
+                  <td>{doc.viewCount ?? 0}</td>
+                  <td>{doc.downloadCount ?? 0}</td>
+                  <td>
+                    <span className={`config-status ${doc.sharingPermission}`}>
+                      {doc.sharingPermission}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="document-row-actions">
+                      <button
+                        className="btn-secondary"
+                        disabled={doc.sharingPermission === 'PRIVATE'}
+                        onClick={() => updateDocument(doc)}
+                      >
+                        {doc.sharingPermission === 'PRIVATE' ? 'Đã riêng tư' : 'Chuyển riêng tư'}
+                      </button>
+                      <button
+                        className="btn-secondary danger"
+                        onClick={() => deleteDocument(doc.documentId)}
+                      >
+                        Xóa
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

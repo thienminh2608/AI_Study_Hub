@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 import {
   Bot,
   Send,
@@ -37,6 +38,7 @@ interface ChatDocument {
 }
 
 export const ChatAssistant: React.FC = () => {
+  const { confirm, notify } = useUiFeedback();
   const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
@@ -134,7 +136,7 @@ export const ChatAssistant: React.FC = () => {
       await loadSessions();
       setCurrentSessionId(newSession.sessionId);
     } catch (err: any) {
-      alert(err.message || 'Không thể tạo phiên hội thoại.');
+      notify(err.message || 'Không thể tạo phiên hội thoại.', 'error');
     }
   };
 
@@ -148,15 +150,24 @@ export const ChatAssistant: React.FC = () => {
   };
 
   const handleDeleteSession = async (sessionId: number) => {
-    if (!window.confirm('Bạn có chắc muốn xóa phiên trò chuyện này cùng tất cả tin nhắn?')) return;
+    if (
+      !(await confirm({
+        title: 'Xóa phiên trò chuyện',
+        message: 'Xóa phiên trò chuyện này cùng tất cả tin nhắn?',
+        confirmLabel: 'Xóa phiên',
+        danger: true,
+      }))
+    )
+      return;
     try {
       await api.chat.deleteSession(sessionId);
       if (currentSessionId === sessionId) {
         setCurrentSessionId(null);
       }
       loadSessions();
+      notify('Đã xóa phiên trò chuyện.', 'success');
     } catch (err: any) {
-      alert(err.message || 'Không thể xóa phiên hội thoại.');
+      notify(err.message || 'Không thể xóa phiên hội thoại.', 'error');
     }
   };
 
@@ -196,7 +207,7 @@ export const ChatAssistant: React.FC = () => {
       await loadMessages(currentSessionId);
     } catch (err: any) {
       setAgentAction(null);
-      alert(err.message || 'Gặp lỗi trong quá trình giao tiếp với AI.');
+      notify(err.message || 'Gặp lỗi trong quá trình giao tiếp với AI.', 'error');
       // Refresh to make sure UI matches backend state
       await loadMessages(currentSessionId);
     } finally {

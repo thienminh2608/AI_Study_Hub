@@ -231,6 +231,20 @@ public class ModerationController(IStudyHubDbContext db, IDocumentService docume
         appeal.ReviewedAt = DateTime.Now;
         appeal.ReviewNote = dto.Note?.Trim();
         db.ModerationActions.Add(Action(appeal.Report.DocumentId, appeal.ReportId, normalized, "APPEALED", appeal.Status, dto.Note));
+        db.ModerationNotices.Add(new ModerationNotice
+        {
+            UserId = appeal.SubmittedByUserId,
+            DocumentId = appeal.Report.DocumentId,
+            ReportId = appeal.ReportId,
+            Type = normalized == "RESTORE" ? "APPEAL_RESTORED" : "APPEAL_UPHELD",
+            Title = normalized == "RESTORE" ? "Tài liệu đã được khôi phục" : "Quyết định xử lý được giữ nguyên",
+            Message = normalized == "RESTORE"
+                ? $"Giải trình cho tài liệu “{appeal.Report.Document.Title}” đã được chấp nhận và tài liệu được khôi phục."
+                : $"Giải trình cho tài liệu “{appeal.Report.Document.Title}” không làm thay đổi quyết định xử lý. {dto.Note}",
+            ActionUrl = $"/notifications?reportId={appeal.ReportId}",
+            IsRead = false,
+            CreatedAt = DateTime.Now
+        });
         await db.SaveChangesAsync();
         return Ok();
     }
@@ -262,6 +276,7 @@ public class ModerationController(IStudyHubDbContext db, IDocumentService docume
             Title = documentTitle,
             Message = message,
             CanAppeal = canAppeal,
+            ActionUrl = canAppeal ? $"/notifications?reportId={reportId}" : $"/document/{documentId}",
             IsRead = false,
             CreatedAt = DateTime.Now
         };

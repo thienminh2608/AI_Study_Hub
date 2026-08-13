@@ -94,6 +94,37 @@ public class AuthService : IAuthService
         };
     }
 
+    public async Task<AuthResponseDto?> RefreshAsync(string refreshToken)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+            return null;
+        try
+        {
+            var principal = ValidateRefreshToken(refreshToken);
+            if (principal.FindFirstValue("token_use") != "refresh" ||
+                !int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+                return null;
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.UserId == userId);
+            if (user == null || !"ACTIVE".Equals(user.Status, StringComparison.OrdinalIgnoreCase))
+                return null;
+            return new AuthResponseDto
+            {
+                Token = GenerateJwtToken(user),
+                RefreshToken = GenerateRefreshToken(user),
+                UserId = user.UserId,
+                Username = user.Username,
+                Email = user.Email ?? string.Empty,
+                Role = user.Role ?? "STUDENT",
+                TierId = user.TierId,
+                Balance = user.Balance
+            };
+        }
+        catch (SecurityTokenException)
+        {
+            return null;
+        }
+    }
+
     public async Task<AuthResponseDto?> LoginAsync(LoginDto dto)
     {
         var normalizedEmail = NormalizeEmail(dto.Email);
@@ -114,6 +145,7 @@ public class AuthService : IAuthService
         return new AuthResponseDto
         {
             Token = GenerateJwtToken(user),
+            RefreshToken = dto.RememberMe ? GenerateRefreshToken(user) : null,
             UserId = user.UserId,
             Username = user.Username,
             Email = user.Email ?? "",
@@ -260,6 +292,42 @@ public class AuthService : IAuthService
 
         var token = tokenHandler.CreateToken(tokenDescriptor);
         return tokenHandler.WriteToken(token);
+    }
+
+    private string GenerateRefreshToken(User user)
+    {
+        var configuredKey = _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key is not configured.");
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(new[]
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.UserId.ToString()),
+                new Claim("token_use", "refresh")
+            }),
+            Expires = DateTime.UtcNow.AddDays(double.Parse(_configuration["Jwt:RefreshExpiryInDays"] ?? "30")),
+            Issuer = _configuration["Jwt:Issuer"],
+            Audience = _configuration["Jwt:Audience"],
+            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuredKey)), SecurityAlgorithms.HmacSha256Signature)
+        };
+        var handler = new JwtSecurityTokenHandler();
+        return handler.WriteToken(handler.CreateToken(descriptor));
+    }
+
+    private ClaimsPrincipal ValidateRefreshToken(string refreshToken)
+    {
+        var configuredKey = _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key is not configured.");
+        var handler = new JwtSecurityTokenHandler();
+        return handler.ValidateToken(refreshToken, new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuredKey)),
+            ValidateIssuer = true,
+            ValidIssuer = _configuration["Jwt:Issuer"],
+            ValidateAudience = true,
+            ValidAudience = _configuration["Jwt:Audience"],
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        }, out _);
     }
 
     private static string NormalizeEmail(string email) =>

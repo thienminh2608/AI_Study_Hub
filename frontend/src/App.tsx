@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { UiFeedbackProvider } from './context/UiFeedbackContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { SidebarLayout } from './components/SidebarLayout';
 
@@ -25,55 +26,57 @@ import './App.css';
 const App: React.FC = () => {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          {/* Public Auth Routes */}
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
+      <UiFeedbackProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* Public Auth Routes */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
 
-          {/* Protected Client Dashboard Routes */}
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <SidebarLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<Dashboard />} />
-            <Route path="public-documents" element={<PublicDocuments />} />
-            <Route path="chat" element={<ChatAssistant />} />
-            <Route path="friends" element={<Friends />} />
-            <Route path="wallet" element={<Wallet />} />
-            <Route path="premium" element={<Premium />} />
-            <Route path="profile" element={<Profile />} />
-            <Route path="notifications" element={<Notifications />} />
-            <Route path="document/:id" element={<DocumentViewer />} />
-
-            {/* Protected Admin Routes */}
+            {/* Protected Client Dashboard Routes */}
             <Route
-              path="admin"
+              path="/"
               element={
-                <ProtectedRoute allowedRoles={['ADMIN']}>
-                  <AdminDashboard />
+                <ProtectedRoute>
+                  <SidebarLayout />
                 </ProtectedRoute>
               }
-            />
-            <Route
-              path="moderator"
-              element={
-                <ProtectedRoute allowedRoles={['ADMIN', 'MODERATOR']}>
-                  <ModeratorDashboard />
-                </ProtectedRoute>
-              }
-            />
-          </Route>
+            >
+              <Route index element={<Dashboard />} />
+              <Route path="public-documents" element={<PublicDocuments />} />
+              <Route path="chat" element={<ChatAssistant />} />
+              <Route path="friends" element={<Friends />} />
+              <Route path="wallet" element={<Wallet />} />
+              <Route path="premium" element={<Premium />} />
+              <Route path="profile" element={<Profile />} />
+              <Route path="notifications" element={<Notifications />} />
+              <Route path="document/:id" element={<DocumentViewer />} />
 
-          {/* Catch-all Fallback */}
-          <Route path="*" element={<Login />} />
-        </Routes>
-      </BrowserRouter>
+              {/* Protected Admin Routes */}
+              <Route
+                path="admin"
+                element={
+                  <ProtectedRoute allowedRoles={['ADMIN']}>
+                    <AdminDashboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="moderator"
+                element={
+                  <ProtectedRoute allowedRoles={['ADMIN', 'MODERATOR']}>
+                    <ModeratorDashboard />
+                  </ProtectedRoute>
+                }
+              />
+            </Route>
+
+            {/* Catch-all Fallback */}
+            <Route path="*" element={<Login />} />
+          </Routes>
+        </BrowserRouter>
+      </UiFeedbackProvider>
     </AuthProvider>
   );
 };

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { NotificationTypeIcon } from './NotificationTypeIcon';
 
 export const ModerationNoticePopup: React.FC = () => {
   const [notices, setNotices] = useState<any[]>([]);
@@ -16,13 +17,18 @@ export const ModerationNoticePopup: React.FC = () => {
   const open = async (n: any) => {
     await api.document.readModerationNotice(n.noticeId);
     dismiss(n.noticeId);
-    navigate('/notifications', { state: { noticeId: n.noticeId } });
+    navigate(
+      n.canAppeal ? `/notifications?reportId=${n.reportId}` : n.actionUrl || '/notifications',
+      {
+        state: { noticeId: n.noticeId },
+      },
+    );
   };
   return (
     <div style={s.stack}>
       {notices.map((n) => (
         <div key={n.noticeId} className="glass-panel" style={s.toast}>
-          <Bell size={20} color="#38bdf8" />
+          <NotificationTypeIcon type={n.type} size={20} />
           <button style={s.body} onClick={() => open(n)}>
             <strong>{n.title}</strong>
             <span>{n.message}</span>

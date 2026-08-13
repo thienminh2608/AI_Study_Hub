@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { Award, Check, Loader, Star, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 
 interface Tier {
   tierId: number;
@@ -13,6 +14,7 @@ interface Tier {
 }
 
 export const Premium: React.FC = () => {
+  const { confirm, notify } = useUiFeedback();
   const { user, refreshUser } = useAuth();
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,16 +49,19 @@ export const Premium: React.FC = () => {
 
   const handleBuyPremium = async () => {
     if (user && user.balance < premiumPrice) {
-      alert(
+      notify(
         `Số dư của bạn không đủ (${user.balance.toLocaleString()}đ / ${premiumPrice.toLocaleString()}đ). Vui lòng dùng nút Nạp tiền cạnh số dư để thực hiện nâng cấp.`,
+        'error',
       );
       return;
     }
 
     if (
-      !window.confirm(
-        `Xác nhận đăng ký Premium: Tài khoản của bạn sẽ bị trừ ${premiumPrice.toLocaleString()}đ và gia hạn Premium thêm 30 ngày. Bạn muốn tiếp tục?`,
-      )
+      !(await confirm({
+        title: 'Đăng ký Premium',
+        message: `Tài khoản sẽ bị trừ ${premiumPrice.toLocaleString()}đ và được gia hạn Premium thêm 30 ngày.`,
+        confirmLabel: 'Đăng ký Premium',
+      }))
     ) {
       return;
     }
@@ -64,10 +69,10 @@ export const Premium: React.FC = () => {
     setBuying(true);
     try {
       await api.transaction.buyPremium();
-      alert('Đăng ký gói Premium thành công! Tài khoản của bạn đã được nâng cấp.');
+      notify('Đăng ký gói Premium thành công! Tài khoản của bạn đã được nâng cấp.', 'success');
       await refreshUser();
     } catch (err: any) {
-      alert(err.message || 'Giao dịch nâng cấp thất bại.');
+      notify(err.message || 'Giao dịch nâng cấp thất bại.', 'error');
     } finally {
       setBuying(false);
     }

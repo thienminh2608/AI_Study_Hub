@@ -133,6 +133,17 @@ public class DocumentService : IDocumentService
                 _dbContext.DocumentExtractedTexts.Add(textEntity);
                 _dbContext.DocumentChunks.AddRange(DocumentChunker.Chunk(document.DocumentId, extractedText, _clock.Now));
                 document.AiParsingStatus = "READY";
+                _dbContext.ModerationNotices.Add(new ModerationNotice
+                {
+                    UserId = userId,
+                    DocumentId = document.DocumentId,
+                    Type = "DOCUMENT_AI_READY",
+                    Title = "Tài liệu đã sẵn sàng cho AI",
+                    Message = $"Tài liệu “{document.Title}” đã tải lên và xử lý nội dung thành công. Bạn có thể bắt đầu chat với AI.",
+                    ActionUrl = $"/chat?documentId={document.DocumentId}",
+                    IsRead = false,
+                    CreatedAt = _clock.Now
+                });
                 await _dbContext.SaveChangesAsync();
             }
         }
@@ -186,6 +197,7 @@ public class DocumentService : IDocumentService
         doc.Subject = subject;
         doc.FolderId = folderId;
         ApplyRequestedVisibility(doc, sharingPermission);
+        await AddModeratorDocumentNoticesAsync(doc);
         doc.CloudStorageUrl = newUrl;
         doc.UpdatedAt = _clock.Now;
 
@@ -236,6 +248,7 @@ public class DocumentService : IDocumentService
         oldDoc.Subject = subject;
         oldDoc.FolderId = folderId;
         ApplyRequestedVisibility(oldDoc, sharingPermission);
+        await AddModeratorDocumentNoticesAsync(oldDoc);
         oldDoc.UpdatedAt = _clock.Now;
 
         // Transfer extracted text
@@ -300,6 +313,7 @@ public class DocumentService : IDocumentService
         pendingDoc.Subject = subject;
         pendingDoc.FolderId = folderId;
         ApplyRequestedVisibility(pendingDoc, sharingPermission);
+        await AddModeratorDocumentNoticesAsync(pendingDoc);
         pendingDoc.CloudStorageUrl = newUrl;
         pendingDoc.UpdatedAt = _clock.Now;
 
@@ -474,6 +488,20 @@ public class DocumentService : IDocumentService
             doc.SharingPermission = "PRIVATE"; // Force private if flagged
         }
 
+        await _dbContext.SaveChangesAsync();
+        var moderators = await _dbContext.Users.Where(u => u.Role == "MODERATOR" && u.Status == "ACTIVE").Select(u => u.UserId).ToListAsync();
+        _dbContext.ModerationNotices.AddRange(moderators.Select(moderatorId => new ModerationNotice
+        {
+            UserId = moderatorId,
+            DocumentId = report.DocumentId,
+            ReportId = report.ReportId,
+            Type = "REPORT_PENDING",
+            Title = "Báo cáo tài liệu mới",
+            Message = $"Tài liệu “{doc.Title}” vừa nhận một báo cáo {reportType.ToLowerInvariant()} cần xử lý.",
+            ActionUrl = $"/moderator?tab=reports&reportId={report.ReportId}",
+            IsRead = false,
+            CreatedAt = _clock.Now
+        }));
         await _dbContext.SaveChangesAsync();
         return true;
     }
@@ -664,6 +692,27 @@ public class DocumentService : IDocumentService
         document.ModerationStatus = permission == "PUBLIC" ? "PENDING_REVIEW" : "NOT_REQUESTED";
         document.ModerationSubmittedAt = permission == "PUBLIC" ? DateTime.Now : null;
         document.ModerationNote = null;
+    }
+
+    private async Task AddModeratorDocumentNoticesAsync(Document document)
+    {
+        if (document.ModerationStatus != "PENDING_REVIEW")
+            return;
+        var moderators = await _dbContext.Users
+            .Where(user => user.Role == "MODERATOR" && user.Status == "ACTIVE")
+            .Select(user => user.UserId)
+            .ToListAsync();
+        _dbContext.ModerationNotices.AddRange(moderators.Select(moderatorId => new ModerationNotice
+        {
+            UserId = moderatorId,
+            DocumentId = document.DocumentId,
+            Type = "DOCUMENT_REVIEW_PENDING",
+            Title = "Tài liệu mới cần xét duyệt",
+            Message = $"Tài liệu “{document.Title}” vừa yêu cầu công khai và đang chờ xét duyệt.",
+            ActionUrl = $"/moderator?tab=queue&documentId={document.DocumentId}",
+            IsRead = false,
+            CreatedAt = _clock.Now
+        }));
     }
 
     private static string NormalizeSubject(string? subject)

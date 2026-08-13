@@ -1,7 +1,34 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5065/api';
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem('token');
+const getAccessToken = () => localStorage.getItem('token') || sessionStorage.getItem('token');
+let refreshPromise: Promise<string | null> | null = null;
+
+const renewAccessToken = async (): Promise<string | null> => {
+  const refreshToken = localStorage.getItem('refreshToken');
+  if (!refreshToken) return null;
+  if (!refreshPromise) {
+    refreshPromise = fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const data = await response.json();
+        localStorage.setItem('token', data.token);
+        if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken);
+        return data.token as string;
+      })
+      .catch(() => null)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+};
+
+async function request<T>(path: string, options: RequestInit = {}, retried = false): Promise<T> {
+  const token = getAccessToken();
   const headers = new Headers(options.headers || {});
 
   // Add authorization header if token exists
@@ -14,10 +41,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  let response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
   });
+
+  if (response.status === 401 && !retried && path !== '/auth/refresh') {
+    const renewedToken = await renewAccessToken();
+    if (renewedToken) {
+      headers.set('Authorization', `Bearer ${renewedToken}`);
+      response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+    }
+  }
 
   if (!response.ok) {
     let errorMessage = 'Đã xảy ra lỗi kết nối.';
@@ -30,6 +65,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
     if (response.status === 401) {
       localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
+      sessionStorage.removeItem('token');
       window.dispatchEvent(new Event('auth-status-changed'));
     }
 
@@ -42,10 +79,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 async function download(path: string): Promise<Blob> {
-  const token = localStorage.getItem('token');
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  let token = getAccessToken();
+  let response = await fetch(`${API_BASE_URL}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+  if (response.status === 401) {
+    token = await renewAccessToken();
+    if (token)
+      response = await fetch(`${API_BASE_URL}${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+  }
   if (!response.ok) throw new Error('Không thể tải file.');
   return response.blob();
 }

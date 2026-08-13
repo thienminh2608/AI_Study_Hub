@@ -54,6 +54,18 @@ public class FriendshipService : IFriendshipService
         };
 
         _dbContext.Friendships.Add(fship);
+        var requesterName = await _dbContext.Users.Where(u => u.UserId == myUserId).Select(u => u.Username).FirstAsync();
+        _dbContext.ModerationNotices.Add(new ModerationNotice
+        {
+            UserId = addresseeId,
+            RelatedUserId = myUserId,
+            Type = "FRIEND_REQUEST",
+            Title = "Lời mời kết bạn mới",
+            Message = $"{requesterName} đã gửi cho bạn một lời mời kết bạn.",
+            ActionUrl = "/friends?tab=pending",
+            IsRead = false,
+            CreatedAt = DateTime.Now
+        });
         return await _dbContext.SaveChangesAsync() > 0;
     }
 

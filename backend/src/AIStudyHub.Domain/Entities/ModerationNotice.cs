@@ -10,7 +10,7 @@ public class ModerationNotice
     {
         get; set;
     }
-    public int DocumentId
+    public int? DocumentId
     {
         get; set;
     }
@@ -18,6 +18,9 @@ public class ModerationNotice
     {
         get; set;
     }
+    public int? TransactionId { get; set; }
+    public int? RelatedUserId { get; set; }
+    public string? ActionUrl { get; set; }
     public string Type { get; set; } = null!;
     public string Title { get; set; } = null!;
     public string Message { get; set; } = null!;

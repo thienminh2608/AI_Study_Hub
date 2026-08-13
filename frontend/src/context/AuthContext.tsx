@@ -16,7 +16,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (token: string) => Promise<void>;
+  login: (token: string, rememberMe?: boolean, refreshToken?: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
 }
@@ -34,6 +34,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err) {
       console.error('Failed to restore auth session:', err);
       localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
+      sessionStorage.removeItem('token');
       setUser(null);
     } finally {
       setLoading(false);
@@ -41,7 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
     if (token) {
       fetchUser();
     } else {
@@ -49,7 +51,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const handleAuthChange = () => {
-      const activeToken = localStorage.getItem('token');
+      const activeToken = localStorage.getItem('token') || sessionStorage.getItem('token');
       if (!activeToken) {
         setUser(null);
       }
@@ -59,14 +61,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener('auth-status-changed', handleAuthChange);
   }, []);
 
-  const login = async (token: string) => {
-    localStorage.setItem('token', token);
+  const login = async (token: string, rememberMe = false, refreshToken?: string) => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('refreshToken');
+    sessionStorage.removeItem('token');
+    if (rememberMe) {
+      localStorage.setItem('token', token);
+      if (refreshToken) localStorage.setItem('refreshToken', refreshToken);
+    } else {
+      sessionStorage.setItem('token', token);
+    }
     setLoading(true);
     await fetchUser();
   };
 
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('refreshToken');
+    sessionStorage.removeItem('token');
     setUser(null);
     window.location.href = '/login';
   };

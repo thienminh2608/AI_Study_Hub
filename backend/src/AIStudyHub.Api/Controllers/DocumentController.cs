@@ -339,8 +339,23 @@ public class DocumentController : ControllerBase
             {
                 message = "Không thể gửi giải trình."
             });
-        _db.ModerationAppeals.Add(new ModerationAppeal { ReportId = reportId, SubmittedByUserId = userId, Explanation = dto.Explanation.Trim(), EvidenceUrl = dto.EvidenceUrl?.Trim(), Status = "PENDING", CreatedAt = DateTime.Now });
+        var appeal = new ModerationAppeal { ReportId = reportId, SubmittedByUserId = userId, Explanation = dto.Explanation.Trim(), EvidenceUrl = dto.EvidenceUrl?.Trim(), Status = "PENDING", CreatedAt = DateTime.Now };
+        _db.ModerationAppeals.Add(appeal);
         report.Status = "APPEALED";
+        await _db.SaveChangesAsync();
+        var moderators = await _db.Users.Where(u => u.Role == "MODERATOR" && u.Status == "ACTIVE").Select(u => u.UserId).ToListAsync();
+        _db.ModerationNotices.AddRange(moderators.Select(moderatorId => new ModerationNotice
+        {
+            UserId = moderatorId,
+            DocumentId = report.DocumentId,
+            ReportId = reportId,
+            Type = "APPEAL_PENDING",
+            Title = "Có giải trình mới",
+            Message = $"Người đăng vừa gửi giải trình cho tài liệu “{report.Document.Title}”.",
+            ActionUrl = $"/moderator?tab=appeals&appealId={appeal.AppealId}",
+            IsRead = false,
+            CreatedAt = DateTime.Now
+        }));
         await _db.SaveChangesAsync();
         return Ok(new
         {
@@ -367,7 +382,21 @@ public class DocumentController : ControllerBase
         var query = _db.ModerationNotices.AsNoTracking().Where(n => n.UserId == userId);
         if (unreadOnly)
             query = query.Where(n => !n.IsRead);
-        return Ok(await query.OrderByDescending(n => n.CreatedAt).Select(n => new { n.NoticeId, n.DocumentId, n.ReportId, n.Type, n.Title, n.Message, n.CanAppeal, n.IsRead, n.CreatedAt }).ToListAsync());
+        return Ok(await query.OrderByDescending(n => n.CreatedAt).Select(n => new
+        {
+            n.NoticeId,
+            n.DocumentId,
+            n.ReportId,
+            n.TransactionId,
+            n.RelatedUserId,
+            n.ActionUrl,
+            n.Type,
+            n.Title,
+            n.Message,
+            n.CanAppeal,
+            n.IsRead,
+            n.CreatedAt
+        }).ToListAsync());
     }
 
     [HttpPost("moderation-notices/{noticeId}/read")]

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { FileTypeIcon } from '../components/FileTypeIcon';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 
 interface FolderItem {
   folderId: number;
@@ -39,6 +40,7 @@ interface DocumentItem {
 }
 
 export const Dashboard: React.FC = () => {
+  const { confirm, notify } = useUiFeedback();
   const navigate = useNavigate();
 
   // Navigation & Hierarchy
@@ -117,7 +119,7 @@ export const Dashboard: React.FC = () => {
         setBreadcrumbs([]);
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi khi tải tài nguyên.');
+      notify(err.message || 'Lỗi khi tải tài nguyên.', 'error');
     } finally {
       setLoading(false);
     }
@@ -143,15 +145,19 @@ export const Dashboard: React.FC = () => {
       setShowCreateFolder(false);
       loadFolderContent();
     } catch (err: any) {
-      alert(err.message || 'Không thể tạo thư mục.');
+      notify(err.message || 'Không thể tạo thư mục.', 'error');
     }
   };
 
   const handleDeleteFolder = async (folderId: number) => {
     if (
-      !window.confirm(
-        'Cảnh báo: Hành động này sẽ xóa vĩnh viễn thư mục này cùng tất cả tệp tin và thư mục con bên trong! Bạn chắc chắn muốn xóa?',
-      )
+      !(await confirm({
+        title: 'Xóa thư mục và toàn bộ nội dung',
+        message:
+          'Hành động này sẽ xóa vĩnh viễn thư mục cùng tất cả tài liệu và thư mục con bên trong.',
+        confirmLabel: 'Xóa vĩnh viễn',
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -159,8 +165,9 @@ export const Dashboard: React.FC = () => {
     try {
       await api.folder.delete(folderId);
       loadFolderContent();
+      notify('Đã xóa thư mục.', 'success');
     } catch (err: any) {
-      alert(err.message || 'Không thể xóa thư mục.');
+      notify(err.message || 'Không thể xóa thư mục.', 'error');
     }
   };
 
@@ -214,7 +221,7 @@ export const Dashboard: React.FC = () => {
         setUploading(false);
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi tải tài liệu.');
+      notify(err.message || 'Lỗi tải tài liệu.', 'error');
       setUploading(false);
     }
   };
@@ -235,7 +242,7 @@ export const Dashboard: React.FC = () => {
       );
       loadFolderContent();
     } catch (err: any) {
-      alert(err.message || 'Ghi đè thất bại.');
+      notify(err.message || 'Ghi đè thất bại.', 'error');
     } finally {
       setUploading(false);
       setPendingDoc(null);
@@ -257,7 +264,7 @@ export const Dashboard: React.FC = () => {
       );
       loadFolderContent();
     } catch (err: any) {
-      alert(err.message || 'Lưu cả hai thất bại.');
+      notify(err.message || 'Lưu cả hai thất bại.', 'error');
     } finally {
       setUploading(false);
       setPendingDoc(null);
@@ -282,7 +289,7 @@ export const Dashboard: React.FC = () => {
       setDeleteDocumentTarget(null);
       loadFolderContent();
     } catch (err: any) {
-      alert(err.message || 'Xóa tài liệu thất bại.');
+      notify(err.message || 'Xóa tài liệu thất bại.', 'error');
     }
   };
 
@@ -293,7 +300,7 @@ export const Dashboard: React.FC = () => {
       const session = await api.chat.createSession({ sessionName: doc.title });
       navigate(`/chat?sessionId=${session.sessionId}&documentId=${doc.documentId}`);
     } catch (err: any) {
-      alert(err.message || 'Không thể tạo phiên Hỏi AI.');
+      notify(err.message || 'Không thể tạo phiên Hỏi AI.', 'error');
     } finally {
       setAskingDocumentId(null);
     }

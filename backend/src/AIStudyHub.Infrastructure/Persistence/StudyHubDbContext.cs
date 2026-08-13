@@ -519,7 +519,10 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.UserId).HasColumnName("user_id");
             entity.Property(e => e.DocumentId).HasColumnName("document_id");
             entity.Property(e => e.ReportId).HasColumnName("report_id");
-            entity.Property(e => e.Type).HasMaxLength(30).HasColumnName("type");
+            entity.Property(e => e.TransactionId).HasColumnName("transaction_id");
+            entity.Property(e => e.RelatedUserId).HasColumnName("related_user_id");
+            entity.Property(e => e.ActionUrl).HasMaxLength(500).HasColumnName("action_url");
+            entity.Property(e => e.Type).HasMaxLength(50).HasColumnName("type");
             entity.Property(e => e.Title).HasMaxLength(200).HasColumnName("title");
             entity.Property(e => e.Message).HasMaxLength(1500).HasColumnName("message");
             entity.Property(e => e.CanAppeal).HasColumnName("can_appeal");

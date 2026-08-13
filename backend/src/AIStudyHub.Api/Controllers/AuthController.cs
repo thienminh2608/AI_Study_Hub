@@ -99,6 +99,15 @@ public class AuthController : ControllerBase
         });
     }
 
+    [HttpPost("refresh")]
+    public async Task<IActionResult> Refresh([FromBody] RefreshTokenDto dto)
+    {
+        var response = await _authService.RefreshAsync(dto.RefreshToken);
+        return response == null
+            ? Unauthorized(new { message = "Phiên ghi nhớ đăng nhập đã hết hạn. Vui lòng đăng nhập lại." })
+            : Ok(response);
+    }
+
     [HttpPost("verify-otp")]
     public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpDto dto)
     {

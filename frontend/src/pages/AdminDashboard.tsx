@@ -3,6 +3,7 @@ import { NavLink, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { FileTypeIcon } from '../components/FileTypeIcon';
 import { AdminConfiguration } from './AdminConfiguration';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 import {
   Users,
   FileText,
@@ -78,39 +79,8 @@ const Pagination: React.FC<{
   </div>
 );
 
-const SortControls: React.FC<{
-  value: string;
-  setValue: (value: string) => void;
-  direction: 'asc' | 'desc';
-  setDirection: (value: 'asc' | 'desc') => void;
-  options: string[][];
-}> = ({ value, setValue, direction, setDirection, options }) => (
-  <div className="sort-controls">
-    <select
-      className="input-control"
-      aria-label="Sắp xếp theo"
-      value={value}
-      onChange={(event) => setValue(event.target.value)}
-    >
-      {options.map(([key, label]) => (
-        <option key={key} value={key}>
-          {label}
-        </option>
-      ))}
-    </select>
-    <select
-      className="input-control"
-      aria-label="Chiều sắp xếp"
-      value={direction}
-      onChange={(event) => setDirection(event.target.value as 'asc' | 'desc')}
-    >
-      <option value="asc">Tăng dần</option>
-      <option value="desc">Giảm dần</option>
-    </select>
-  </div>
-);
-
 export const AdminDashboard: React.FC = () => {
+  const { confirm, notify } = useUiFeedback();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const requestedTab = searchParams.get('tab');
@@ -169,6 +139,27 @@ export const AdminDashboard: React.FC = () => {
   const [selectedReportDocument, setSelectedReportDocument] = useState<any | null>(null);
   const [reportPreviewLoading, setReportPreviewLoading] = useState(false);
 
+  const toggleSort = (key: string) => {
+    setPage(1);
+    if (sortKey === key) setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(key);
+      setSortDirection('asc');
+    }
+  };
+  const sortHeader = (key: string, label: string) => (
+    <button
+      className={`sortable-header ${sortKey === key ? 'active' : ''}`}
+      onClick={() => toggleSort(key)}
+      aria-label={`Sắp xếp theo ${label}`}
+    >
+      {label}
+      <span aria-hidden="true">
+        {sortKey === key ? (sortDirection === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
+      </span>
+    </button>
+  );
+
   const loadDashboardData = async () => {
     setLoading(true);
     try {
@@ -203,7 +194,9 @@ export const AdminDashboard: React.FC = () => {
     setPage(1);
     setSearchText(searchParams.get('q') ?? '');
     setStatusFilter(searchParams.get('status') ?? 'ALL');
-    setSortKey(adminTab === 'users' ? 'username' : 'createdAt');
+    setSortKey(
+      adminTab === 'users' ? 'userId' : adminTab === 'transactions' ? 'transactionId' : 'reportId',
+    );
     setSortDirection('desc');
     setShowCreateUserModal(false);
     setShowEditUserModal(false);
@@ -235,7 +228,7 @@ export const AdminDashboard: React.FC = () => {
     try {
       setSelectedReportDocument(await api.admin.getDocumentDetail(report.documentId));
     } catch (err: any) {
-      alert(err.message || 'Không thể tải chi tiết tài liệu.');
+      notify(err.message || 'Không thể tải chi tiết tài liệu.', 'error');
       setSelectedReport(null);
     } finally {
       setReportPreviewLoading(false);
@@ -292,6 +285,17 @@ export const AdminDashboard: React.FC = () => {
       }),
     [reports, searchText, statusFilter],
   );
+  const reportStatistics = useMemo(() => {
+    const count = (status: string) => reports.filter((report) => report.status === status).length;
+    return [
+      ['Tổng báo cáo', reports.length],
+      ['Chờ xử lý', count('PENDING')],
+      ['Đang xem xét', count('IN_REVIEW')],
+      ['Đã hạn chế', count('RESTRICTED')],
+      ['Không vi phạm', count('NO_VIOLATION')],
+      ['Xác nhận vi phạm', count('VIOLATION_CONFIRMED')],
+    ] as const;
+  }, [reports]);
   const overviewTransactions = useMemo(
     () =>
       [...(stats.recentTransactions ?? [])]
@@ -370,9 +374,9 @@ export const AdminDashboard: React.FC = () => {
       setShowCreateUserModal(false);
       setNewUser({ username: '', email: '', password: '', role: 'STUDENT', tierType: 'Free' });
       await loadDashboardData();
-      alert('Đã tạo tài khoản thành công.');
+      notify('Đã tạo tài khoản thành công.', 'success');
     } catch (err: any) {
-      alert(err.message || 'Không thể tạo tài khoản.');
+      notify(err.message || 'Không thể tạo tài khoản.', 'error');
     } finally {
       setCreatingUser(false);
     }
@@ -381,9 +385,12 @@ export const AdminDashboard: React.FC = () => {
   const handleToggleUserStatus = async (user: UserItem) => {
     const nextStatus = user.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
     if (
-      !window.confirm(
-        `${nextStatus === 'SUSPENDED' ? 'Khóa' : 'Mở khóa'} tài khoản ${user.username}?`,
-      )
+      !(await confirm({
+        title: nextStatus === 'SUSPENDED' ? 'Khóa tài khoản' : 'Mở khóa tài khoản',
+        message: `${nextStatus === 'SUSPENDED' ? 'Khóa' : 'Mở khóa'} tài khoản ${user.username}?`,
+        confirmLabel: nextStatus === 'SUSPENDED' ? 'Khóa tài khoản' : 'Mở khóa',
+        danger: nextStatus === 'SUSPENDED',
+      }))
     )
       return;
     await api.admin.updateUser(user.userId, {
@@ -395,6 +402,7 @@ export const AdminDashboard: React.FC = () => {
       tierId: user.tierId,
     });
     await loadDashboardData();
+    notify('Đã cập nhật trạng thái tài khoản.', 'success');
   };
 
   const handleUpdateUserSubmit = async (e: React.FormEvent) => {
@@ -413,9 +421,9 @@ export const AdminDashboard: React.FC = () => {
       });
       setShowEditUserModal(false);
       loadDashboardData();
-      alert('Cập nhật người dùng thành công.');
+      notify('Cập nhật người dùng thành công.', 'success');
     } catch (err: any) {
-      alert(err.message || 'Cập nhật thất bại.');
+      notify(err.message || 'Cập nhật thất bại.', 'error');
     } finally {
       setUpdatingUser(false);
       setEditingUser(null);
@@ -425,29 +433,45 @@ export const AdminDashboard: React.FC = () => {
   // Transaction Approval Actions
   const handleApproveTransaction = async (txId: number, status: 'SUCCESS' | 'CANCELLED') => {
     const actionText = status === 'SUCCESS' ? 'Duyệt thành công' : 'Hủy bỏ';
-    if (!window.confirm(`Xác nhận ${actionText} giao dịch này?`)) return;
+    if (
+      !(await confirm({
+        title: 'Xử lý giao dịch',
+        message: `Xác nhận ${actionText} giao dịch này?`,
+        confirmLabel: actionText,
+        danger: status === 'CANCELLED',
+      }))
+    )
+      return;
 
     try {
       await api.admin.updateTransaction(txId, status);
       loadDashboardData();
-      alert('Giao dịch đã được cập nhật.');
+      notify('Giao dịch đã được cập nhật.', 'success');
     } catch (err: any) {
-      alert(err.message || 'Thao tác giao dịch thất bại.');
+      notify(err.message || 'Thao tác giao dịch thất bại.', 'error');
     }
   };
 
   // Report Resolution Actions
   const handleResolveReport = async (reportId: number, action: 'TAKE_ACTION' | 'DISMISS') => {
     const actionText = action === 'TAKE_ACTION' ? 'Gỡ tài liệu khỏi công khai' : 'Bỏ qua báo cáo';
-    if (!window.confirm(`Xác nhận xử lý báo cáo: ${actionText}?`)) return;
+    if (
+      !(await confirm({
+        title: 'Xử lý báo cáo',
+        message: `Xác nhận xử lý báo cáo: ${actionText}?`,
+        confirmLabel: 'Xác nhận',
+        danger: action === 'TAKE_ACTION',
+      }))
+    )
+      return;
 
     try {
       await api.admin.resolveReport(reportId, action);
       if (selectedReport?.reportId === reportId) closeReportPreview();
       loadDashboardData();
-      alert('Đã giải quyết báo cáo.');
+      notify('Đã giải quyết báo cáo.', 'success');
     } catch (err: any) {
-      alert(err.message || 'Xử lý báo cáo thất bại.');
+      notify(err.message || 'Xử lý báo cáo thất bại.', 'error');
     }
   };
 
@@ -635,30 +659,18 @@ export const AdminDashboard: React.FC = () => {
                   <option value="ACTIVE">Hoạt động</option>
                   <option value="SUSPENDED">Đang khóa</option>
                 </select>
-                <SortControls
-                  value={sortKey}
-                  setValue={setSortKey}
-                  direction={sortDirection}
-                  setDirection={setSortDirection}
-                  options={[
-                    ['username', 'Tên'],
-                    ['email', 'Email'],
-                    ['balance', 'Số dư'],
-                    ['createdAt', 'Ngày tạo'],
-                  ]}
-                />
               </div>
               <div className="table-scroll">
                 <table className="admin-table">
                   <thead>
                     <tr>
-                      <th>ID</th>
-                      <th>Sinh viên</th>
-                      <th>Email</th>
-                      <th>Vai trò</th>
-                      <th>Membership</th>
-                      <th>Số dư</th>
-                      <th>Trạng thái</th>
+                      <th>{sortHeader('userId', 'ID')}</th>
+                      <th>{sortHeader('username', 'Sinh viên')}</th>
+                      <th>{sortHeader('email', 'Email')}</th>
+                      <th>{sortHeader('role', 'Vai trò')}</th>
+                      <th>{sortHeader('tierName', 'Membership')}</th>
+                      <th>{sortHeader('balance', 'Số dư')}</th>
+                      <th>{sortHeader('status', 'Trạng thái')}</th>
                       <th>Thao tác</th>
                     </tr>
                   </thead>
@@ -734,28 +746,16 @@ export const AdminDashboard: React.FC = () => {
                   <option value="SUCCESS">Thành công</option>
                   <option value="CANCELLED">Đã hủy</option>
                 </select>
-                <SortControls
-                  value={sortKey}
-                  setValue={setSortKey}
-                  direction={sortDirection}
-                  setDirection={setSortDirection}
-                  options={[
-                    ['transactionId', 'Mã GD'],
-                    ['username', 'Người dùng'],
-                    ['amount', 'Số tiền'],
-                    ['createdAt', 'Ngày tạo'],
-                  ]}
-                />
               </div>
               <div className="table-scroll">
                 <table className="admin-table">
                   <thead>
                     <tr>
-                      <th>ID</th>
-                      <th>Sinh viên</th>
-                      <th>Số tiền</th>
-                      <th>Trạng thái</th>
-                      <th>Thời gian tạo</th>
+                      <th>{sortHeader('transactionId', 'ID')}</th>
+                      <th>{sortHeader('username', 'Sinh viên')}</th>
+                      <th>{sortHeader('amount', 'Số tiền')}</th>
+                      <th>{sortHeader('status', 'Trạng thái')}</th>
+                      <th>{sortHeader('startedAt', 'Thời gian tạo')}</th>
                       <th>Thao tác</th>
                     </tr>
                   </thead>
@@ -822,6 +822,30 @@ export const AdminDashboard: React.FC = () => {
                 <NavLink to="/admin?tab=documents">Tài liệu</NavLink>
               </div>
               <h3>Báo cáo tài liệu vi phạm</h3>
+              <section
+                className="report-statistics glass-card"
+                aria-label="Thống kê báo cáo vi phạm"
+              >
+                <h4>Thống kê báo cáo vi phạm</h4>
+                <div className="table-scroll">
+                  <table className="admin-table compact-stat-table">
+                    <thead>
+                      <tr>
+                        {reportStatistics.map(([label]) => (
+                          <th key={label}>{label}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        {reportStatistics.map(([label, value]) => (
+                          <td key={label}>{value}</td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
               <div className="admin-toolbar">
                 <input
                   className="input-control"
@@ -842,19 +866,12 @@ export const AdminDashboard: React.FC = () => {
                 >
                   <option value="ALL">Tất cả trạng thái</option>
                   <option value="PENDING">Chờ xử lý</option>
+                  <option value="IN_REVIEW">Đang xem xét</option>
+                  <option value="RESTRICTED">Đã hạn chế</option>
+                  <option value="NO_VIOLATION">Không vi phạm</option>
+                  <option value="VIOLATION_CONFIRMED">Xác nhận vi phạm</option>
                   <option value="RESOLVED">Đã xử lý</option>
                 </select>
-                <SortControls
-                  value={sortKey}
-                  setValue={setSortKey}
-                  direction={sortDirection}
-                  setDirection={setSortDirection}
-                  options={[
-                    ['documentTitle', 'Tài liệu'],
-                    ['reporterName', 'Người báo cáo'],
-                    ['createdAt', 'Ngày báo cáo'],
-                  ]}
-                />
               </div>
 
               {filteredReports.length === 0 ? (

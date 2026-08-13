@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 import {
   Search,
   UserCheck,
@@ -32,6 +33,7 @@ interface PendingRequest {
 interface FriendSearchResult extends Friend {}
 
 export const Friends: React.FC = () => {
+  const { confirm, notify } = useUiFeedback();
   const [activeTab, setActiveTab] = useState<'friends' | 'pending' | 'blocked'>('friends');
 
   // Lists
@@ -91,13 +93,13 @@ export const Friends: React.FC = () => {
   const handleSendRequest = async (targetId: number) => {
     try {
       await api.friendship.sendRequest(targetId);
-      alert('Đã gửi lời mời kết bạn.');
+      notify('Đã gửi lời mời kết bạn.', 'success');
       loadAllData();
       if (searchResult && searchResult.userId === targetId) {
         setSearchResult({ ...searchResult, status: 'PENDING_SENT' });
       }
     } catch (err: any) {
-      alert(err.message || 'Không thể kết bạn.');
+      notify(err.message || 'Không thể kết bạn.', 'error');
     }
   };
 
@@ -109,20 +111,29 @@ export const Friends: React.FC = () => {
         setSearchResult({ ...searchResult, status: status === 'ACCEPTED' ? 'ACCEPTED' : 'NONE' });
       }
     } catch (err: any) {
-      alert(err.message || 'Thao tác thất bại.');
+      notify(err.message || 'Thao tác thất bại.', 'error');
     }
   };
 
   const handleDeleteFriendship = async (targetId: number) => {
-    if (!window.confirm('Bạn chắc chắn muốn thực hiện thao tác này?')) return;
+    if (
+      !(await confirm({
+        title: 'Xác nhận quan hệ bạn bè',
+        message: 'Bạn chắc chắn muốn thực hiện thao tác này?',
+        confirmLabel: 'Xác nhận',
+        danger: true,
+      }))
+    )
+      return;
     try {
       await api.friendship.delete(targetId);
       loadAllData();
       if (searchResult && searchResult.userId === targetId) {
         setSearchResult({ ...searchResult, status: 'NONE' });
       }
+      notify('Thao tác đã hoàn tất.', 'success');
     } catch (err: any) {
-      alert(err.message || 'Thao tác thất bại.');
+      notify(err.message || 'Thao tác thất bại.', 'error');
     }
   };
 

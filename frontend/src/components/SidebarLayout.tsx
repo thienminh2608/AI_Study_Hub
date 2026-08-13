@@ -1,7 +1,8 @@
 import React from 'react';
-import { NavLink, Outlet, useSearchParams } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { ModerationNoticePopup } from './ModerationNoticePopup';
+import { NotificationBell } from './NotificationBell';
 import {
   FolderOpen,
   Bot,
@@ -16,7 +17,6 @@ import {
   ReceiptText,
   ShieldAlert,
   SlidersHorizontal,
-  Bell,
 } from 'lucide-react';
 
 export const SidebarLayout: React.FC = () => {
@@ -24,6 +24,7 @@ export const SidebarLayout: React.FC = () => {
   const isAdmin = user?.role?.trim().toUpperCase() === 'ADMIN';
   const isModerator = user?.role?.trim().toUpperCase() === 'MODERATOR';
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const adminTab = searchParams.get('tab') || 'overview';
 
   return (
@@ -58,17 +59,17 @@ export const SidebarLayout: React.FC = () => {
                 </span>
               </div>
             </NavLink>
-            <div className="balance-actions">
-              <div className="user-balance">
-                <Coins size={16} className="coin-icon" />
-                <span>{user.balance.toLocaleString()}đ</span>
-              </div>
-              {!isAdmin && !isModerator && (
+            {!isAdmin && !isModerator && (
+              <div className="balance-actions">
+                <div className="user-balance">
+                  <Coins size={16} className="coin-icon" />
+                  <span>{user.balance.toLocaleString()}đ</span>
+                </div>
                 <NavLink to="/wallet?deposit=1" className="quick-deposit-link">
                   Nạp tiền
                 </NavLink>
-              )}
-            </div>
+              </div>
+            )}
             {!isAdmin && !isModerator && (
               <div className="account-widget-links">
                 <NavLink to="/wallet">
@@ -88,11 +89,6 @@ export const SidebarLayout: React.FC = () => {
             )}
           </div>
         )}
-        <NavLink to="/notifications" className="nav-item">
-          <Bell size={19} />
-          <span>Thông báo</span>
-        </NavLink>
-
         <nav className="nav-links">
           {isAdmin ? (
             <>
@@ -183,6 +179,7 @@ export const SidebarLayout: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="main-content">
+        {location.pathname !== '/notifications' && <NotificationBell />}
         <Outlet />
       </main>
 
@@ -367,6 +364,7 @@ export const SidebarLayout: React.FC = () => {
           flex: 1;
           padding: 2rem;
           min-height: 100vh;
+          position: relative;
         }
 
         @media (max-width: 768px) {
