@@ -1,11 +1,12 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
+using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -80,7 +81,8 @@ public class ChatService : IChatService
     public async Task<bool> PinSessionAsync(int userId, int sessionId, bool pin)
     {
         var session = await _dbContext.ChatSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.UserId == userId);
-        if (session == null) return false;
+        if (session == null)
+            return false;
 
         session.IsPinned = pin;
         return await _dbContext.SaveChangesAsync() > 0;
@@ -89,7 +91,8 @@ public class ChatService : IChatService
     public async Task<bool> DeleteSessionAsync(int userId, int sessionId)
     {
         var session = await _dbContext.ChatSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.UserId == userId);
-        if (session == null) return false;
+        if (session == null)
+            return false;
 
         _dbContext.ChatSessions.Remove(session);
         return await _dbContext.SaveChangesAsync() > 0;
@@ -98,7 +101,8 @@ public class ChatService : IChatService
     public async Task<List<ChatMessageDto>> GetSessionMessagesAsync(int userId, int sessionId)
     {
         var session = await _dbContext.ChatSessions.AnyAsync(s => s.SessionId == sessionId && s.UserId == userId);
-        if (!session) return new List<ChatMessageDto>();
+        if (!session)
+            return new List<ChatMessageDto>();
 
         var messages = await _dbContext.ChatMessages
             .Where(m => m.SessionId == sessionId && m.Display == true)
@@ -127,7 +131,8 @@ public class ChatService : IChatService
 
         // 1. Rate Limit Verification
         var user = await _dbContext.Users.Include(u => u.Tier).FirstOrDefaultAsync(u => u.UserId == userId);
-        if (user == null) throw new ArgumentException("Người dùng không tồn tại.");
+        if (user == null)
+            throw new ArgumentException("Người dùng không tồn tại.");
 
         int limitPerDay = user.Tier?.AiPromptLimitPerDay ?? 10;
         int currentPrompts = user.AiPromptsToday ?? 0;
@@ -201,6 +206,7 @@ public class ChatService : IChatService
         // 4. Agent Loop
         int loopCount = 0;
         string? finalResponse = null;
+        HashSet<int> allowedCitationChunkIds = [];
 
         while (loopCount < MaxAiLoop)
         {
@@ -219,6 +225,12 @@ public class ChatService : IChatService
 
             string aiResponse = await _geminiService.GetGeminiResponseAsync(history);
             string trimmedResponse = aiResponse.Trim();
+
+            if (TryParseGroundedResponse(trimmedResponse, allowedCitationChunkIds, out var groundedResponse))
+            {
+                finalResponse = groundedResponse;
+                break;
+            }
 
             if (trimmedResponse.StartsWith("RESPONSE:", StringComparison.OrdinalIgnoreCase))
             {
@@ -299,14 +311,29 @@ public class ChatService : IChatService
                         }
                         else
                         {
-                            var textNode = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(t => t.DocumentId == docId);
-                            if (textNode == null || string.IsNullOrWhiteSpace(textNode.ExtractedText))
+                            if (!await _dbContext.DocumentChunks.AnyAsync(c => c.DocumentId == docId))
                             {
                                 systemResponseText = $"Tài liệu \"{doc.Title}\" được tìm thấy nhưng nội dung trống rỗng hoặc hệ thống không thể quét được chữ. Hãy thông báo cho sinh viên biết.";
                             }
                             else
                             {
-                                systemResponseText = $"Đây là nội dung tài liệu \"{doc.Title}\" mà sinh viên yêu cầu:\n\n{textNode.ExtractedText}\n\nDựa trên nội dung trên, hãy trả lời câu hỏi của sinh viên.";
+                                var question = dto.MessageContent ?? string.Empty;
+                                RetrievedContext selected;
+                                if (IsWholeDocumentRequest(question))
+                                {
+                                    var allChunks = await _dbContext.DocumentChunks.AsNoTracking()
+                                        .Where(c => c.DocumentId == docId).OrderBy(c => c.ChunkIndex).ToListAsync();
+                                    selected = await SummarizeWholeDocumentAsync(allChunks, question);
+                                }
+                                else
+                                {
+                                    selected = await RetrieveContextAsync(docId, question);
+                                }
+                                allowedCitationChunkIds = selected.ChunkIds.ToHashSet();
+                                systemResponseText = $"Document: \"{doc.Title}\". Only use the context below. "
+                                    + "Return strict JSON with this schema: {\"answer\":\"...\",\"citations\":[{\"chunkId\":1,\"page\":1}],\"insufficientContext\":false}. "
+                                    + "Citations may only reference chunk IDs present in the context. Set insufficientContext=true when the answer is not supported.\n\n"
+                                    + selected.Context;
                             }
                         }
                     }
@@ -423,6 +450,118 @@ public class ChatService : IChatService
         await _dbContext.SaveChangesAsync();
 
         return finalResponse;
+    }
+
+    private async Task<RetrievedContext> RetrieveContextAsync(int documentId, string question)
+    {
+        var queryTerms = Tokenize(question).Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToList();
+        var query = _dbContext.DocumentChunks.AsNoTracking().Where(c => c.DocumentId == documentId);
+        if (queryTerms.Count > 0)
+        {
+            var term0 = queryTerms[0];
+            query = query.Where(c => c.Text.Contains(term0) || (c.HeadingPath != null && c.HeadingPath.Contains(term0)));
+        }
+        var candidates = await query.OrderBy(c => c.ChunkIndex).Take(24).ToListAsync();
+        if (candidates.Count == 0)
+            candidates = await _dbContext.DocumentChunks.AsNoTracking().Where(c => c.DocumentId == documentId).OrderBy(c => c.ChunkIndex).Take(8).ToListAsync();
+        var termSet = queryTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var scored = candidates.Select(chunk => new
+        {
+            Chunk = chunk,
+            Score = Tokenize($"{chunk.HeadingPath} {chunk.Text}")
+                    .GroupBy(term => term, StringComparer.OrdinalIgnoreCase)
+                    .Sum(group => termSet.Contains(group.Key) ? 1.0 + Math.Log(1 + group.Count()) : 0)
+        })
+            .OrderByDescending(item => item.Score).ThenBy(item => item.Chunk.ChunkIndex)
+            .Take(6).Select(item => item.Chunk).ToList();
+
+        if (scored.Count == 0 || scored.All(c => !Tokenize(c.Text).Any(termSet.Contains)))
+            scored = candidates.Take(5).ToList();
+        var indexes = scored.Select(c => c.ChunkIndex).ToHashSet();
+        foreach (var index in scored.Select(c => c.ChunkIndex).ToList())
+        {
+            if (index > 0)
+                indexes.Add(index - 1);
+            indexes.Add(index + 1);
+        }
+        var selected = await _dbContext.DocumentChunks.AsNoTracking()
+            .Where(c => c.DocumentId == documentId && indexes.Contains(c.ChunkIndex))
+            .OrderBy(c => c.ChunkIndex).Take(8).ToListAsync();
+        return new RetrievedContext(FormatChunks(selected), selected.Select(c => c.ChunkId).ToList());
+    }
+
+    private async Task<RetrievedContext> SummarizeWholeDocumentAsync(List<DocumentChunk> chunks, string question)
+    {
+        var summaries = new List<string>();
+        foreach (var group in chunks.Chunk(5))
+        {
+            summaries.Add(await _geminiService.GetGeminiResponseAsync([
+                new ChatMessageDto
+                {
+                    Sender = "USER",
+                    MessageContent = "Summarize this document section faithfully for a later whole-document answer. Preserve key facts and cite chunk IDs in square brackets.\n\n" + FormatChunks(group)
+                }
+            ]));
+        }
+        return new RetrievedContext("Map summaries for the whole-document request: " + question + "\n\n" + string.Join("\n\n", summaries),
+            chunks.Select(c => c.ChunkId).ToList());
+    }
+
+    private static string FormatChunks(IEnumerable<DocumentChunk> chunks) => string.Join("\n\n", chunks.Select(c =>
+        $"[CHUNK id={c.ChunkId} index={c.ChunkIndex} page={c.PageNumber?.ToString() ?? "null"} headings={c.HeadingPath ?? "[]"}]\n{c.Text}"));
+
+    private static IEnumerable<string> Tokenize(string value) => Regex.Matches(value.ToLowerInvariant(), @"[\p{L}\p{N}]{2,}")
+        .Select(match => match.Value).Where(term => !StopWords.Contains(term));
+
+    private static bool IsWholeDocumentRequest(string question) => Regex.IsMatch(question,
+        @"(toàn bộ|toan bo|cả tài liệu|ca tai lieu|whole document|entire document|tóm tắt tài liệu|tom tat tai lieu)", RegexOptions.IgnoreCase);
+
+    private static bool TryParseGroundedResponse(string value, HashSet<int> allowedIds, out string response)
+    {
+        response = string.Empty;
+        if (allowedIds.Count == 0)
+            return false;
+        try
+        {
+            var json = value.Trim();
+            if (json.StartsWith("```"))
+                json = Regex.Replace(json, @"^```(?:json)?\s*|\s*```$", "", RegexOptions.IgnoreCase);
+            var parsed = JsonSerializer.Deserialize<GroundedAiResponse>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (parsed == null || string.IsNullOrWhiteSpace(parsed.Answer))
+                return false;
+            var valid = parsed.Citations.Where(c => allowedIds.Contains(c.ChunkId)).DistinctBy(c => c.ChunkId).ToList();
+            response = parsed.Answer.Trim();
+            if (valid.Count > 0)
+                response += "\n\nNguồn: " + string.Join(", ", valid.Select(c => c.Page.HasValue ? $"chunk {c.ChunkId} (trang {c.Page})" : $"chunk {c.ChunkId}"));
+            if (parsed.InsufficientContext)
+                response += "\n\nLưu ý: ngữ cảnh truy xuất chưa đủ để xác nhận đầy đủ câu trả lời.";
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
+        { "và", "của", "cho", "trong", "là", "the", "and", "for", "with", "this", "that", "from" };
+    private sealed record RetrievedContext(string Context, List<int> ChunkIds);
+    private sealed class GroundedAiResponse
+    {
+        public string Answer { get; set; } = string.Empty;
+        public List<GroundedCitation> Citations { get; set; } = [];
+        public bool InsufficientContext
+        {
+            get; set;
+        }
+    }
+    private sealed class GroundedCitation
+    {
+        public int ChunkId
+        {
+            get; set;
+        }
+        public int? Page
+        {
+            get; set;
+        }
     }
 
     private async Task<string> CreateInitPromptAsync(int userId)

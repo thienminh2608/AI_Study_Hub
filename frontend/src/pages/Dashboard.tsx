@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { 
-  Folder, 
+import {
+  Folder,
   FolderOpen,
-  FileText, 
-  Upload, 
-  ChevronRight, 
-  Trash2, 
-  Eye, 
+  FileText,
+  Upload,
+  ChevronRight,
+  Trash2,
+  Bot,
   AlertTriangle,
   FolderPlus,
-  Loader
+  Loader,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { FileTypeIcon } from '../components/FileTypeIcon';
 
 interface FolderItem {
   folderId: number;
@@ -31,6 +32,10 @@ interface DocumentItem {
   createdAt?: string;
   aiParsingStatus: string;
   cloudStorageUrl: string;
+  downloadCount?: number;
+  viewCount?: number;
+  bookmarkCount?: number;
+  subject?: string;
 }
 
 export const Dashboard: React.FC = () => {
@@ -39,27 +44,45 @@ export const Dashboard: React.FC = () => {
   // Navigation & Hierarchy
   const [currentFolderId, setCurrentFolderId] = useState<number | undefined>(undefined);
   const [breadcrumbs, setBreadcrumbs] = useState<FolderItem[]>([]);
-  
+
   // Lists
   const [allFolders, setAllFolders] = useState<FolderItem[]>([]); // For tree
   const [subFolders, setSubFolders] = useState<FolderItem[]>([]); // Current folder children
   const [documents, setDocuments] = useState<DocumentItem[]>([]); // Current folder files
-  
+  const [analytics, setAnalytics] = useState<any>({
+    totalDocuments: 0,
+    publicDocuments: 0,
+    privateDocuments: 0,
+    totalDownloads: 0,
+    totalViews: 0,
+    totalBookmarks: 0,
+    documents: [],
+  });
+  const [audienceDetail, setAudienceDetail] = useState<any | null>(null);
+
   // Modals & Forms
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
-  
+
   // Upload States
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
-  
+  const [uploadDraft, setUploadDraft] = useState<{
+    file: File;
+    title: string;
+    subject: string;
+    sharingPermission: 'PUBLIC' | 'PRIVATE';
+  } | null>(null);
+
   // Collision Modal
   const [showCollisionModal, setShowCollisionModal] = useState(false);
   const [pendingDoc, setPendingDoc] = useState<any>(null);
   const [duplicateDocId, setDuplicateDocId] = useState<number | null>(null);
-  
+
   // Loading
   const [loading, setLoading] = useState(true);
+  const [askingDocumentId, setAskingDocumentId] = useState<number | null>(null);
+  const [deleteDocumentTarget, setDeleteDocumentTarget] = useState<DocumentItem | null>(null);
 
   // Load Folder Content
   const loadFolderContent = async () => {
@@ -74,13 +97,14 @@ export const Dashboard: React.FC = () => {
       // 2. Fetch all folders (for Sidebar Tree)
       const allFoldersData = await api.folder.getAllFolders();
       setAllFolders(allFoldersData);
+      setAnalytics(await api.document.getAnalytics());
 
       // 3. Build Breadcrumbs
       if (currentFolderId) {
         const chain: FolderItem[] = [];
         let curId: number | undefined = currentFolderId;
         while (curId) {
-          const folderObj = allFoldersData.find(f => f.folderId === curId);
+          const folderObj = allFoldersData.find((f) => f.folderId === curId);
           if (folderObj) {
             chain.unshift(folderObj);
             curId = folderObj.parentFolderId;
@@ -99,6 +123,8 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  // Folder navigation is the sole trigger; the loader reads the latest state from this render.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     loadFolderContent();
   }, [currentFolderId]);
@@ -111,7 +137,7 @@ export const Dashboard: React.FC = () => {
     try {
       await api.folder.create({
         folderName: newFolderName.trim(),
-        parentFolderId: currentFolderId
+        parentFolderId: currentFolderId,
       });
       setNewFolderName('');
       setShowCreateFolder(false);
@@ -122,7 +148,11 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleDeleteFolder = async (folderId: number) => {
-    if (!window.confirm('Cảnh báo: Hành động này sẽ xóa vĩnh viễn thư mục này cùng tất cả tệp tin và thư mục con bên trong! Bạn chắc chắn muốn xóa?')) {
+    if (
+      !window.confirm(
+        'Cảnh báo: Hành động này sẽ xóa vĩnh viễn thư mục này cùng tất cả tệp tin và thư mục con bên trong! Bạn chắc chắn muốn xóa?',
+      )
+    ) {
       return;
     }
 
@@ -135,41 +165,56 @@ export const Dashboard: React.FC = () => {
   };
 
   // Document Upload & Collision checks
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const title = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+    setUploadDraft({ file, title, subject: 'Khác', sharingPermission: 'PRIVATE' });
+    e.target.value = '';
+  };
 
+  const handleConfirmUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadDraft || !uploadDraft.title.trim() || !uploadDraft.subject.trim()) return;
+    const { file, subject, sharingPermission } = uploadDraft;
+    const finalTitle = uploadDraft.title.trim();
     setUploading(true);
     setUploadProgress('Đang tải file lên máy chủ...');
     try {
-      // 1. Send file to backend (temp upload)
       const fileExt = file.name.split('.').pop() || '';
       const response = await api.document.upload(file, currentFolderId);
-      
-      // 2. Local duplicate check in frontend
-      const titleWithoutExt = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
-      const duplicate = documents.find(d => d.title.toLowerCase() === titleWithoutExt.toLowerCase() && d.fileExtension.toLowerCase() === fileExt.toLowerCase());
+      const duplicate = documents.find(
+        (d) =>
+          d.title.trim().toLocaleLowerCase('vi') === finalTitle.toLocaleLowerCase('vi') &&
+          d.fileExtension.toLowerCase() === fileExt.toLowerCase(),
+      );
+      setUploadDraft(null);
 
       if (duplicate) {
-        // Name collision detected! Open collision modal
         setPendingDoc({
           pendingDocId: response.documentId,
-          title: titleWithoutExt,
-          sharingPermission: 'PRIVATE',
-          folderId: currentFolderId
+          title: finalTitle,
+          subject,
+          sharingPermission,
+          folderId: currentFolderId,
         });
         setDuplicateDocId(duplicate.documentId);
         setShowCollisionModal(true);
         setUploading(false);
       } else {
-        // No duplicate, proceed to confirm automatically
         setUploadProgress('Đang xử lý nội dung văn bản...');
-        await api.document.confirm(response.documentId, titleWithoutExt, 'PRIVATE', currentFolderId);
+        await api.document.confirm(
+          response.documentId,
+          finalTitle,
+          subject,
+          sharingPermission,
+          currentFolderId,
+        );
         loadFolderContent();
         setUploading(false);
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi upload.');
+      alert(err.message || 'Lỗi tải tài liệu.');
       setUploading(false);
     }
   };
@@ -180,7 +225,14 @@ export const Dashboard: React.FC = () => {
     setUploading(true);
     setShowCollisionModal(false);
     try {
-      await api.document.replace(pendingDoc.pendingDocId, duplicateDocId, pendingDoc.title, pendingDoc.sharingPermission, pendingDoc.folderId);
+      await api.document.replace(
+        pendingDoc.pendingDocId,
+        duplicateDocId,
+        pendingDoc.title,
+        pendingDoc.subject,
+        pendingDoc.sharingPermission,
+        pendingDoc.folderId,
+      );
       loadFolderContent();
     } catch (err: any) {
       alert(err.message || 'Ghi đè thất bại.');
@@ -196,7 +248,13 @@ export const Dashboard: React.FC = () => {
     setUploading(true);
     setShowCollisionModal(false);
     try {
-      await api.document.keepBoth(pendingDoc.pendingDocId, pendingDoc.title, pendingDoc.sharingPermission, pendingDoc.folderId);
+      await api.document.keepBoth(
+        pendingDoc.pendingDocId,
+        pendingDoc.title,
+        pendingDoc.subject,
+        pendingDoc.sharingPermission,
+        pendingDoc.folderId,
+      );
       loadFolderContent();
     } catch (err: any) {
       alert(err.message || 'Lưu cả hai thất bại.');
@@ -219,21 +277,34 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleDeleteDocument = async (id: number) => {
-    if (!window.confirm('Bạn có chắc chắn muốn xóa tài liệu này?')) return;
     try {
       await api.document.delete(id);
+      setDeleteDocumentTarget(null);
       loadFolderContent();
     } catch (err: any) {
       alert(err.message || 'Xóa tài liệu thất bại.');
     }
   };
 
+  const handleAskAi = async (doc: DocumentItem) => {
+    if (askingDocumentId) return;
+    setAskingDocumentId(doc.documentId);
+    try {
+      const session = await api.chat.createSession({ sessionName: doc.title });
+      navigate(`/chat?sessionId=${session.sessionId}&documentId=${doc.documentId}`);
+    } catch (err: any) {
+      alert(err.message || 'Không thể tạo phiên Hỏi AI.');
+    } finally {
+      setAskingDocumentId(null);
+    }
+  };
+
   // Folder tree builder helper
-  const renderFolderTree = (parentId: number | undefined = undefined, depth = 0) => {
-    const list = allFolders.filter(f => f.parentFolderId === parentId);
-    return list.map(f => (
+  const renderFolderTree = (parentId: number | null = null, depth = 0) => {
+    const list = allFolders.filter((f) => (f.parentFolderId ?? null) === parentId);
+    return list.map((f) => (
       <div key={f.folderId} style={{ paddingLeft: `${depth * 12}px` }}>
-        <button 
+        <button
           className={`tree-node ${currentFolderId === f.folderId ? 'active' : ''}`}
           onClick={() => setCurrentFolderId(f.folderId)}
         >
@@ -247,8 +318,59 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="dashboard-container">
+      <section className="user-analytics glass-panel">
+        <div className="analytics-heading">
+          <div>
+            <h2>Thống kê tài liệu công khai</h2>
+            <p>Lượt tương tác trên các tài liệu bạn đã chia sẻ công khai.</p>
+          </div>
+          <span>{analytics.totalDocuments} tài liệu</span>
+        </div>
+        <div className="analytics-stats">
+          <div>
+            <strong>{analytics.publicDocuments}</strong>
+            <span>Công khai</span>
+          </div>
+          <div>
+            <strong>{analytics.totalViews}</strong>
+            <span>Lượt xem</span>
+          </div>
+          <div>
+            <strong>{analytics.totalDownloads}</strong>
+            <span>Lượt tải</span>
+          </div>
+          <div>
+            <strong>{analytics.totalBookmarks}</strong>
+            <span>Lượt lưu</span>
+          </div>
+        </div>
+        <div className="analytics-documents">
+          {analytics.documents.map((doc: any) => (
+            <button
+              key={doc.documentId}
+              onClick={async () =>
+                setAudienceDetail(await api.document.getAudience(doc.documentId))
+              }
+            >
+              <FileTypeIcon
+                extension={doc.fileExtension}
+                size={22}
+                className="analytics-file-icon"
+              />
+              <span>
+                <strong>
+                  {doc.title}.{doc.fileExtension}
+                </strong>
+                <small>Công khai</small>
+              </span>
+              <span>
+                {doc.viewCount ?? 0} xem · {doc.downloadCount ?? 0} tải
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
       <div className="explorer-layout">
-        
         {/* Left Tree Explorer Bar */}
         <aside className="tree-explorer glass-panel">
           <h3>Thư mục của tôi</h3>
@@ -256,23 +378,24 @@ export const Dashboard: React.FC = () => {
             <FolderOpen size={16} />
             <span>Root /</span>
           </button>
-          <div className="tree-scroll">
-            {renderFolderTree(undefined, 0)}
-          </div>
+          <div className="tree-scroll">{renderFolderTree(null, 0)}</div>
         </aside>
 
         {/* Right Main explorer pane */}
         <div className="explorer-pane glass-panel">
-          
           {/* Action Row */}
           <div className="action-header">
             {/* Breadcrumbs */}
             <div className="breadcrumbs">
-              <span onClick={() => setCurrentFolderId(undefined)} className="crumb">Root</span>
-              {breadcrumbs.map(crumb => (
+              <span onClick={() => setCurrentFolderId(undefined)} className="crumb">
+                Root
+              </span>
+              {breadcrumbs.map((crumb) => (
                 <React.Fragment key={crumb.folderId}>
                   <ChevronRight size={14} className="crumb-arrow" />
-                  <span onClick={() => setCurrentFolderId(crumb.folderId)} className="crumb">{crumb.folderName}</span>
+                  <span onClick={() => setCurrentFolderId(crumb.folderId)} className="crumb">
+                    {crumb.folderName}
+                  </span>
                 </React.Fragment>
               ))}
             </div>
@@ -283,15 +406,16 @@ export const Dashboard: React.FC = () => {
                 <FolderPlus size={16} />
                 <span>Thư mục mới</span>
               </button>
-              
+
               <label className="btn-primary upload-label">
                 <Upload size={16} />
                 <span>Tải tệp lên</span>
-                <input 
-                  type="file" 
-                  onChange={handleFileUpload} 
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.txt,.xlsx,.pptx,.md"
+                  onChange={handleFileSelected}
                   style={{ display: 'none' }}
-                  disabled={uploading} 
+                  disabled={uploading}
                 />
               </label>
             </div>
@@ -314,20 +438,22 @@ export const Dashboard: React.FC = () => {
             </div>
           ) : (
             <div className="explorer-grid">
-              
               {/* Folder Header & Grid */}
-              {subFolders.length > 0 && (
+              {currentFolderId === undefined && subFolders.length > 0 && (
                 <div className="section-block">
                   <h4>Thư mục ({subFolders.length})</h4>
                   <div className="grid-layout">
-                    {subFolders.map(folder => (
+                    {subFolders.map((folder) => (
                       <div key={folder.folderId} className="item-card folder-card glass-card">
-                        <div onClick={() => setCurrentFolderId(folder.folderId)} className="item-info">
+                        <div
+                          onClick={() => setCurrentFolderId(folder.folderId)}
+                          className="item-info"
+                        >
                           <Folder size={28} className="folder-icon" />
                           <span className="item-title">{folder.folderName}</span>
                         </div>
-                        <button 
-                          onClick={() => handleDeleteFolder(folder.folderId)} 
+                        <button
+                          onClick={() => handleDeleteFolder(folder.folderId)}
                           className="delete-item-btn"
                           title="Xóa thư mục"
                         >
@@ -344,20 +470,45 @@ export const Dashboard: React.FC = () => {
                 <div className="section-block" style={{ marginTop: '1.5rem' }}>
                   <h4>Tài liệu ({documents.length})</h4>
                   <div className="grid-layout">
-                    {documents.map(doc => (
+                    {documents.map((doc) => (
                       <div key={doc.documentId} className="item-card doc-card glass-card">
-                        <div onClick={() => navigate(`/document/${doc.documentId}`)} className="item-info">
-                          <FileText size={28} className="doc-icon" />
+                        <div
+                          onClick={() => navigate(`/document/${doc.documentId}`)}
+                          className="item-info"
+                        >
+                          <FileTypeIcon
+                            extension={doc.fileExtension}
+                            size={28}
+                            className="doc-icon"
+                          />
                           <div className="doc-metadata">
-                            <span className="item-title">{doc.title}.{doc.fileExtension}</span>
-                            <span className="doc-size">{doc.fileSizeMb.toFixed(2)} MB • {doc.aiParsingStatus}</span>
+                            <span className="item-title">
+                              {doc.title}.{doc.fileExtension}
+                            </span>
+                            <span className="doc-size">
+                              {doc.subject || 'Khác'} • {doc.fileSizeMb.toFixed(2)} MB •{' '}
+                              {doc.aiParsingStatus}
+                            </span>
                           </div>
                         </div>
                         <div className="card-actions">
-                          <button onClick={() => navigate(`/document/${doc.documentId}`)} className="action-btn" title="Xem chi tiết">
-                            <Eye size={16} />
+                          <button
+                            onClick={() => handleAskAi(doc)}
+                            className="action-btn ask-ai-btn"
+                            title="Hỏi AI về tài liệu"
+                            disabled={askingDocumentId === doc.documentId}
+                          >
+                            {askingDocumentId === doc.documentId ? (
+                              <Loader className="spin" size={16} />
+                            ) : (
+                              <Bot size={16} />
+                            )}
                           </button>
-                          <button onClick={() => handleDeleteDocument(doc.documentId)} className="delete-item-btn" title="Xóa tài liệu">
+                          <button
+                            onClick={() => setDeleteDocumentTarget(doc)}
+                            className="delete-item-btn"
+                            title="Xóa tài liệu"
+                          >
                             <Trash2 size={16} />
                           </button>
                         </div>
@@ -367,13 +518,13 @@ export const Dashboard: React.FC = () => {
                 </div>
               )}
 
-              {subFolders.length === 0 && documents.length === 0 && (
-                <div className="empty-state">
-                  <FolderOpen size={48} className="empty-icon" />
-                  <p>Thư mục trống. Kéo thả file hoặc nhấn "Tải tệp lên" để bắt đầu!</p>
-                </div>
-              )}
-
+              {(currentFolderId !== undefined || subFolders.length === 0) &&
+                documents.length === 0 && (
+                  <div className="empty-state">
+                    <FolderOpen size={48} className="empty-icon" />
+                    <p>Thư mục trống. Kéo thả file hoặc nhấn "Tải tệp lên" để bắt đầu!</p>
+                  </div>
+                )}
             </div>
           )}
         </div>
@@ -394,8 +545,118 @@ export const Dashboard: React.FC = () => {
                 autoFocus
               />
               <div className="modal-actions">
-                <button type="button" onClick={() => setShowCreateFolder(false)} className="btn-secondary">Hủy</button>
-                <button type="submit" className="btn-primary">Tạo mới</button>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateFolder(false)}
+                  className="btn-secondary"
+                >
+                  Hủy
+                </button>
+                <button type="submit" className="btn-primary">
+                  Tạo mới
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {uploadDraft && (
+        <div className="modal-overlay" onMouseDown={() => !uploading && setUploadDraft(null)}>
+          <div
+            className="modal-box upload-confirm-modal glass-panel animate-slide-up"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="upload-confirm-heading">
+              <FileText size={30} />
+              <div>
+                <h3>Xác nhận thông tin tài liệu</h3>
+                <p>
+                  {uploadDraft.file.name} · {(uploadDraft.file.size / 1024 / 1024).toFixed(2)} MB
+                </p>
+              </div>
+            </div>
+            <form onSubmit={handleConfirmUpload}>
+              <label>
+                Tên tài liệu
+                <input
+                  className="input-control"
+                  maxLength={255}
+                  required
+                  value={uploadDraft.title}
+                  onChange={(e) => setUploadDraft({ ...uploadDraft, title: e.target.value })}
+                />
+              </label>
+              <label>
+                Môn học
+                <select
+                  className="input-control"
+                  value={uploadDraft.subject}
+                  onChange={(e) => setUploadDraft({ ...uploadDraft, subject: e.target.value })}
+                >
+                  {[
+                    'Toán học',
+                    'Vật lý',
+                    'Hóa học',
+                    'Sinh học',
+                    'Ngữ văn',
+                    'Tiếng Anh',
+                    'Tin học',
+                    'Kinh tế',
+                    'Kỹ năng mềm',
+                    'Khác',
+                  ].map((subject) => (
+                    <option key={subject}>{subject}</option>
+                  ))}
+                </select>
+              </label>
+              <fieldset className="sharing-options">
+                <legend>Quyền truy cập</legend>
+                <label className={uploadDraft.sharingPermission === 'PRIVATE' ? 'selected' : ''}>
+                  <input
+                    type="radio"
+                    name="sharing"
+                    value="PRIVATE"
+                    checked={uploadDraft.sharingPermission === 'PRIVATE'}
+                    onChange={() =>
+                      setUploadDraft({ ...uploadDraft, sharingPermission: 'PRIVATE' })
+                    }
+                  />
+                  <span>
+                    <strong>Riêng tư</strong>
+                    <small>Chỉ bạn có thể xem</small>
+                  </span>
+                </label>
+                <label className={uploadDraft.sharingPermission === 'PUBLIC' ? 'selected' : ''}>
+                  <input
+                    type="radio"
+                    name="sharing"
+                    value="PUBLIC"
+                    checked={uploadDraft.sharingPermission === 'PUBLIC'}
+                    onChange={() => setUploadDraft({ ...uploadDraft, sharingPermission: 'PUBLIC' })}
+                  />
+                  <span>
+                    <strong>Công khai</strong>
+                    <small>Chia sẻ với cộng đồng</small>
+                  </span>
+                </label>
+              </fieldset>
+              <p className="duplicate-rule-note">
+                Hệ thống sẽ kiểm tra trùng theo tên và kiểu file trong thư mục hiện tại sau khi bạn
+                xác nhận.
+              </p>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={uploading}
+                  onClick={() => setUploadDraft(null)}
+                >
+                  Hủy
+                </button>
+                <button className="btn-primary" disabled={uploading || !uploadDraft.title.trim()}>
+                  {uploading ? <Loader className="spin" size={16} /> : 'Xác nhận tải lên'}
+                </button>
               </div>
             </form>
           </div>
@@ -408,36 +669,99 @@ export const Dashboard: React.FC = () => {
           <div className="modal-box collision-box glass-panel animate-slide-up">
             <div className="collision-header">
               <AlertTriangle size={32} className="alert-icon" />
-              <h3>Phát hiện trùng tên file</h3>
+              <h3>Phát hiện tài liệu trùng</h3>
             </div>
             <p>
-              Tệp tin <strong>{pendingDoc?.title}</strong> đã tồn tại trong thư mục hiện tại. Bạn muốn thực hiện hành động nào?
+              Tài liệu <strong>{pendingDoc?.title}</strong> cùng kiểu file đã tồn tại trong thư mục
+              hiện tại. Bạn muốn thực hiện hành động nào?
             </p>
             <div className="collision-actions">
               <button onClick={handleCollisionReplace} className="btn-secondary danger-hover">
-                Ghi đè (Replace)
+                Thay thế file cũ
               </button>
               <button onClick={handleCollisionKeepBoth} className="btn-secondary success-hover">
-                Giữ cả hai (Keep Both)
+                Giữ cả hai
               </button>
               <button onClick={handleCollisionCancel} className="btn-primary">
-                Hủy tải lên (Cancel)
+                Hủy tải lên
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {audienceDetail && (
+        <div className="modal-overlay" onMouseDown={() => setAudienceDetail(null)}>
+          <div
+            className="modal-box audience-modal glass-panel"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3>{audienceDetail.document.title}</h3>
+            <p>{audienceDetail.description}</p>
+            <h4>Người xem và tải</h4>
+            {audienceDetail.audience.length ? (
+              audienceDetail.audience.map((person: any) => (
+                <div className="audience-row" key={person.userId}>
+                  <span>
+                    <strong>{person.username}</strong>
+                    <small>{person.email}</small>
+                  </span>
+                  <span>
+                    {person.viewCount} xem · {person.downloadCount} tải
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p>Chưa có hoạt động.</p>
+            )}
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setAudienceDetail(null)}>
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteDocumentTarget && (
+        <div className="modal-overlay">
+          <div className="modal-box glass-panel">
+            <h3>Xóa tài liệu?</h3>
+            <p>
+              Tài liệu <strong>{deleteDocumentTarget.title}</strong> sẽ bị xóa vĩnh viễn và không
+              thể khôi phục.
+            </p>
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setDeleteDocumentTarget(null)}>
+                Hủy
+              </button>
+              <button
+                className="btn-secondary danger-hover"
+                onClick={() => handleDeleteDocument(deleteDocumentTarget.documentId)}
+              >
+                Xác nhận xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <style>{`
         .dashboard-container {
           min-height: 80vh;
+          display:flex;
+          flex-direction:column;
+          gap:1rem;
         }
+
+        .user-analytics{padding:1.2rem;min-width:0}.analytics-heading{display:flex;justify-content:space-between;align-items:center;gap:1rem}.analytics-heading p{color:var(--text-muted)}.analytics-heading>span{color:var(--accent-blue);font-weight:700}.analytics-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin:1rem 0}.analytics-stats div{padding:.8rem;border-radius:var(--radius-sm);background:rgba(255,255,255,.04);display:flex;flex-direction:column}.analytics-stats strong{font-size:1.35rem}.analytics-stats span,.analytics-documents small{color:var(--text-muted)}.analytics-documents{display:flex;gap:.6rem;overflow-x:scroll;overscroll-behavior-x:contain;padding:.15rem 0 .65rem;scrollbar-color:var(--accent-blue) rgba(255,255,255,.06)}.analytics-documents button{flex:0 0 290px;min-width:290px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:var(--text-primary);padding:.7rem;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:space-between;text-align:left;gap:.75rem}.analytics-documents button span{display:flex;flex-direction:column;min-width:0}.analytics-documents strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:145px}.analytics-file-icon{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto}.audience-modal{max-width:650px;max-height:80vh;overflow:auto}.audience-row{display:flex;justify-content:space-between;gap:1rem;padding:.7rem 0;border-bottom:1px solid rgba(255,255,255,.06)}.audience-row span{display:flex;flex-direction:column}.audience-row small{color:var(--text-muted)}
 
         .explorer-layout {
           display: flex;
           gap: 1.5rem;
           height: calc(100vh - 6rem);
         }
+
+        @media(max-width:768px){.analytics-stats{grid-template-columns:repeat(2,1fr)}.analytics-heading,.audience-row{align-items:flex-start;flex-direction:column}}
 
         .tree-explorer {
           width: 250px;
@@ -551,6 +875,20 @@ export const Dashboard: React.FC = () => {
           font-weight: 600;
         }
 
+        .upload-confirm-modal { width:min(560px,calc(100vw - 2rem)); }
+        .upload-confirm-heading { display:flex;align-items:center;gap:.8rem;margin-bottom:1.2rem; }
+        .upload-confirm-heading>svg { color:var(--accent-blue); }
+        .upload-confirm-heading p { color:var(--text-muted);font-size:.82rem;margin-top:.2rem; }
+        .upload-confirm-modal form,.upload-confirm-modal form>label { display:flex;flex-direction:column;gap:.45rem; }
+        .upload-confirm-modal form { gap:1rem; }
+        .sharing-options { border:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:.7rem; }
+        .sharing-options legend { grid-column:1/-1;color:var(--text-secondary);margin-bottom:.45rem; }
+        .sharing-options label { display:flex;align-items:center;gap:.65rem;padding:.8rem;border:1px solid rgba(255,255,255,.09);border-radius:var(--radius-sm);cursor:pointer; }
+        .sharing-options label.selected { border-color:var(--accent-blue);background:rgba(0,180,216,.08); }
+        .sharing-options label span { display:flex;flex-direction:column;gap:.15rem; }
+        .sharing-options small,.duplicate-rule-note { color:var(--text-muted);font-size:.78rem; }
+        .duplicate-rule-note { padding:.7rem;border-radius:var(--radius-sm);background:rgba(255,255,255,.035);line-height:1.45; }
+
         .explorer-grid {
           flex: 1;
           overflow-y: auto;
@@ -601,8 +939,12 @@ export const Dashboard: React.FC = () => {
         }
 
         .doc-icon {
-          color: var(--accent-blue);
-          flex-shrink: 0;
+          width:44px;
+          height:44px;
+          border-radius:10px;
+          display:grid;
+          place-items:center;
+          flex:0 0 auto;
         }
 
         .doc-metadata {

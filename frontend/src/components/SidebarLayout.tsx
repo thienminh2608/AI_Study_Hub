@@ -1,23 +1,34 @@
 import React from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { 
-  FolderOpen, 
-  Bot, 
-  Users, 
-  Wallet, 
-  Award, 
-  User as UserIcon, 
-  Settings, 
-  LogOut, 
-  Coins 
+import { ModerationNoticePopup } from './ModerationNoticePopup';
+import {
+  FolderOpen,
+  Bot,
+  Users,
+  Award,
+  User as UserIcon,
+  LogOut,
+  Coins,
+  Globe2,
+  LayoutDashboard,
+  UserCog,
+  ReceiptText,
+  ShieldAlert,
+  SlidersHorizontal,
+  Bell,
 } from 'lucide-react';
 
 export const SidebarLayout: React.FC = () => {
   const { user, logout } = useAuth();
+  const isAdmin = user?.role?.trim().toUpperCase() === 'ADMIN';
+  const isModerator = user?.role?.trim().toUpperCase() === 'MODERATOR';
+  const [searchParams] = useSearchParams();
+  const adminTab = searchParams.get('tab') || 'overview';
 
   return (
     <div className="layout-container">
+      {user && !isAdmin && !isModerator && <ModerationNoticePopup />}
       {/* Sidebar Navigation */}
       <aside className="sidebar glass-panel">
         <div className="logo-section">
@@ -28,50 +39,139 @@ export const SidebarLayout: React.FC = () => {
         {/* User Quick Stats Card */}
         {user && (
           <div className="user-stats-card">
-            <div className="user-info">
-              <p className="username">{user.username}</p>
-              <span className={`badge ${user.role === 'ADMIN' ? 'admin' : user.tierId === 3 ? 'premium' : 'free'}`}>
-                {user.role === 'ADMIN' ? 'ADMIN' : user.tierId === 3 ? 'PREMIUM' : 'FREE'}
-              </span>
+            <NavLink to="/profile" className="account-summary">
+              <div className="user-info">
+                <p className="username">
+                  <UserIcon size={17} />
+                  <span>{user.username}</span>
+                </p>
+                <span
+                  className={`badge ${isAdmin ? 'admin' : isModerator ? 'moderator' : user.tierId === 3 ? 'premium' : 'free'}`}
+                >
+                  {isAdmin
+                    ? 'ADMIN'
+                    : isModerator
+                      ? 'MODERATOR'
+                      : user.tierId === 3
+                        ? 'PREMIUM'
+                        : 'FREE'}
+                </span>
+              </div>
+            </NavLink>
+            <div className="balance-actions">
+              <div className="user-balance">
+                <Coins size={16} className="coin-icon" />
+                <span>{user.balance.toLocaleString()}đ</span>
+              </div>
+              {!isAdmin && !isModerator && (
+                <NavLink to="/wallet?deposit=1" className="quick-deposit-link">
+                  Nạp tiền
+                </NavLink>
+              )}
             </div>
-            <div className="user-balance">
-              <Coins size={16} className="coin-icon" />
-              <span>{user.balance.toLocaleString()}đ</span>
-            </div>
+            {!isAdmin && !isModerator && (
+              <div className="account-widget-links">
+                <NavLink to="/wallet">
+                  <ReceiptText size={15} />
+                  <span>Lịch sử giao dịch</span>
+                </NavLink>
+                <NavLink to="/premium">
+                  <Award size={15} />
+                  <span>Premium</span>
+                </NavLink>
+              </div>
+            )}
+            {isAdmin && (
+              <NavLink to="/profile" className="admin-profile-link">
+                Hồ sơ & bảo mật
+              </NavLink>
+            )}
           </div>
         )}
+        <NavLink to="/notifications" className="nav-item">
+          <Bell size={19} />
+          <span>Thông báo</span>
+        </NavLink>
 
         <nav className="nav-links">
-          <NavLink to="/" end className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-            <FolderOpen size={20} />
-            <span>Tài liệu</span>
-          </NavLink>
-          <NavLink to="/chat" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-            <Bot size={20} />
-            <span>Trợ lý AI</span>
-          </NavLink>
-          <NavLink to="/friends" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-            <Users size={20} />
-            <span>Bạn bè</span>
-          </NavLink>
-          <NavLink to="/wallet" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-            <Wallet size={20} />
-            <span>Ví tiền</span>
-          </NavLink>
-          <NavLink to="/premium" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-            <Award size={20} />
-            <span>Premium</span>
-          </NavLink>
-          <NavLink to="/profile" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-            <UserIcon size={20} />
-            <span>Tài khoản</span>
-          </NavLink>
-
-          {user?.role === 'ADMIN' && (
-            <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Settings size={20} />
-              <span>Quản trị viên</span>
+          {isAdmin ? (
+            <>
+              <NavLink
+                to="/admin?tab=overview"
+                className={`nav-item ${adminTab === 'overview' ? 'active' : ''}`}
+              >
+                <LayoutDashboard size={20} />
+                <span>Tổng quan dashboard</span>
+              </NavLink>
+              <NavLink
+                to="/admin?tab=users"
+                className={`nav-item ${adminTab === 'users' ? 'active' : ''}`}
+              >
+                <UserCog size={20} />
+                <span>Quản lý tài khoản</span>
+              </NavLink>
+              <NavLink
+                to="/admin?tab=transactions"
+                className={`nav-item ${adminTab === 'transactions' ? 'active' : ''}`}
+              >
+                <ReceiptText size={20} />
+                <span>Duyệt giao dịch</span>
+              </NavLink>
+              <NavLink
+                to="/admin?tab=reports"
+                className={`nav-item ${adminTab === 'reports' || adminTab === 'documents' ? 'active' : ''}`}
+              >
+                <ShieldAlert size={20} />
+                <span>Kiểm duyệt nội dung</span>
+              </NavLink>
+              <NavLink
+                to="/admin?tab=report-config"
+                className={`nav-item ${adminTab === 'report-config' || adminTab === 'system-config' || adminTab === 'transfer-config' ? 'active' : ''}`}
+              >
+                <SlidersHorizontal size={20} />
+                <span>Cấu hình hệ thống</span>
+              </NavLink>
+            </>
+          ) : isModerator ? (
+            <NavLink
+              to="/moderator"
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            >
+              <ShieldAlert size={20} />
+              <span>Kiểm duyệt nội dung</span>
             </NavLink>
+          ) : (
+            <>
+              <NavLink
+                to="/"
+                end
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <FolderOpen size={20} />
+                <span>Tài liệu</span>
+              </NavLink>
+              <NavLink
+                to="/public-documents"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <Globe2 size={20} />
+                <span>Tài liệu công khai</span>
+              </NavLink>
+              <NavLink
+                to="/chat"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <Bot size={20} />
+                <span>Trợ lý AI</span>
+              </NavLink>
+              <NavLink
+                to="/friends"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <Users size={20} />
+                <span>Bạn bè</span>
+              </NavLink>
+            </>
           )}
         </nav>
 
@@ -145,8 +245,12 @@ export const SidebarLayout: React.FC = () => {
           align-items: center;
           margin-bottom: 0.5rem;
         }
+        .account-summary { display:block; color:inherit; text-decoration:none; }
 
         .username {
+          display:flex;
+          align-items:center;
+          gap:.4rem;
           font-weight: 600;
           font-size: 0.95rem;
           max-width: 120px;
@@ -179,6 +283,12 @@ export const SidebarLayout: React.FC = () => {
           border: 1px solid rgba(0, 180, 216, 0.3);
         }
 
+        .badge.moderator {
+          background: rgba(245, 158, 11, 0.16);
+          color: #fbbf24;
+          border: 1px solid rgba(245, 158, 11, 0.32);
+        }
+
         .user-balance {
           display: flex;
           align-items: center;
@@ -187,6 +297,14 @@ export const SidebarLayout: React.FC = () => {
           color: var(--success);
           font-weight: 600;
         }
+        .balance-actions { display:flex; align-items:center; justify-content:space-between; gap:.55rem; }
+        .quick-deposit-link { flex:0 0 auto; padding:.32rem .55rem; border:1px solid rgba(16,185,129,.35); border-radius:7px; background:rgba(16,185,129,.1); color:var(--success); font-size:.72rem; font-weight:700; text-decoration:none; white-space:nowrap; transition:var(--transition-fast); }
+        .quick-deposit-link:hover,.quick-deposit-link.active { background:rgba(16,185,129,.2); border-color:var(--success); transform:translateY(-1px); }
+        .account-widget-links { display:grid; grid-template-columns:1fr 1fr; gap:.4rem; margin-top:.7rem; padding-top:.65rem; border-top:1px solid rgba(255,255,255,.07); }
+        .account-widget-links a { display:flex; align-items:center; justify-content:center; gap:.35rem; padding:.42rem .3rem; border-radius:7px; color:var(--text-secondary); font-size:.72rem; text-align:center; }
+        .account-widget-links a:hover,.account-widget-links a.active { background:rgba(157,78,221,.12); color:var(--accent-purple); }
+
+        .admin-profile-link { display:inline-block; margin-top:.55rem; font-size:.78rem; color:var(--accent-blue); }
 
         .coin-icon {
           color: var(--success);

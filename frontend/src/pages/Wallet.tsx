@@ -1,16 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { 
-  Wallet as WalletIcon, 
-  Coins, 
-  ArrowUpRight, 
-  ArrowDownLeft, 
-  Loader, 
-  Clock, 
-  CheckCircle, 
-  XCircle 
-} from 'lucide-react';
+import { Loader, X } from 'lucide-react';
+
+const DEPOSIT_AMOUNTS = [20_000, 50_000, 100_000, 200_000, 500_000, 1_000_000];
 
 interface Transaction {
   transactionId: number;
@@ -21,17 +15,29 @@ interface Transaction {
   completedAt?: string;
 }
 
+interface TransferConfiguration {
+  bankCode?: string;
+  bankName?: string;
+  accountNumber?: string;
+  accountName?: string;
+  qrTemplate?: string;
+  transferContentPrefix?: string;
+  isActive: boolean;
+}
+
 export const Wallet: React.FC = () => {
   const { user, refreshUser } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Forms
-  const [amount, setAmount] = useState<number | ''>('');
-  const [txType, setTxType] = useState<'DEPOSIT' | 'WITHDRAW'>('DEPOSIT');
+  const [amount, setAmount] = useState<number | null>(null);
+  const [showDepositModal, setShowDepositModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [transferConfig, setTransferConfig] = useState<TransferConfiguration | null>(null);
 
   const loadTransactions = async () => {
     try {
@@ -46,33 +52,53 @@ export const Wallet: React.FC = () => {
 
   useEffect(() => {
     loadTransactions();
+    api.transaction
+      .getTransferConfig()
+      .then(setTransferConfig)
+      .catch(() => setTransferConfig({ isActive: false }));
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get('deposit') !== '1') return;
+
+    setError('');
+    setSuccess('');
+    setAmount(null);
+    setShowDepositModal(true);
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('deposit');
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const transferContent =
+    `${transferConfig?.transferContentPrefix || 'AIStudyHub'} ${user?.username || ''}`.trim();
+  const qrUrl =
+    amount && transferConfig?.isActive && transferConfig.bankCode && transferConfig.accountNumber
+      ? `https://img.vietqr.io/image/${encodeURIComponent(transferConfig.bankCode)}-${encodeURIComponent(transferConfig.accountNumber)}-${encodeURIComponent(transferConfig.qrTemplate || 'compact2')}.png?amount=${amount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(transferConfig.accountName || '')}`
+      : '';
 
   const handleSubmitTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
 
-    if (!amount || amount <= 0) {
-      setError('Số tiền phải lớn hơn 0đ.');
-      return;
-    }
-
-    if (txType === 'WITHDRAW' && user && user.balance < amount) {
-      setError('Số dư ví không đủ để thực hiện yêu cầu rút tiền này.');
+    if (!amount || !DEPOSIT_AMOUNTS.includes(amount)) {
+      setError('Vui lòng chọn một mệnh giá nạp tiền.');
       return;
     }
 
     setSubmitting(true);
     try {
-      // For deposit, value is positive. For withdraw, value is negative.
-      const rawAmount = txType === 'DEPOSIT' ? amount : -amount;
       await api.transaction.create({
-        amount: rawAmount,
-        type: txType
+        amount,
+        type: 'DEPOSIT',
       });
-      setSuccess('Gửi yêu cầu giao dịch thành công. Vui lòng đợi Quản trị viên phê duyệt.');
-      setAmount('');
+      setSuccess(
+        `Đã gửi yêu cầu nạp ${amount.toLocaleString('vi-VN')}đ. Vui lòng đợi Quản trị viên phê duyệt.`,
+      );
+      setAmount(null);
+      setShowDepositModal(false);
       await loadTransactions();
       await refreshUser();
     } catch (err: any) {
@@ -87,21 +113,18 @@ export const Wallet: React.FC = () => {
       case 'SUCCESS':
         return (
           <span className="status-badge success">
-            <CheckCircle size={12} />
             <span>Thành công</span>
           </span>
         );
       case 'CANCELLED':
         return (
           <span className="status-badge danger">
-            <XCircle size={12} />
             <span>Đã hủy</span>
           </span>
         );
       default:
         return (
           <span className="status-badge warning">
-            <Clock size={12} />
             <span>Đang chờ duyệt</span>
           </span>
         );
@@ -110,70 +133,120 @@ export const Wallet: React.FC = () => {
 
   return (
     <div className="wallet-container">
-      {/* Wallet overview stats */}
-      <div className="wallet-overview-grid animate-slide-up">
-        
-        {/* Balance Card */}
+      <div className="wallet-overview animate-slide-up">
         <div className="balance-card glass-panel">
           <div className="card-glow"></div>
-          <div className="balance-header">
-            <Coins size={24} className="coin-icon" />
-            <span>Số dư khả dụng</span>
-          </div>
-          <h2>{(user?.balance || 0).toLocaleString()}đ</h2>
-          <p>Tài khoản thành viên: <strong>{user?.tierName || 'Free'}</strong></p>
-        </div>
-
-        {/* Transaction Request Form */}
-        <div className="tx-form-card glass-panel">
-          <h3>Tạo giao dịch</h3>
-          {error && <div className="error-alert">{error}</div>}
-          {success && <div className="success-alert">{success}</div>}
-
-          <form onSubmit={handleSubmitTransaction} className="tx-form">
-            <div className="type-toggle">
-              <button 
-                type="button" 
-                onClick={() => setTxType('DEPOSIT')} 
-                className={`toggle-btn ${txType === 'DEPOSIT' ? 'active deposit' : ''}`}
-              >
-                <ArrowDownLeft size={16} />
-                <span>Nạp tiền</span>
-              </button>
-              <button 
-                type="button" 
-                onClick={() => setTxType('WITHDRAW')} 
-                className={`toggle-btn ${txType === 'WITHDRAW' ? 'active withdraw' : ''}`}
-              >
-                <ArrowUpRight size={16} />
-                <span>Rút tiền</span>
-              </button>
+          <div className="balance-content">
+            <div>
+              <div className="balance-header">
+                <span>Số dư khả dụng</span>
+              </div>
+              <h2>{(user?.balance || 0).toLocaleString('vi-VN')}đ</h2>
+              <p>
+                Tài khoản thành viên: <strong>{user?.tierName || 'Free'}</strong>
+              </p>
             </div>
-
-            <div className="form-group">
-              <label>Số tiền (VNĐ)</label>
-              <input
-                type="number"
-                placeholder="Ví dụ: 100000"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value ? parseInt(e.target.value) : '')}
-                className="input-control"
-                disabled={submitting}
-              />
-            </div>
-
-            <button type="submit" className="btn-primary tx-submit" disabled={submitting || !amount}>
-              {submitting ? <Loader className="spin" size={18} /> : 'Tạo yêu cầu'}
+            <button
+              type="button"
+              className="btn-primary deposit-button"
+              onClick={() => {
+                setError('');
+                setSuccess('');
+                setAmount(null);
+                setShowDepositModal(true);
+              }}
+            >
+              Nạp tiền
             </button>
-          </form>
+          </div>
         </div>
-
+        {success && <div className="success-alert wallet-alert">{success}</div>}
       </div>
+
+      {showDepositModal && (
+        <div
+          className="deposit-modal-overlay"
+          onMouseDown={() => !submitting && setShowDepositModal(false)}
+        >
+          <div
+            className="deposit-modal glass-panel animate-slide-up"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="deposit-modal-close"
+              onClick={() => setShowDepositModal(false)}
+              disabled={submitting}
+              aria-label="Đóng"
+            >
+              <X size={20} />
+            </button>
+            <h3>Nạp tiền vào ví</h3>
+            <p className="deposit-modal-subtitle">Chọn mệnh giá bạn muốn nạp</p>
+            {error && <div className="error-alert">{error}</div>}
+            <form onSubmit={handleSubmitTransaction}>
+              <div className="deposit-amount-grid">
+                {DEPOSIT_AMOUNTS.map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`deposit-amount-option ${amount === value ? 'selected' : ''}`}
+                    onClick={() => {
+                      setAmount(value);
+                      setError('');
+                    }}
+                    disabled={submitting}
+                  >
+                    <span>{value.toLocaleString('vi-VN')}</span>
+                    <small>VNĐ</small>
+                  </button>
+                ))}
+              </div>
+              <div className="deposit-summary">
+                <span>Số tiền nạp</span>
+                <strong>{amount ? `${amount.toLocaleString('vi-VN')}đ` : 'Chưa chọn'}</strong>
+              </div>
+              {amount &&
+                (transferConfig?.isActive && qrUrl ? (
+                  <section className="transfer-qr-panel" aria-live="polite">
+                    <img
+                      src={qrUrl}
+                      alt={`Mã QR chuyển khoản ${amount.toLocaleString('vi-VN')} đồng`}
+                    />
+                    <div className="transfer-details">
+                      <strong>{transferConfig.bankName || transferConfig.bankCode}</strong>
+                      <span>
+                        Số tài khoản: <b>{transferConfig.accountNumber}</b>
+                      </span>
+                      <span>
+                        Chủ tài khoản: <b>{transferConfig.accountName}</b>
+                      </span>
+                      <span>
+                        Nội dung: <b>{transferContent}</b>
+                      </span>
+                      <small>Quét QR đúng mệnh giá rồi gửi yêu cầu để Admin xác nhận.</small>
+                    </div>
+                  </section>
+                ) : (
+                  <div className="error-alert">
+                    Admin chưa bật cấu hình chuyển khoản. Vui lòng thử lại sau.
+                  </div>
+                ))}
+              <button
+                type="submit"
+                className="btn-primary tx-submit"
+                disabled={submitting || !amount || !transferConfig?.isActive}
+              >
+                {submitting ? <Loader className="spin" size={18} /> : 'Xác nhận nạp tiền'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Historic Transaction Logs */}
       <div className="history-pane glass-panel animate-slide-up" style={{ marginTop: '2rem' }}>
         <h3>Lịch sử giao dịch</h3>
-        
+
         <div className="table-scroll">
           {loading ? (
             <div className="history-loader">
@@ -182,7 +255,6 @@ export const Wallet: React.FC = () => {
             </div>
           ) : transactions.length === 0 ? (
             <div className="empty-history">
-              <WalletIcon size={48} className="empty-icon" />
               <p>Chưa có giao dịch nào được thực hiện.</p>
             </div>
           ) : (
@@ -198,7 +270,7 @@ export const Wallet: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {transactions.map(tx => {
+                {transactions.map((tx) => {
                   const isDeposit = tx.type === 'DEPOSIT' || tx.amount > 0;
                   return (
                     <tr key={tx.transactionId}>
@@ -209,7 +281,8 @@ export const Wallet: React.FC = () => {
                         </span>
                       </td>
                       <td className={`tx-amount ${isDeposit ? 'positive' : 'negative'}`}>
-                        {isDeposit ? '+' : ''}{tx.amount.toLocaleString()}đ
+                        {isDeposit ? '+' : ''}
+                        {tx.amount.toLocaleString()}đ
                       </td>
                       <td>{renderStatusBadge(tx.status)}</td>
                       <td>{tx.startedAt ? new Date(tx.startedAt).toLocaleString() : 'N/A'}</td>
@@ -228,21 +301,19 @@ export const Wallet: React.FC = () => {
           min-height: 80vh;
         }
 
-        .wallet-overview-grid {
-          display: grid;
-          grid-template-columns: 1.2fr 1fr;
-          gap: 1.5rem;
-        }
+        .wallet-overview { display: flex; flex-direction: column; gap: 1rem; }
 
         .balance-card {
           padding: 2.5rem;
           display: flex;
-          flex-direction: column;
           justify-content: center;
           position: relative;
           overflow: hidden;
           border-radius: var(--radius-md);
         }
+
+        .balance-content { position: relative; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 2rem; }
+        .deposit-button { min-width: 150px; height: 48px; display: flex; align-items: center; justify-content: center; gap: .5rem; }
 
         .card-glow {
           position: absolute;
@@ -265,10 +336,6 @@ export const Wallet: React.FC = () => {
           margin-bottom: 1rem;
         }
 
-        .coin-icon {
-          color: var(--warning);
-        }
-
         .balance-card h2 {
           font-size: 3rem;
           margin-bottom: 0.5rem;
@@ -280,15 +347,6 @@ export const Wallet: React.FC = () => {
         .balance-card p {
           font-size: 0.95rem;
           color: var(--text-secondary);
-        }
-
-        .tx-form-card {
-          padding: 1.5rem;
-          border-radius: var(--radius-md);
-        }
-
-        .tx-form-card h3 {
-          margin-bottom: 1rem;
         }
 
         .error-alert {
@@ -311,58 +369,34 @@ export const Wallet: React.FC = () => {
           margin-bottom: 1rem;
         }
 
-        .tx-form {
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-
-        .type-toggle {
-          display: flex;
-          gap: 0.5rem;
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          padding: 0.25rem;
-          border-radius: var(--radius-sm);
-        }
-
-        .toggle-btn {
-          flex: 1;
+        .tx-submit {
+          width: 100%;
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 0.4rem;
-          background: transparent;
-          border: none;
-          color: var(--text-secondary);
-          cursor: pointer;
-          font-weight: 600;
-          font-size: 0.9rem;
-          padding: 0.5rem;
-          border-radius: var(--radius-sm);
-          transition: var(--transition-fast);
-        }
-
-        .toggle-btn:hover {
-          color: var(--text-primary);
-        }
-
-        .toggle-btn.active.deposit {
-          background: rgba(16, 185, 129, 0.15);
-          color: var(--success);
-          border: 1px solid rgba(16, 185, 129, 0.2);
-        }
-
-        .toggle-btn.active.withdraw {
-          background: rgba(239, 68, 68, 0.15);
-          color: var(--danger);
-          border: 1px solid rgba(239, 68, 68, 0.2);
-        }
-
-        .tx-submit {
-          justify-content: center;
           height: 44px;
         }
+
+        .wallet-alert { margin: 0; }
+        .deposit-modal-overlay { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 1rem; background: rgba(3, 7, 18, .76); backdrop-filter: blur(8px); }
+        .deposit-modal { position: relative; width: min(520px, 100%); padding: 2rem; border-radius: var(--radius-md); }
+        .deposit-modal-close { position: absolute; top: 1rem; right: 1rem; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
+        .deposit-modal h3 { font-size: 1.4rem; }
+        .deposit-modal-subtitle { margin: .35rem 0 1.25rem; color: var(--text-secondary); }
+        .deposit-amount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; }
+        .deposit-amount-option { display: flex; flex-direction: column; align-items: center; gap: .2rem; padding: 1rem .5rem; border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-sm); background: rgba(255,255,255,.035); color: var(--text-primary); cursor: pointer; transition: var(--transition-fast); }
+        .deposit-amount-option:hover { border-color: rgba(16,185,129,.45); transform: translateY(-2px); }
+        .deposit-amount-option.selected { border-color: var(--success); background: rgba(16,185,129,.14); box-shadow: 0 0 0 2px rgba(16,185,129,.08); }
+        .deposit-amount-option span { font-size: 1.05rem; font-weight: 750; }
+        .deposit-amount-option small { color: var(--text-muted); }
+        .deposit-summary { display: flex; justify-content: space-between; margin: 1.25rem 0; padding: 1rem; border-radius: var(--radius-sm); background: rgba(255,255,255,.04); color: var(--text-secondary); }
+        .deposit-summary strong { color: var(--success); }
+        .transfer-qr-panel { display:grid; grid-template-columns:180px minmax(0,1fr); gap:1rem; align-items:center; margin:0 0 1.25rem; padding:1rem; border:1px solid rgba(16,185,129,.25); border-radius:var(--radius-sm); background:rgba(16,185,129,.06); }
+        .transfer-qr-panel img { width:180px; aspect-ratio:1; object-fit:contain; border-radius:10px; background:white; }
+        .transfer-details { display:flex; flex-direction:column; gap:.42rem; color:var(--text-secondary); font-size:.85rem; overflow-wrap:anywhere; }
+        .transfer-details>strong { color:var(--text-primary); font-size:1rem; }
+        .transfer-details b { color:var(--success); }
+        .transfer-details small { margin-top:.35rem; color:var(--text-muted); line-height:1.4; }
 
         /* History Table styles */
         .history-pane {
@@ -478,9 +512,11 @@ export const Wallet: React.FC = () => {
         }
 
         @media (max-width: 768px) {
-          .wallet-overview-grid {
-            grid-template-columns: 1fr;
-          }
+          .balance-content { align-items: stretch; flex-direction: column; }
+          .deposit-button { width: 100%; }
+          .deposit-amount-grid { grid-template-columns: repeat(2, 1fr); }
+          .transfer-qr-panel { grid-template-columns:1fr; justify-items:center; }
+          .transfer-details { width:100%; }
         }
       `}</style>
     </div>

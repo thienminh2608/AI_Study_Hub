@@ -1,16 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
-import { 
-  FileText, 
-  ArrowLeft, 
-  Trash2, 
-  Share2, 
-  AlertOctagon, 
-  Loader, 
-  Lock,
-  Download
-} from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { ArrowLeft, Trash2, Share2, AlertOctagon, Loader, Lock, Download } from 'lucide-react';
+import { FileTypeIcon } from '../components/FileTypeIcon';
 
 interface DocumentDetails {
   documentId: number;
@@ -18,24 +11,30 @@ interface DocumentDetails {
   uploaderName: string;
   folderId?: number;
   title: string;
+  subject?: string;
   fileExtension: string;
   cloudStorageUrl: string;
   fileSizeMb: number;
   aiParsingStatus: string;
   sharingPermission: string;
+  requestedVisibility?: string;
+  moderationStatus?: string;
+  moderationNote?: string;
   shareLinkToken?: string;
   createdAt?: string;
+  fileAvailable?: boolean;
 }
 
 export const DocumentViewer: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const documentId = parseInt(id || '0');
 
   const [doc, setDoc] = useState<DocumentDetails | null>(null);
   const [extractedText, setExtractedText] = useState('');
   const [loading, setLoading] = useState(true);
-  
+
   // Edit & Share
   const [sharingPermission, setSharingPermission] = useState('PRIVATE');
   const [updatingPermission, setUpdatingPermission] = useState(false);
@@ -43,17 +42,30 @@ export const DocumentViewer: React.FC = () => {
   // Report Modal
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportReason, setReportReason] = useState('INAPPROPRIATE');
+  const [reportReasons, setReportReasons] = useState<any[]>([]);
   const [reportDetails, setReportDetails] = useState('');
   const [reporting, setReporting] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [appealForm, setAppealForm] = useState<{
+    reportId: number;
+    explanation: string;
+    evidenceUrl: string;
+  } | null>(null);
 
   const loadDocumentDetails = async () => {
     if (!documentId) return;
     setLoading(true);
     try {
       // 1. Get metadata
-      const details = await api.document.getById(documentId);
+      const [details, reasons] = await Promise.all([
+        api.document.getById(documentId),
+        api.document.getReportReasons(),
+      ]);
       setDoc(details);
       setSharingPermission(details.sharingPermission);
+      setReportReasons(reasons);
+      if (reasons.length) setReportReason(reasons[0].reasonCode);
 
       // 2. Get text
       const textData = await api.document.getText(documentId);
@@ -66,6 +78,8 @@ export const DocumentViewer: React.FC = () => {
     }
   };
 
+  // Reload only when the route selects another document.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     loadDocumentDetails();
   }, [documentId]);
@@ -73,11 +87,18 @@ export const DocumentViewer: React.FC = () => {
   const handleToggleSharing = async () => {
     if (!doc) return;
     const nextPermission = sharingPermission === 'PUBLIC' ? 'PRIVATE' : 'PUBLIC';
-    
+
     setUpdatingPermission(true);
     try {
-      await api.document.confirm(doc.documentId, doc.title, nextPermission, doc.folderId);
-      setSharingPermission(nextPermission);
+      const updated = await api.document.confirm(
+        doc.documentId,
+        doc.title,
+        doc.subject || 'Khác',
+        nextPermission,
+        doc.folderId,
+      );
+      setDoc(updated);
+      setSharingPermission(updated.sharingPermission);
     } catch (err: any) {
       alert(err.message || 'Cập nhật quyền chia sẻ thất bại.');
     } finally {
@@ -86,7 +107,7 @@ export const DocumentViewer: React.FC = () => {
   };
 
   const handleDelete = async () => {
-    if (!doc || !window.confirm('Bạn có chắc chắn muốn xóa tài liệu này vĩnh viễn?')) return;
+    if (!doc) return;
 
     try {
       await api.document.delete(doc.documentId);
@@ -96,20 +117,36 @@ export const DocumentViewer: React.FC = () => {
     }
   };
 
+  const handleAppeal = async () => {
+    if (!doc) return;
+    const { reportId } = await api.document.getAppealableReport(doc.documentId);
+    if (!reportId) {
+      setFormError('Không có quyết định vi phạm có thể giải trình.');
+      return;
+    }
+    setAppealForm({ reportId, explanation: '', evidenceUrl: '' });
+    setFormError('');
+  };
+
   const handleReport = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!doc || reporting) return;
+    if (!reportDetails.trim()) {
+      setFormError('Vui lòng nhập mô tả chi tiết nội dung vi phạm.');
+      return;
+    }
 
     setReporting(true);
     try {
       await api.document.report({
         documentId: doc.documentId,
         reasonCode: reportReason,
-        additionalDetails: reportDetails.trim()
+        additionalDetails: reportDetails.trim(),
       });
       alert('Đã gửi báo cáo vi phạm tài liệu thành công. Cảm ơn phản hồi của bạn!');
       setShowReportModal(false);
       setReportDetails('');
+      setFormError('');
     } catch (err: any) {
       alert(err.message || 'Gửi báo cáo thất bại.');
     } finally {
@@ -118,11 +155,27 @@ export const DocumentViewer: React.FC = () => {
   };
 
   // Build full download URL
-  const downloadUrl = doc ? `http://localhost:5065${doc.cloudStorageUrl}` : '#';
+  const isOwner = Boolean(doc && user?.userId === doc.userId);
+
+  const handleDownload = async () => {
+    if (!doc) return;
+    try {
+      const blob = await api.document.download(doc.documentId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${doc.title}.${doc.fileExtension}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err: any) {
+      alert(err.message || 'Không thể tải file.');
+    }
+  };
 
   return (
     <div className="viewer-container">
-      
       {/* Header operations row */}
       <div className="viewer-header">
         <button onClick={() => navigate(-1)} className="btn-secondary back-btn">
@@ -133,34 +186,76 @@ export const DocumentViewer: React.FC = () => {
         {doc && (
           <div className="operations-group">
             {/* Share toggle */}
-            <button 
-              onClick={handleToggleSharing} 
-              className={`btn-secondary ${sharingPermission === 'PUBLIC' ? 'shared-active' : ''}`}
-              disabled={updatingPermission}
-            >
-              {updatingPermission ? <Loader className="spin" size={16} /> : (
-                sharingPermission === 'PUBLIC' ? <Share2 size={16} /> : <Lock size={16} />
-              )}
-              <span>{sharingPermission === 'PUBLIC' ? 'Đang chia sẻ công khai' : 'Riêng tư'}</span>
-            </button>
+            {isOwner && (
+              <button
+                onClick={handleToggleSharing}
+                className={`btn-secondary ${sharingPermission === 'PUBLIC' ? 'shared-active' : ''}`}
+                disabled={updatingPermission}
+              >
+                {updatingPermission ? (
+                  <Loader className="spin" size={16} />
+                ) : sharingPermission === 'PUBLIC' ? (
+                  <Share2 size={16} />
+                ) : (
+                  <Lock size={16} />
+                )}
+                <span>
+                  {sharingPermission === 'PUBLIC'
+                    ? 'Đang công khai'
+                    : doc.moderationStatus === 'PENDING_REVIEW'
+                      ? 'Đang chờ duyệt'
+                      : doc.moderationStatus === 'NEEDS_CHANGES'
+                        ? 'Cần chỉnh sửa'
+                        : 'Yêu cầu công khai'}
+                </span>
+              </button>
+            )}
 
             {/* Download file */}
-            <a href={downloadUrl} download target="_blank" rel="noopener noreferrer" className="btn-secondary download-link">
+            <button
+              type="button"
+              onClick={handleDownload}
+              className="btn-secondary download-link"
+              disabled={doc.fileAvailable === false}
+              title={
+                doc.fileAvailable === false
+                  ? 'File gốc của dữ liệu mẫu không tồn tại'
+                  : 'Tải file gốc'
+              }
+            >
               <Download size={16} />
-              <span>Tải file gốc</span>
-            </a>
+              <span>{doc.fileAvailable === false ? 'Thiếu file gốc' : 'Tải file gốc'}</span>
+            </button>
 
             {/* Report */}
-            <button onClick={() => setShowReportModal(true)} className="btn-secondary report-btn" title="Báo cáo vi phạm">
-              <AlertOctagon size={16} />
-              <span>Báo cáo</span>
-            </button>
+            {!isOwner && (
+              <button
+                onClick={() => setShowReportModal(true)}
+                className="btn-secondary report-btn"
+                title="Báo cáo vi phạm"
+              >
+                <AlertOctagon size={16} />
+                <span>Báo cáo</span>
+              </button>
+            )}
 
             {/* Delete */}
-            <button onClick={handleDelete} className="btn-secondary delete-btn" title="Xóa tài liệu">
-              <Trash2 size={16} />
-              <span>Xóa</span>
-            </button>
+            {isOwner && (
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                className="btn-secondary delete-btn"
+                title="Xóa tài liệu"
+              >
+                <Trash2 size={16} />
+                <span>Xóa</span>
+              </button>
+            )}
+            {isOwner && doc.moderationStatus === 'HIDDEN' && (
+              <button onClick={handleAppeal} className="btn-secondary">
+                <AlertOctagon size={16} />
+                <span>Gửi giải trình</span>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -172,12 +267,13 @@ export const DocumentViewer: React.FC = () => {
         </div>
       ) : doc ? (
         <div className="document-sheet-layout animate-slide-up">
-          
           {/* Metadata Sidebar card */}
           <div className="doc-metadata-panel glass-card">
-            <FileText size={48} className="doc-large-icon" />
-            <h3>{doc.title}.{doc.fileExtension}</h3>
-            
+            <FileTypeIcon extension={doc.fileExtension} size={48} className="doc-large-icon" />
+            <h3>
+              {doc.title}.{doc.fileExtension}
+            </h3>
+
             <div className="metadata-list">
               <div className="meta-row">
                 <span className="label">Định dạng:</span>
@@ -189,9 +285,7 @@ export const DocumentViewer: React.FC = () => {
               </div>
               <div className="meta-row">
                 <span className="label">Trạng thái AI:</span>
-                <span className={`val ai-badge ${doc.aiParsingStatus}`}>
-                  {doc.aiParsingStatus}
-                </span>
+                <span className={`val ai-badge ${doc.aiParsingStatus}`}>{doc.aiParsingStatus}</span>
               </div>
               <div className="meta-row">
                 <span className="label">Người tải lên:</span>
@@ -203,15 +297,25 @@ export const DocumentViewer: React.FC = () => {
                   {doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : 'N/A'}
                 </span>
               </div>
+              <div className="meta-row">
+                <span className="label">Kiểm duyệt:</span>
+                <span className="val">{doc.moderationStatus || 'NOT_REQUESTED'}</span>
+              </div>
+              {doc.moderationNote && (
+                <div className="meta-row">
+                  <span className="label">Phản hồi:</span>
+                  <span className="val">{doc.moderationNote}</span>
+                </div>
+              )}
             </div>
 
             {sharingPermission === 'PUBLIC' && doc.shareLinkToken && (
               <div className="public-link-box">
                 <label>Link công khai:</label>
-                <input 
-                  type="text" 
-                  readOnly 
-                  value={`${window.location.origin}/document/public/${doc.documentId}`}
+                <input
+                  type="text"
+                  readOnly
+                  value={`${window.location.origin}/document/${doc.documentId}`}
                   onClick={(e) => (e.target as HTMLInputElement).select()}
                   className="input-control copy-input"
                 />
@@ -228,17 +332,22 @@ export const DocumentViewer: React.FC = () => {
               ) : doc.aiParsingStatus === 'PENDING' ? (
                 <div className="empty-text-state">
                   <Loader className="spin" size={24} />
-                  <p>Hệ thống AI đang tiến hành phân tích và trích xuất chữ từ tệp tin gốc. Quá trình này có thể mất vài giây...</p>
+                  <p>
+                    Hệ thống AI đang tiến hành phân tích và trích xuất chữ từ tệp tin gốc. Quá trình
+                    này có thể mất vài giây...
+                  </p>
                 </div>
               ) : (
                 <div className="empty-text-state">
                   <AlertOctagon size={32} />
-                  <p>Không có văn bản nào được trích xuất (Tệp tin trống hoặc định dạng hình ảnh/lỗi quét).</p>
+                  <p>
+                    Không có văn bản nào được trích xuất (Tệp tin trống hoặc định dạng hình ảnh/lỗi
+                    quét).
+                  </p>
                 </div>
               )}
             </div>
           </div>
-
         </div>
       ) : null}
 
@@ -250,15 +359,17 @@ export const DocumentViewer: React.FC = () => {
             <form onSubmit={handleReport} className="report-form">
               <div className="form-group">
                 <label>Lý do báo cáo</label>
-                <select 
-                  value={reportReason} 
+                <select
+                  value={reportReason}
                   onChange={(e) => setReportReason(e.target.value)}
                   className="input-control"
+                  required
                 >
-                  <option value="INAPPROPRIATE">Nội dung không lành mạnh / Độc hại</option>
-                  <option value="COPYRIGHT">Vi phạm bản quyền / Quyền tác giả</option>
-                  <option value="SPAM">Quảng cáo rác / Sai chủ đề học tập</option>
-                  <option value="OTHER">Lý do khác</option>
+                  {reportReasons.map((reason) => (
+                    <option key={reason.reasonCode} value={reason.reasonCode}>
+                      {reason.description}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -267,20 +378,112 @@ export const DocumentViewer: React.FC = () => {
                 <textarea
                   placeholder="Mô tả cụ thể về nội dung vi phạm..."
                   value={reportDetails}
-                  onChange={(e) => setReportDetails(e.target.value)}
+                  onChange={(e) => {
+                    setReportDetails(e.target.value);
+                    if (e.target.value.trim()) setFormError('');
+                  }}
                   className="input-control text-area"
                   rows={4}
                   required
                 />
+                {formError && (
+                  <span className="form-error" role="alert">
+                    {formError}
+                  </span>
+                )}
               </div>
 
               <div className="modal-actions">
-                <button type="button" onClick={() => setShowReportModal(false)} className="btn-secondary">Hủy</button>
-                <button type="submit" className="btn-primary" disabled={reporting}>
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(false)}
+                  className="btn-secondary"
+                >
+                  Hủy
+                </button>
+                <button type="submit" className="btn-primary" disabled={reporting || !reportReason}>
                   {reporting ? <Loader className="spin" size={16} /> : 'Gửi báo cáo'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {showDeleteModal && (
+        <div className="modal-overlay">
+          <div className="modal-box glass-panel">
+            <h3>Xóa tài liệu?</h3>
+            <p>
+              Tài liệu <strong>{doc?.title}</strong> sẽ bị xóa vĩnh viễn và không thể khôi phục.
+            </p>
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setShowDeleteModal(false)}>
+                Hủy
+              </button>
+              <button className="btn-secondary delete-btn" onClick={handleDelete}>
+                Xác nhận xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {appealForm && (
+        <div className="modal-overlay">
+          <div className="modal-box glass-panel">
+            <h3>Gửi giải trình</h3>
+            <p>Trình bày căn cứ để Moderator xem xét lại quyết định.</p>
+            <div className="report-form">
+              <textarea
+                className="input-control"
+                rows={5}
+                value={appealForm.explanation}
+                onChange={(e) => {
+                  setAppealForm({ ...appealForm, explanation: e.target.value });
+                  if (e.target.value.trim()) setFormError('');
+                }}
+                placeholder="Nội dung giải trình và căn cứ..."
+              />
+              <input
+                className="input-control"
+                value={appealForm.evidenceUrl}
+                onChange={(e) => setAppealForm({ ...appealForm, evidenceUrl: e.target.value })}
+                placeholder="URL bằng chứng (không bắt buộc)"
+              />
+              {formError && (
+                <span className="form-error" role="alert">
+                  {formError}
+                </span>
+              )}
+              <div className="modal-actions">
+                <button className="btn-secondary" onClick={() => setAppealForm(null)}>
+                  Hủy
+                </button>
+                <button
+                  className="btn-primary"
+                  onClick={async () => {
+                    if (!appealForm.explanation.trim()) {
+                      setFormError('Vui lòng nhập nội dung giải trình.');
+                      return;
+                    }
+                    setReporting(true);
+                    try {
+                      await api.document.appeal(appealForm.reportId, {
+                        explanation: appealForm.explanation.trim(),
+                        evidenceUrl: appealForm.evidenceUrl.trim() || null,
+                      });
+                      setAppealForm(null);
+                    } catch (e: any) {
+                      setFormError(e.message || 'Không thể gửi giải trình.');
+                    } finally {
+                      setReporting(false);
+                    }
+                  }}
+                  disabled={reporting}
+                >
+                  {reporting ? <Loader className="spin" size={16} /> : 'Gửi giải trình'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -351,7 +554,11 @@ export const DocumentViewer: React.FC = () => {
         }
 
         .doc-large-icon {
-          color: var(--accent-blue);
+          width:76px;
+          height:76px;
+          display:grid;
+          place-items:center;
+          border-radius:18px;
           filter: drop-shadow(0 0 10px rgba(0, 180, 216, 0.2));
         }
 

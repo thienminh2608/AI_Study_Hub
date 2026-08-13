@@ -5,19 +5,43 @@ using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace AIStudyHub.Api.Controllers;
 
-[Authorize]
+[Authorize(Roles = "STUDENT")]
 [ApiController]
 [Route("api/transaction")]
 public class TransactionController : ControllerBase
 {
     private readonly ITransactionService _transactionService;
+    private readonly IStudyHubDbContext _db;
 
-    public TransactionController(ITransactionService transactionService)
+    public TransactionController(ITransactionService transactionService, IStudyHubDbContext db)
     {
         _transactionService = transactionService;
+        _db = db;
+    }
+
+    [HttpGet("transfer-config")]
+    public async Task<IActionResult> GetTransferConfiguration()
+    {
+        var config = await _db.TransferConfigurations.AsNoTracking().OrderBy(x => x.ConfigurationId).FirstOrDefaultAsync();
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.BankCode) || string.IsNullOrWhiteSpace(config.AccountNumber))
+            return Ok(new
+            {
+                isActive = false
+            });
+        return Ok(new
+        {
+            config.BankCode,
+            config.BankName,
+            config.AccountNumber,
+            config.AccountName,
+            config.QrTemplate,
+            config.TransferContentPrefix,
+            config.IsActive
+        });
     }
 
     private int GetCurrentUserId()
@@ -39,13 +63,22 @@ public class TransactionController : ControllerBase
             bool success = await _transactionService.CreateTransactionAsync(userId, dto);
             if (success)
             {
-                return Ok(new { message = "Đã gửi yêu cầu giao dịch thành công. Vui lòng đợi Admin duyệt." });
+                return Ok(new
+                {
+                    message = "Đã gửi yêu cầu giao dịch thành công. Vui lòng đợi Admin duyệt."
+                });
             }
-            return BadRequest(new { message = "Không thể tạo giao dịch." });
+            return BadRequest(new
+            {
+                message = "Không thể tạo giao dịch."
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -60,7 +93,10 @@ public class TransactionController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -73,17 +109,29 @@ public class TransactionController : ControllerBase
             bool success = await _transactionService.BuyPremiumAsync(userId);
             if (success)
             {
-                return Ok(new { message = "Kích hoạt gói Premium thành công! Bạn có thêm 30 ngày sử dụng và các giới hạn dung lượng/AI tăng lên." });
+                return Ok(new
+                {
+                    message = "Kích hoạt gói Premium thành công! Bạn có thêm 30 ngày sử dụng và các giới hạn dung lượng/AI tăng lên."
+                });
             }
-            return BadRequest(new { message = "Giao dịch Premium thất bại." });
+            return BadRequest(new
+            {
+                message = "Giao dịch Premium thất bại."
+            });
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = $"Lỗi hệ thống: {ex.Message}" });
+            return StatusCode(500, new
+            {
+                message = $"Lỗi hệ thống: {ex.Message}"
+            });
         }
     }
 
@@ -98,7 +146,10 @@ public class TransactionController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 }

@@ -1,10 +1,9 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
+using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -25,21 +24,25 @@ public class FriendshipService : IFriendshipService
             .FirstOrDefaultAsync(f => (f.RequesterId == myUserId && f.AddresseeId == targetUserId) ||
                                       (f.RequesterId == targetUserId && f.AddresseeId == myUserId));
 
-        if (rel == null) return "NONE";
+        if (rel == null)
+            return "NONE";
         return rel.Status ?? "NONE";
     }
 
     public async Task<bool> SendFriendRequestAsync(int myUserId, int addresseeId)
     {
-        if (myUserId == addresseeId) return false;
-        if (!await _dbContext.Users.AnyAsync(u => u.UserId == addresseeId && u.Status == "ACTIVE")) return false;
+        if (myUserId == addresseeId)
+            return false;
+        if (!await _dbContext.Users.AnyAsync(u => u.UserId == addresseeId && u.Status == "ACTIVE"))
+            return false;
 
         // Check if there is an existing friendship
         var existing = await _dbContext.Friendships
             .FirstOrDefaultAsync(f => (f.RequesterId == myUserId && f.AddresseeId == addresseeId) ||
                                       (f.RequesterId == addresseeId && f.AddresseeId == myUserId));
 
-        if (existing != null) return false;
+        if (existing != null)
+            return false;
 
         var fship = new Friendship
         {
@@ -57,13 +60,15 @@ public class FriendshipService : IFriendshipService
     public async Task<bool> UpdateFriendshipStatusAsync(int myUserId, int targetUserId, string status)
     {
         status = status.ToUpper();
-        if (status != "ACCEPTED" && status != "BLOCKED") return false;
+        if (status != "ACCEPTED" && status != "BLOCKED")
+            return false;
 
         var rel = await _dbContext.Friendships.FirstOrDefaultAsync(f =>
             (f.RequesterId == myUserId && f.AddresseeId == targetUserId) ||
             (f.RequesterId == targetUserId && f.AddresseeId == myUserId));
 
-        if (rel == null) return false;
+        if (rel == null)
+            return false;
 
         if (status == "ACCEPTED" &&
             (rel.Status != "PENDING" || rel.AddresseeId != myUserId))
@@ -96,7 +101,8 @@ public class FriendshipService : IFriendshipService
             .FirstOrDefaultAsync(f => (f.RequesterId == myUserId && f.AddresseeId == targetUserId) ||
                                       (f.RequesterId == targetUserId && f.AddresseeId == myUserId));
 
-        if (rel == null) return false;
+        if (rel == null)
+            return false;
 
         // If blocked, only blocker can unblock (delete)
         if (rel.Status == "BLOCKED" && rel.BlockerId.HasValue && rel.BlockerId.Value != myUserId)
@@ -184,7 +190,8 @@ public class FriendshipService : IFriendshipService
     public async Task<FriendDto?> FindUserByEmailAsync(int myUserId, string email)
     {
         var targetUser = await _dbContext.Users.FirstOrDefaultAsync(u => u.Email == email);
-        if (targetUser == null) return null;
+        if (targetUser == null)
+            return null;
 
         var fship = await _dbContext.Friendships
             .FirstOrDefaultAsync(f => (f.RequesterId == myUserId && f.AddresseeId == targetUser.UserId) ||

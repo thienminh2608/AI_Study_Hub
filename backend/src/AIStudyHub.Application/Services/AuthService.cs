@@ -1,5 +1,3 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
 using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
@@ -9,6 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
+using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
@@ -38,10 +37,14 @@ public class AuthService : IAuthService
 
     private bool IsValidPassword(string password)
     {
-        if (string.IsNullOrEmpty(password) || password.Length < 8) return false;
-        if (!Regex.IsMatch(password, @"[A-Z]")) return false;
-        if (!Regex.IsMatch(password, @"[0-9]")) return false;
-        if (!Regex.IsMatch(password, @"[!@#$%^&*()_+\-=\[\]{};':""\\|,.<>\/?]")) return false;
+        if (string.IsNullOrEmpty(password) || password.Length < 8)
+            return false;
+        if (!Regex.IsMatch(password, @"[A-Z]"))
+            return false;
+        if (!Regex.IsMatch(password, @"[0-9]"))
+            return false;
+        if (!Regex.IsMatch(password, @"[!@#$%^&*()_+\-=\[\]{};':""\\|,.<>\/?]"))
+            return false;
         return true;
     }
 
@@ -95,7 +98,8 @@ public class AuthService : IAuthService
     {
         var normalizedEmail = NormalizeEmail(dto.Email);
         var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail);
-        if (user == null) return null;
+        if (user == null)
+            return null;
 
         if ("BANNED".Equals(user.Status, StringComparison.OrdinalIgnoreCase))
         {
@@ -123,10 +127,12 @@ public class AuthService : IAuthService
     {
         email = NormalizeEmail(email);
         var user = await _dbContext.Users.AnyAsync(u => u.Email == email);
-        if (!user) return true;
+        if (!user)
+            return true;
 
         string sendLimitKey = $"OTP_SEND_{email}";
-        if (_cache.TryGetValue(sendLimitKey, out _)) return true;
+        if (_cache.TryGetValue(sendLimitKey, out _))
+            return true;
         _cache.Set(sendLimitKey, true, TimeSpan.FromSeconds(60));
 
         // Generate 6-digit OTP
@@ -146,7 +152,8 @@ public class AuthService : IAuthService
         string cacheKey = $"OTP_{email}";
         string attemptKey = $"OTP_ATTEMPTS_{email}";
         var attempts = _cache.Get<int?>(attemptKey) ?? 0;
-        if (attempts >= 5) return false;
+        if (attempts >= 5)
+            return false;
         if (_cache.TryGetValue(cacheKey, out string? cachedOtp))
         {
             if (cachedOtp == dto.Otp)
@@ -178,7 +185,8 @@ public class AuthService : IAuthService
         }
 
         var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.Email == email);
-        if (user == null) return false;
+        if (user == null)
+            return false;
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
         user.UpdatedAt = DateTime.Now;
@@ -193,17 +201,38 @@ public class AuthService : IAuthService
             .Include(u => u.Tier)
             .FirstOrDefaultAsync(u => u.UserId == userId);
 
-        if (user == null) return null;
+        if (user == null)
+            return null;
 
         return new UserBalanceDto
         {
             UserId = user.UserId,
             Username = user.Username,
+            Email = user.Email ?? string.Empty,
+            Role = user.Role ?? "STUDENT",
             Balance = user.Balance ?? 0,
             TierId = user.TierId ?? 2,
             TierName = user.Tier?.TierName ?? "Free",
             Status = user.Status ?? "ACTIVE"
         };
+    }
+
+    public async Task<UserBalanceDto?> UpdateUsernameAsync(int userId, string username)
+    {
+        var normalized = username?.Trim() ?? string.Empty;
+        if (normalized.Length < 3 || normalized.Length > 50)
+            throw new ArgumentException("Tên người dùng phải có từ 3 đến 50 ký tự.");
+
+        if (await _dbContext.Users.AnyAsync(u => u.UserId != userId && u.Username == normalized))
+            throw new ArgumentException("Tên người dùng này đã được sử dụng.");
+
+        var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.UserId == userId);
+        if (user == null)
+            return null;
+        user.Username = normalized;
+        user.UpdatedAt = DateTime.Now;
+        await _dbContext.SaveChangesAsync();
+        return await GetUserBalanceAndTierAsync(userId);
     }
 
     private string GenerateJwtToken(User user)

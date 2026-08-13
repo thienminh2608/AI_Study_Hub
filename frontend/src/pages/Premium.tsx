@@ -8,8 +8,8 @@ interface Tier {
   tierName: string;
   price: number;
   maxStorageMb: number;
-  maxFileSizeMb: number;
-  dailyPromptLimit: number;
+  totalStorageMb: number;
+  aiPromptLimitPerDay: number;
 }
 
 export const Premium: React.FC = () => {
@@ -33,25 +33,31 @@ export const Premium: React.FC = () => {
     loadTiers();
   }, []);
 
-  const freeTier = tiers.find(t => t.tierId === 2);
-  const premiumTier = tiers.find(t => t.tierId === 3);
+  const freeTier = tiers.find((t) => t.tierId === 2);
+  const premiumTier = tiers.find((t) => t.tierId === 3);
 
   const freeStorage = freeTier?.maxStorageMb ?? 50;
-  const freeFileSize = freeTier?.maxFileSizeMb ?? 5;
-  const freeAiLimit = freeTier?.dailyPromptLimit ?? 10;
+  const freeFileSize = freeTier?.totalStorageMb ?? 5;
+  const freeAiLimit = freeTier?.aiPromptLimitPerDay ?? 10;
 
   const premiumPrice = premiumTier?.price ?? 99000;
   const premiumStorage = premiumTier?.maxStorageMb ?? 1000;
-  const premiumFileSize = premiumTier?.maxFileSizeMb ?? 50;
-  const premiumAiLimit = premiumTier?.dailyPromptLimit ?? 200;
+  const premiumFileSize = premiumTier?.totalStorageMb ?? 50;
+  const premiumAiLimit = premiumTier?.aiPromptLimitPerDay ?? 200;
 
   const handleBuyPremium = async () => {
     if (user && user.balance < premiumPrice) {
-      alert(`Số dư ví của bạn không đủ (${user.balance.toLocaleString()}đ / ${premiumPrice.toLocaleString()}đ). Vui lòng nạp thêm tiền vào ví tại mục Ví Tiền để thực hiện nâng cấp.`);
+      alert(
+        `Số dư của bạn không đủ (${user.balance.toLocaleString()}đ / ${premiumPrice.toLocaleString()}đ). Vui lòng dùng nút Nạp tiền cạnh số dư để thực hiện nâng cấp.`,
+      );
       return;
     }
 
-    if (!window.confirm(`Xác nhận đăng ký Premium: Tài khoản của bạn sẽ bị trừ ${premiumPrice.toLocaleString()}đ và gia hạn Premium thêm 30 ngày. Bạn muốn tiếp tục?`)) {
+    if (
+      !window.confirm(
+        `Xác nhận đăng ký Premium: Tài khoản của bạn sẽ bị trừ ${premiumPrice.toLocaleString()}đ và gia hạn Premium thêm 30 ngày. Bạn muốn tiếp tục?`,
+      )
+    ) {
       return;
     }
 
@@ -74,7 +80,10 @@ export const Premium: React.FC = () => {
       <div className="premium-header animate-fade-in">
         <Star size={36} className="star-icon glow-yellow" />
         <h1>Gói Thành Viên Premium</h1>
-        <p>Bứt phá mọi giới hạn học tập, tối ưu hóa không gian lưu trữ và giải phóng sức mạnh AI trợ lý.</p>
+        <p>
+          Bứt phá mọi giới hạn học tập, tối ưu hóa không gian lưu trữ và giải phóng sức mạnh AI trợ
+          lý.
+        </p>
       </div>
 
       {loading ? (
@@ -84,7 +93,6 @@ export const Premium: React.FC = () => {
         </div>
       ) : (
         <div className="tiers-grid animate-slide-up">
-          
           {/* Free Tier Card */}
           <div className="tier-card glass-panel">
             <h3>Thành viên Free</h3>
@@ -92,20 +100,28 @@ export const Premium: React.FC = () => {
               <span className="amount">0đ</span>
               <span className="period">/ vĩnh viễn</span>
             </div>
-            <p className="description">Dành cho cá nhân muốn trải nghiệm thử các tính năng trợ lý học tập cơ bản.</p>
-            
+            <p className="description">
+              Dành cho cá nhân muốn trải nghiệm thử các tính năng trợ lý học tập cơ bản.
+            </p>
+
             <ul className="features-list">
               <li>
                 <Check size={16} className="check-icon" />
-                <span>Dung lượng lưu trữ: <strong>{freeStorage} MB</strong></span>
+                <span>
+                  Dung lượng lưu trữ: <strong>{freeStorage} MB</strong>
+                </span>
               </li>
               <li>
                 <Check size={16} className="check-icon" />
-                <span>Giới hạn file tải lên: <strong>{freeFileSize} MB</strong></span>
+                <span>
+                  Giới hạn file tải lên: <strong>{freeFileSize} MB</strong>
+                </span>
               </li>
               <li>
                 <Check size={16} className="check-icon" />
-                <span>Hỏi trợ lý AI: <strong>{freeAiLimit} lượt / ngày</strong></span>
+                <span>
+                  Hỏi trợ lý AI: <strong>{freeAiLimit} lượt / ngày</strong>
+                </span>
               </li>
               <li>
                 <Check size={16} className="check-icon" />
@@ -126,20 +142,34 @@ export const Premium: React.FC = () => {
               <span className="amount">{premiumPrice.toLocaleString()}đ</span>
               <span className="period">/ 30 ngày</span>
             </div>
-            <p className="description">Gói tối ưu nhất dành cho học sinh, sinh viên cần học tập và nghiên cứu tài liệu liên tục.</p>
-            
+            <p className="description">
+              Gói tối ưu nhất dành cho học sinh, sinh viên cần học tập và nghiên cứu tài liệu liên
+              tục.
+            </p>
+
             <ul className="features-list">
               <li>
                 <Check size={16} className="check-icon premium-color" />
-                <span>Dung lượng lưu trữ: <strong>{premiumStorage >= 1000 ? `${(premiumStorage / 1000).toFixed(0)} GB` : `${premiumStorage} MB`}</strong></span>
+                <span>
+                  Dung lượng lưu trữ:{' '}
+                  <strong>
+                    {premiumStorage >= 1000
+                      ? `${(premiumStorage / 1000).toFixed(0)} GB`
+                      : `${premiumStorage} MB`}
+                  </strong>
+                </span>
               </li>
               <li>
                 <Check size={16} className="check-icon premium-color" />
-                <span>Giới hạn file tải lên: <strong>{premiumFileSize} MB</strong></span>
+                <span>
+                  Giới hạn file tải lên: <strong>{premiumFileSize} MB</strong>
+                </span>
               </li>
               <li>
                 <Check size={16} className="check-icon premium-color" />
-                <span>Hỏi trợ lý AI: <strong>{premiumAiLimit} lượt / ngày</strong></span>
+                <span>
+                  Hỏi trợ lý AI: <strong>{premiumAiLimit} lượt / ngày</strong>
+                </span>
               </li>
               <li>
                 <Check size={16} className="check-icon premium-color" />
@@ -157,17 +187,21 @@ export const Premium: React.FC = () => {
                 <div>
                   <p className="status-title">Đang hoạt động</p>
                   {user?.expiresAt && (
-                    <p className="status-date">Hạn dùng: {new Date(user.expiresAt).toLocaleDateString()}</p>
+                    <p className="status-date">
+                      Hạn dùng: {new Date(user.expiresAt).toLocaleDateString()}
+                    </p>
                   )}
                 </div>
               </div>
             ) : (
-              <button 
-                onClick={handleBuyPremium} 
-                className="btn-primary tier-btn premium-btn" 
+              <button
+                onClick={handleBuyPremium}
+                className="btn-primary tier-btn premium-btn"
                 disabled={buying}
               >
-                {buying ? <Loader className="spin" size={18} /> : (
+                {buying ? (
+                  <Loader className="spin" size={18} />
+                ) : (
                   <>
                     <Award size={18} />
                     <span>Nâng cấp ngay</span>
@@ -176,7 +210,6 @@ export const Premium: React.FC = () => {
               </button>
             )}
           </div>
-
         </div>
       )}
 
@@ -184,7 +217,10 @@ export const Premium: React.FC = () => {
       <div className="safety-disclaimer glass-card animate-slide-up">
         <AlertTriangle size={20} className="alert-icon" />
         <p>
-          <strong>Lưu ý về cơ chế tự động gia hạn:</strong> Gói Premium của bạn sẽ tự động quét gia hạn thêm 30 ngày vào thời điểm hết hạn nếu ví tín dụng của bạn có số dư tối thiểu 99.000đ. Hệ thống sẽ gửi email thông báo trước 3 ngày nếu số dư của bạn không đủ để thực hiện gia hạn.
+          <strong>Lưu ý về cơ chế tự động gia hạn:</strong> Gói Premium của bạn sẽ tự động quét gia
+          hạn thêm 30 ngày vào thời điểm hết hạn nếu ví tín dụng của bạn có số dư tối thiểu 99.000đ.
+          Hệ thống sẽ gửi email thông báo trước 3 ngày nếu số dư của bạn không đủ để thực hiện gia
+          hạn.
         </p>
       </div>
 

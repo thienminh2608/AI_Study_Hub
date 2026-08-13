@@ -1,9 +1,8 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
+using AIStudyHub.Application.Interfaces;
 using MailKit.Net.Smtp;
-using MimeKit;
 using Microsoft.Extensions.Configuration;
+using MimeKit;
 
 namespace AIStudyHub.Infrastructure.Services.Email;
 

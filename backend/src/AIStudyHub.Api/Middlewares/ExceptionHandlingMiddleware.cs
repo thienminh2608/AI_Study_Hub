@@ -51,7 +51,10 @@ public class ExceptionHandlingMiddleware
 
         context.Response.StatusCode = (int)statusCode;
 
-        var result = JsonSerializer.Serialize(new { message });
+        var result = JsonSerializer.Serialize(new
+        {
+            message
+        });
         return context.Response.WriteAsync(result);
     }
 }

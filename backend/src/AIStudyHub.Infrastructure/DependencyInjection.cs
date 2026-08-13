@@ -1,6 +1,3 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Configuration;
-using Microsoft.EntityFrameworkCore;
 using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Infrastructure.Persistence;
 using AIStudyHub.Infrastructure.Services;
@@ -8,6 +5,9 @@ using AIStudyHub.Infrastructure.Services.Email;
 using AIStudyHub.Infrastructure.Services.Gemini;
 using AIStudyHub.Infrastructure.Services.Storage;
 using AIStudyHub.Infrastructure.Services.Time;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AIStudyHub.Infrastructure;
 

@@ -1,10 +1,9 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
+using AIStudyHub.Application.Interfaces;
 
 namespace AIStudyHub.Infrastructure.Services.Gemini;
 

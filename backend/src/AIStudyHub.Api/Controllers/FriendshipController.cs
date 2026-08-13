@@ -36,15 +36,24 @@ public class FriendshipController : ControllerBase
         int userId = GetCurrentUserId();
         if (userId == dto.AddresseeId)
         {
-            return BadRequest(new { message = "Bạn không thể gửi lời mời kết bạn cho chính mình." });
+            return BadRequest(new
+            {
+                message = "Bạn không thể gửi lời mời kết bạn cho chính mình."
+            });
         }
 
         bool success = await _friendshipService.SendFriendRequestAsync(userId, dto.AddresseeId);
         if (success)
         {
-            return Ok(new { message = "Đã gửi lời mời kết bạn thành công." });
+            return Ok(new
+            {
+                message = "Đã gửi lời mời kết bạn thành công."
+            });
         }
-        return BadRequest(new { message = "Không thể gửi lời mời kết bạn (có thể mối quan hệ đã tồn tại)." });
+        return BadRequest(new
+        {
+            message = "Không thể gửi lời mời kết bạn (có thể mối quan hệ đã tồn tại)."
+        });
     }
 
     [HttpPost("respond")]
@@ -54,9 +63,15 @@ public class FriendshipController : ControllerBase
         bool success = await _friendshipService.UpdateFriendshipStatusAsync(userId, targetUserId, status);
         if (success)
         {
-            return Ok(new { message = $"Đã cập nhật trạng thái kết bạn thành công ({status.ToUpper()})." });
+            return Ok(new
+            {
+                message = $"Đã cập nhật trạng thái kết bạn thành công ({status.ToUpper()})."
+            });
         }
-        return BadRequest(new { message = "Không thể cập nhật trạng thái kết bạn." });
+        return BadRequest(new
+        {
+            message = "Không thể cập nhật trạng thái kết bạn."
+        });
     }
 
     [HttpDelete]
@@ -66,9 +81,15 @@ public class FriendshipController : ControllerBase
         bool success = await _friendshipService.DeleteFriendshipAsync(userId, targetUserId);
         if (success)
         {
-            return Ok(new { message = "Đã xóa mối quan hệ kết bạn / hủy chặn thành công." });
+            return Ok(new
+            {
+                message = "Đã xóa mối quan hệ kết bạn / hủy chặn thành công."
+            });
         }
-        return BadRequest(new { message = "Không thể thực hiện yêu cầu (có thể bạn không có quyền hủy chặn)." });
+        return BadRequest(new
+        {
+            message = "Không thể thực hiện yêu cầu (có thể bạn không có quyền hủy chặn)."
+        });
     }
 
     [HttpGet("friends")]
@@ -100,14 +121,20 @@ public class FriendshipController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(email))
         {
-            return BadRequest(new { message = "Vui lòng cung cấp email." });
+            return BadRequest(new
+            {
+                message = "Vui lòng cung cấp email."
+            });
         }
 
         int userId = GetCurrentUserId();
         var friend = await _friendshipService.FindUserByEmailAsync(userId, email.Trim());
         if (friend == null)
         {
-            return NotFound(new { message = "Không tìm thấy người dùng với email này." });
+            return NotFound(new
+            {
+                message = "Không tìm thấy người dùng với email này."
+            });
         }
 
         return Ok(friend);

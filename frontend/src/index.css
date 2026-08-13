@@ -1,11 +1,17 @@
-@import "./styles/variables.css";
+@import './styles/variables.css';
 
 /* Base HTML Reset */
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    'Plus Jakarta Sans',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
 }
 
 body {
@@ -36,7 +42,12 @@ body {
 }
 
 /* Typography Utility */
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-weight: 700;
   letter-spacing: -0.025em;
   color: var(--text-primary);
@@ -61,7 +72,9 @@ a:hover {
   border: 1px solid var(--border-neon);
   border-radius: var(--radius-md);
   box-shadow: var(--glass-shadow);
-  transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+  transition:
+    border-color var(--transition-normal),
+    box-shadow var(--transition-normal);
 }
 
 .glass-panel:hover {
@@ -81,7 +94,9 @@ a:hover {
 .glass-card:hover {
   transform: translateY(-4px);
   border-color: var(--border-neon);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3), var(--shadow-neon);
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.3),
+    var(--shadow-neon);
 }
 
 /* Button & Neon Effects */
@@ -161,13 +176,23 @@ a:hover {
 
 /* Micro-animations */
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes slideUp {
-  from { transform: translateY(15px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(15px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .animate-fade-in {
@@ -187,6 +212,10 @@ a:hover {
 }
 
 @keyframes loadingShimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }

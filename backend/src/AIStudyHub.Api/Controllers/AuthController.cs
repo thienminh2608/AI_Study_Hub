@@ -28,17 +28,26 @@ public class AuthController : ControllerBase
             var response = await _authService.RegisterAsync(dto);
             if (response == null)
             {
-                return BadRequest(new { message = "Đăng ký không thành công." });
+                return BadRequest(new
+                {
+                    message = "Đăng ký không thành công."
+                });
             }
             return Ok(response);
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = $"Lỗi hệ thống: {ex.Message}" });
+            return StatusCode(500, new
+            {
+                message = $"Lỗi hệ thống: {ex.Message}"
+            });
         }
     }
 
@@ -50,17 +59,26 @@ public class AuthController : ControllerBase
             var response = await _authService.LoginAsync(dto);
             if (response == null)
             {
-                return Unauthorized(new { message = "Email hoặc mật khẩu không chính xác." });
+                return Unauthorized(new
+                {
+                    message = "Email hoặc mật khẩu không chính xác."
+                });
             }
             return Ok(response);
         }
         catch (UnauthorizedAccessException ex)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message });
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = ex.Message
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = $"Lỗi hệ thống: {ex.Message}" });
+            return StatusCode(500, new
+            {
+                message = $"Lỗi hệ thống: {ex.Message}"
+            });
         }
     }
 
@@ -70,9 +88,15 @@ public class AuthController : ControllerBase
         bool success = await _authService.SendForgotPasswordOtpAsync(dto.Email);
         if (success)
         {
-            return Ok(new { message = "Mã OTP đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư." });
+            return Ok(new
+            {
+                message = "Mã OTP đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư."
+            });
         }
-        return BadRequest(new { message = "Email không tồn tại trong hệ thống." });
+        return BadRequest(new
+        {
+            message = "Email không tồn tại trong hệ thống."
+        });
     }
 
     [HttpPost("verify-otp")]
@@ -81,9 +105,15 @@ public class AuthController : ControllerBase
         bool success = await _authService.VerifyOtpAsync(dto);
         if (success)
         {
-            return Ok(new { message = "Xác thực OTP thành công. Bạn có thể tiến hành đổi mật khẩu." });
+            return Ok(new
+            {
+                message = "Xác thực OTP thành công. Bạn có thể tiến hành đổi mật khẩu."
+            });
         }
-        return BadRequest(new { message = "Mã OTP không hợp lệ hoặc đã hết hạn." });
+        return BadRequest(new
+        {
+            message = "Mã OTP không hợp lệ hoặc đã hết hạn."
+        });
     }
 
     [HttpPost("reset-password")]
@@ -94,21 +124,36 @@ public class AuthController : ControllerBase
             bool success = await _authService.ResetPasswordAsync(dto);
             if (success)
             {
-                return Ok(new { message = "Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại." });
+                return Ok(new
+                {
+                    message = "Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại."
+                });
             }
-            return BadRequest(new { message = "Không thể đặt lại mật khẩu." });
+            return BadRequest(new
+            {
+                message = "Không thể đặt lại mật khẩu."
+            });
         }
         catch (UnauthorizedAccessException ex)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message });
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = ex.Message
+            });
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = $"Lỗi hệ thống: {ex.Message}" });
+            return StatusCode(500, new
+            {
+                message = $"Lỗi hệ thống: {ex.Message}"
+            });
         }
     }
 
@@ -119,15 +164,41 @@ public class AuthController : ControllerBase
         var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
         if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
         {
-            return Unauthorized(new { message = "Không tìm thấy token đăng nhập hợp lệ." });
+            return Unauthorized(new
+            {
+                message = "Không tìm thấy token đăng nhập hợp lệ."
+            });
         }
 
         var profile = await _authService.GetUserBalanceAndTierAsync(userId);
         if (profile == null)
         {
-            return NotFound(new { message = "Không tìm thấy người dùng." });
+            return NotFound(new
+            {
+                message = "Không tìm thấy người dùng."
+            });
         }
 
         return Ok(profile);
+    }
+    [Authorize]
+    [HttpPut("profile/username")]
+    public async Task<IActionResult> UpdateUsername([FromBody] UpdateUsernameDto dto)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+        if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+            return Unauthorized();
+        try
+        {
+            var profile = await _authService.UpdateUsernameAsync(userId, dto.Username);
+            return profile == null ? NotFound() : Ok(profile);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
+        }
     }
 }

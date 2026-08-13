@@ -41,7 +41,10 @@ public class FolderController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -56,7 +59,10 @@ public class FolderController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -66,13 +72,19 @@ public class FolderController : ControllerBase
         var folder = await _folderService.GetFolderByIdAsync(id);
         if (folder == null)
         {
-            return NotFound(new { message = "Thư mục không tồn tại." });
+            return NotFound(new
+            {
+                message = "Thư mục không tồn tại."
+            });
         }
 
         int userId = GetCurrentUserId();
         if (folder.UserId != userId)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Bạn không có quyền truy cập thư mục này." });
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "Bạn không có quyền truy cập thư mục này."
+            });
         }
 
         return Ok(folder);
@@ -87,17 +99,29 @@ public class FolderController : ControllerBase
             bool success = await _folderService.CreateFolderAsync(userId, dto);
             if (success)
             {
-                return Ok(new { message = "Đã tạo thư mục thành công." });
+                return Ok(new
+                {
+                    message = "Đã tạo thư mục thành công."
+                });
             }
-            return BadRequest(new { message = "Không thể tạo thư mục." });
+            return BadRequest(new
+            {
+                message = "Không thể tạo thư mục."
+            });
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -110,17 +134,29 @@ public class FolderController : ControllerBase
             bool success = await _folderService.UpdateFolderAsync(userId, id, dto);
             if (success)
             {
-                return Ok(new { message = "Đã cập nhật thư mục thành công." });
+                return Ok(new
+                {
+                    message = "Đã cập nhật thư mục thành công."
+                });
             }
-            return BadRequest(new { message = "Không thể cập nhật thư mục." });
+            return BadRequest(new
+            {
+                message = "Không thể cập nhật thư mục."
+            });
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -133,13 +169,22 @@ public class FolderController : ControllerBase
             bool success = await _folderService.DeleteFolderRecursiveAsync(userId, id);
             if (success)
             {
-                return Ok(new { message = "Đã xóa thư mục và toàn bộ tài liệu con thành công." });
+                return Ok(new
+                {
+                    message = "Đã xóa thư mục và toàn bộ tài liệu con thành công."
+                });
             }
-            return BadRequest(new { message = "Không thể xóa thư mục." });
+            return BadRequest(new
+            {
+                message = "Không thể xóa thư mục."
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 }

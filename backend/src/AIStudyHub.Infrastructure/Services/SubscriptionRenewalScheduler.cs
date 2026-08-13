@@ -1,11 +1,9 @@
-using AIStudyHub.Domain.Entities;
-
-using AIStudyHub.Application.Interfaces;
-
 using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using AIStudyHub.Application.Interfaces;
+using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;

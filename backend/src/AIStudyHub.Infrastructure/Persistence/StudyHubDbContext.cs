@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using AIStudyHub.Domain.Entities;
 using AIStudyHub.Application.Interfaces;
+using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace AIStudyHub.Infrastructure.Persistence;
@@ -17,29 +17,91 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
     {
     }
 
-    public virtual DbSet<Bookmark> Bookmarks { get; set; }
+    public virtual DbSet<Bookmark> Bookmarks
+    {
+        get; set;
+    }
 
-    public virtual DbSet<ChatMessage> ChatMessages { get; set; }
+    public virtual DbSet<ChatMessage> ChatMessages
+    {
+        get; set;
+    }
 
-    public virtual DbSet<ChatSession> ChatSessions { get; set; }
+    public virtual DbSet<ChatSession> ChatSessions
+    {
+        get; set;
+    }
 
-    public virtual DbSet<Document> Documents { get; set; }
+    public virtual DbSet<Document> Documents
+    {
+        get; set;
+    }
 
-    public virtual DbSet<DocumentExtractedText> DocumentExtractedTexts { get; set; }
+    public virtual DbSet<DocumentActivity> DocumentActivities
+    {
+        get; set;
+    }
 
-    public virtual DbSet<DocumentReport> DocumentReports { get; set; }
+    public virtual DbSet<DocumentExtractedText> DocumentExtractedTexts
+    {
+        get; set;
+    }
 
-    public virtual DbSet<Folder> Folders { get; set; }
+    public virtual DbSet<DocumentChunk> DocumentChunks
+    {
+        get; set;
+    }
 
-    public virtual DbSet<Friendship> Friendships { get; set; }
+    public virtual DbSet<DocumentReport> DocumentReports
+    {
+        get; set;
+    }
+    public virtual DbSet<ModerationAction> ModerationActions
+    {
+        get; set;
+    }
+    public virtual DbSet<ModerationAppeal> ModerationAppeals
+    {
+        get; set;
+    }
+    public virtual DbSet<ModerationNotice> ModerationNotices
+    {
+        get; set;
+    }
 
-    public virtual DbSet<ReportReasonConfig> ReportReasonConfigs { get; set; }
+    public virtual DbSet<Folder> Folders
+    {
+        get; set;
+    }
 
-    public virtual DbSet<Subscription> Subscriptions { get; set; }
+    public virtual DbSet<Friendship> Friendships
+    {
+        get; set;
+    }
 
-    public virtual DbSet<Transaction> Transactions { get; set; }
+    public virtual DbSet<ReportReasonConfig> ReportReasonConfigs
+    {
+        get; set;
+    }
 
-    public virtual DbSet<User> Users { get; set; }
+    public virtual DbSet<Subscription> Subscriptions
+    {
+        get; set;
+    }
+    public virtual DbSet<TransferConfiguration> TransferConfigurations
+    {
+        get; set;
+    }
+
+    public virtual DbSet<Transaction> Transactions
+    {
+        get; set;
+    }
+
+    public virtual DbSet<User> Users
+    {
+        get; set;
+    }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -144,6 +206,9 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.DownloadCount)
                 .HasDefaultValue(0)
                 .HasColumnName("download_count");
+            entity.Property(e => e.ViewCount)
+                .HasDefaultValue(0)
+                .HasColumnName("view_count");
             entity.Property(e => e.FileExtension)
                 .HasMaxLength(10)
                 .HasColumnName("file_extension");
@@ -163,9 +228,19 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("PRIVATE")
                 .HasColumnName("sharing_permission");
+            entity.Property(e => e.RequestedVisibility).HasMaxLength(20).HasDefaultValue("PRIVATE").HasColumnName("requested_visibility");
+            entity.Property(e => e.ModerationStatus).HasMaxLength(30).HasDefaultValue("NOT_REQUESTED").HasColumnName("moderation_status");
+            entity.Property(e => e.ModerationSubmittedAt).HasColumnName("moderation_submitted_at");
+            entity.Property(e => e.ModeratedAt).HasColumnName("moderated_at");
+            entity.Property(e => e.ModeratedByUserId).HasColumnName("moderated_by_user_id");
+            entity.Property(e => e.ModerationNote).HasMaxLength(1000).HasColumnName("moderation_note");
             entity.Property(e => e.Title)
                 .HasMaxLength(255)
                 .HasColumnName("title");
+            entity.Property(e => e.Subject)
+                .HasMaxLength(100)
+                .HasDefaultValue("Khác")
+                .HasColumnName("subject");
             entity.Property(e => e.TotalReportScore)
                 .HasDefaultValue(0.0m)
                 .HasColumnType("decimal(5, 2)")
@@ -183,6 +258,20 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasForeignKey(d => d.UserId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK__documents__user___72C60C4A");
+        });
+
+        modelBuilder.Entity<DocumentActivity>(entity =>
+        {
+            entity.HasKey(e => e.ActivityId);
+            entity.ToTable("document_activities");
+            entity.HasIndex(e => new { e.DocumentId, e.ActivityType });
+            entity.Property(e => e.ActivityId).HasColumnName("activity_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.ActivityType).HasMaxLength(20).HasColumnName("activity_type");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.HasOne(e => e.Document).WithMany(d => d.DocumentActivities).HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.User).WithMany(u => u.DocumentActivities).HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<DocumentExtractedText>(entity =>
@@ -224,6 +313,15 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.ReasonCode)
                 .HasMaxLength(50)
                 .HasColumnName("reason_code");
+            entity.Property(e => e.ReportType).HasMaxLength(20).HasDefaultValue("COMMUNITY").HasColumnName("report_type");
+            entity.Property(e => e.ClaimantName).HasMaxLength(150).HasColumnName("claimant_name");
+            entity.Property(e => e.ClaimantEmail).HasMaxLength(200).HasColumnName("claimant_email");
+            entity.Property(e => e.OriginalWorkUrl).HasMaxLength(1000).HasColumnName("original_work_url");
+            entity.Property(e => e.EvidenceDescription).HasMaxLength(2000).HasColumnName("evidence_description");
+            entity.Property(e => e.AssignedModeratorId).HasColumnName("assigned_moderator_id");
+            entity.Property(e => e.ModeratorNote).HasMaxLength(1000).HasColumnName("moderator_note");
+            entity.Property(e => e.PreviousSharingPermission).HasMaxLength(20).HasColumnName("previous_sharing_permission");
+            entity.Property(e => e.RestrictedAt).HasColumnName("restricted_at");
             entity.Property(e => e.ReporterId).HasColumnName("reporter_id");
             entity.Property(e => e.ResolvedAt).HasColumnName("resolved_at");
             entity.Property(e => e.ResolvedByAdminId).HasColumnName("resolved_by_admin_id");
@@ -362,6 +460,89 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasMaxLength(50)
                 .HasColumnName("tier_name");
             entity.Property(e => e.TotalStorageMb).HasColumnName("total_storage_mb");
+        });
+
+        modelBuilder.Entity<TransferConfiguration>(entity =>
+        {
+            entity.HasKey(e => e.ConfigurationId);
+            entity.ToTable("transfer_configurations");
+            entity.Property(e => e.ConfigurationId).HasColumnName("configuration_id");
+            entity.Property(e => e.BankCode).HasMaxLength(30).HasColumnName("bank_code");
+            entity.Property(e => e.BankName).HasMaxLength(100).HasColumnName("bank_name");
+            entity.Property(e => e.AccountNumber).HasMaxLength(50).HasColumnName("account_number");
+            entity.Property(e => e.AccountName).HasMaxLength(150).HasColumnName("account_name");
+            entity.Property(e => e.QrTemplate).HasMaxLength(30).HasColumnName("qr_template");
+            entity.Property(e => e.TransferContentPrefix).HasMaxLength(50).HasColumnName("transfer_content_prefix");
+            entity.Property(e => e.IsActive).HasColumnName("is_active");
+            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("(getdate())").HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<ModerationAction>(entity =>
+        {
+            entity.HasKey(e => e.ActionId);
+            entity.ToTable("moderation_actions");
+            entity.Property(e => e.ActionId).HasColumnName("action_id");
+            entity.Property(e => e.ActorUserId).HasColumnName("actor_user_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.ReportId).HasColumnName("report_id");
+            entity.Property(e => e.Action).HasMaxLength(50).HasColumnName("action");
+            entity.Property(e => e.PreviousStatus).HasMaxLength(30).HasColumnName("previous_status");
+            entity.Property(e => e.NewStatus).HasMaxLength(30).HasColumnName("new_status");
+            entity.Property(e => e.Note).HasMaxLength(1000).HasColumnName("note");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.HasOne(e => e.Actor).WithMany().HasForeignKey(e => e.ActorUserId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<ModerationAppeal>(entity =>
+        {
+            entity.HasKey(e => e.AppealId);
+            entity.ToTable("moderation_appeals");
+            entity.HasIndex(e => e.ReportId).IsUnique();
+            entity.Property(e => e.AppealId).HasColumnName("appeal_id");
+            entity.Property(e => e.ReportId).HasColumnName("report_id");
+            entity.Property(e => e.SubmittedByUserId).HasColumnName("submitted_by_user_id");
+            entity.Property(e => e.Explanation).HasMaxLength(2000).HasColumnName("explanation");
+            entity.Property(e => e.EvidenceUrl).HasMaxLength(1000).HasColumnName("evidence_url");
+            entity.Property(e => e.Status).HasMaxLength(20).HasDefaultValue("PENDING").HasColumnName("status");
+            entity.Property(e => e.ReviewedByUserId).HasColumnName("reviewed_by_user_id");
+            entity.Property(e => e.ReviewNote).HasMaxLength(1000).HasColumnName("review_note");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.Property(e => e.ReviewedAt).HasColumnName("reviewed_at");
+            entity.HasOne(e => e.Report).WithMany().HasForeignKey(e => e.ReportId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ModerationNotice>(entity =>
+        {
+            entity.HasKey(e => e.NoticeId);
+            entity.ToTable("moderation_notices");
+            entity.Property(e => e.NoticeId).HasColumnName("notice_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.ReportId).HasColumnName("report_id");
+            entity.Property(e => e.Type).HasMaxLength(30).HasColumnName("type");
+            entity.Property(e => e.Title).HasMaxLength(200).HasColumnName("title");
+            entity.Property(e => e.Message).HasMaxLength(1500).HasColumnName("message");
+            entity.Property(e => e.CanAppeal).HasColumnName("can_appeal");
+            entity.Property(e => e.IsRead).HasColumnName("is_read");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+        });
+
+        modelBuilder.Entity<DocumentChunk>(entity =>
+        {
+            entity.HasKey(e => e.ChunkId);
+            entity.ToTable("document_chunks");
+            entity.HasIndex(e => new { e.DocumentId, e.ChunkIndex }).IsUnique();
+            entity.Property(e => e.ChunkId).HasColumnName("chunk_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.ChunkIndex).HasColumnName("chunk_index");
+            entity.Property(e => e.HeadingPath).HasColumnName("heading_path");
+            entity.Property(e => e.PageNumber).HasColumnName("page_number");
+            entity.Property(e => e.Text).HasColumnName("text");
+            entity.Property(e => e.StartOffset).HasColumnName("start_offset");
+            entity.Property(e => e.EndOffset).HasColumnName("end_offset");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.HasOne(e => e.Document).WithMany(d => d.DocumentChunks)
+                .HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Transaction>(entity =>

@@ -1,6 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
 using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Application.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AIStudyHub.Application;
 

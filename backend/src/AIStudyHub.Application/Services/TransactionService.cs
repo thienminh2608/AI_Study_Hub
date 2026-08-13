@@ -1,10 +1,9 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
+using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -44,8 +43,10 @@ public class TransactionService : ITransactionService
 
     public async Task<bool> CreateTransactionAsync(int userId, CreateTransactionDto dto)
     {
-        if (dto.Amount <= 0 || dto.Amount > int.MaxValue || decimal.Truncate(dto.Amount) != dto.Amount) return false;
-        if (!"DEPOSIT".Equals(dto.Type?.Trim(), StringComparison.OrdinalIgnoreCase)) return false;
+        if (dto.Amount <= 0 || dto.Amount > int.MaxValue || decimal.Truncate(dto.Amount) != dto.Amount)
+            return false;
+        if (!"DEPOSIT".Equals(dto.Type?.Trim(), StringComparison.OrdinalIgnoreCase))
+            return false;
 
         var tx = new Transaction
         {
@@ -63,15 +64,18 @@ public class TransactionService : ITransactionService
     public async Task<bool> UpdateTransactionStatusAsync(int transactionId, string newStatus)
     {
         newStatus = newStatus.ToUpper();
-        if (newStatus != "SUCCESS" && newStatus != "CANCELLED") return false;
+        if (newStatus != "SUCCESS" && newStatus != "CANCELLED")
+            return false;
 
         using var dbTransaction = await _dbContext.Database.BeginTransactionAsync();
         try
         {
             var tx = await _dbContext.Transactions.FindAsync(transactionId);
-            if (tx == null) return false;
+            if (tx == null)
+                return false;
 
-            if (tx.Status == "SUCCESS" || tx.Status == "CANCELLED") return false; // Already finalized
+            if (tx.Status == "SUCCESS" || tx.Status == "CANCELLED")
+                return false; // Already finalized
 
             tx.Status = newStatus;
             tx.CompletedAt = _clock.Now;
@@ -110,7 +114,8 @@ public class TransactionService : ITransactionService
         try
         {
             var user = await _dbContext.Users.FindAsync(userId);
-            if (user == null) return false;
+            if (user == null)
+                return false;
 
             if ((user.Balance ?? 0) < premiumCost)
             {

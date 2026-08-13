@@ -42,7 +42,10 @@ public class ChatBotController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -57,7 +60,10 @@ public class ChatBotController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -70,13 +76,22 @@ public class ChatBotController : ControllerBase
             bool success = await _chatService.PinSessionAsync(userId, sessionId, pin);
             if (success)
             {
-                return Ok(new { message = pin ? "Đã ghim phiên chat." : "Đã bỏ ghim phiên chat." });
+                return Ok(new
+                {
+                    message = pin ? "Đã ghim phiên chat." : "Đã bỏ ghim phiên chat."
+                });
             }
-            return BadRequest(new { message = "Không thể thay đổi trạng thái ghim." });
+            return BadRequest(new
+            {
+                message = "Không thể thay đổi trạng thái ghim."
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -89,13 +104,22 @@ public class ChatBotController : ControllerBase
             bool success = await _chatService.DeleteSessionAsync(userId, sessionId);
             if (success)
             {
-                return Ok(new { message = "Đã xóa phiên chat." });
+                return Ok(new
+                {
+                    message = "Đã xóa phiên chat."
+                });
             }
-            return BadRequest(new { message = "Không thể xóa phiên chat." });
+            return BadRequest(new
+            {
+                message = "Không thể xóa phiên chat."
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -110,7 +134,10 @@ public class ChatBotController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = ex.Message });
+            return StatusCode(500, new
+            {
+                message = ex.Message
+            });
         }
     }
 
@@ -121,20 +148,32 @@ public class ChatBotController : ControllerBase
         {
             int userId = GetCurrentUserId();
             string aiResponse = await _chatService.ProcessUserMessageAsync(userId, sessionId, dto);
-            return Ok(new { response = aiResponse });
+            return Ok(new
+            {
+                response = aiResponse
+            });
         }
         catch (InvalidOperationException ex)
         {
             // Catch prompt rate limit exceeding
-            return StatusCode(StatusCodes.Status429TooManyRequests, new { message = ex.Message });
+            return StatusCode(StatusCodes.Status429TooManyRequests, new
+            {
+                message = ex.Message
+            });
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = $"Lỗi kết nối AI: {ex.Message}" });
+            return StatusCode(500, new
+            {
+                message = $"Lỗi kết nối AI: {ex.Message}"
+            });
         }
     }
 }

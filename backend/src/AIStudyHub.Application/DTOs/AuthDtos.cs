@@ -4,7 +4,10 @@ public class LoginDto
 {
     public string Email { get; set; } = null!;
     public string Password { get; set; } = null!;
-    public bool RememberMe { get; set; }
+    public bool RememberMe
+    {
+        get; set;
+    }
 }
 
 public class RegisterDto
@@ -34,10 +37,19 @@ public class ResetPasswordDto
 public class AuthResponseDto
 {
     public string Token { get; set; } = null!;
-    public int UserId { get; set; }
+    public int UserId
+    {
+        get; set;
+    }
     public string Username { get; set; } = null!;
     public string Email { get; set; } = null!;
     public string Role { get; set; } = null!;
-    public int? TierId { get; set; }
-    public int? Balance { get; set; }
+    public int? TierId
+    {
+        get; set;
+    }
+    public int? Balance
+    {
+        get; set;
+    }
 }

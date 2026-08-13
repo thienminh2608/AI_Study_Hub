@@ -1,5 +1,3 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,10 +8,11 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using AIStudyHub.Application.DTOs;
+using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using OfficeOpenXml;
-using PdfSharp.Pdf.IO;
+using UglyToad.PdfPig;
 
 namespace AIStudyHub.Application.Services;
 
@@ -41,7 +40,8 @@ public class DocumentService : IDocumentService
             throw new ArgumentException("Unsupported file type.");
         if (fileSizeInBytes <= 0 || fileSizeInBytes > MaxFileSizeBytes)
             throw new ArgumentException("File size must be between 1 byte and 50 MB.");
-        if (!fileStream.CanRead) throw new ArgumentException("The uploaded file cannot be read.");
+        if (!fileStream.CanRead)
+            throw new ArgumentException("The uploaded file cannot be read.");
 
         double fileSizeMb = fileSizeInBytes / (1024.0 * 1024.0);
         fileSizeMb = Math.Round(fileSizeMb, 2);
@@ -93,6 +93,8 @@ public class DocumentService : IDocumentService
             FileSizeMb = (decimal)fileSizeMb,
             AiParsingStatus = "PENDING",
             SharingPermission = "PRIVATE",
+            RequestedVisibility = "PRIVATE",
+            ModerationStatus = "NOT_REQUESTED",
             ShareLinkToken = shareToken,
             TotalReportScore = 0.00m,
             IsFlagged = false,
@@ -109,7 +111,8 @@ public class DocumentService : IDocumentService
         }
         catch
         {
-            if (_fileStorage.FileExists(relativeFilePath)) _fileStorage.DeleteFile(relativeFilePath);
+            if (_fileStorage.FileExists(relativeFilePath))
+                _fileStorage.DeleteFile(relativeFilePath);
             throw;
         }
 
@@ -120,6 +123,7 @@ public class DocumentService : IDocumentService
             string extractedText = ExtractTextFromFile(savedPhysicalPath, fileExtension);
             if (!string.IsNullOrWhiteSpace(extractedText))
             {
+                document.AiParsingStatus = "CHUNKING";
                 var textEntity = new DocumentExtractedText
                 {
                     DocumentId = document.DocumentId,
@@ -127,6 +131,7 @@ public class DocumentService : IDocumentService
                     CreatedAt = _clock.Now
                 };
                 _dbContext.DocumentExtractedTexts.Add(textEntity);
+                _dbContext.DocumentChunks.AddRange(DocumentChunker.Chunk(document.DocumentId, extractedText, _clock.Now));
                 document.AiParsingStatus = "READY";
                 await _dbContext.SaveChangesAsync();
             }
@@ -141,7 +146,7 @@ public class DocumentService : IDocumentService
         return MapToDto(document, user.Username);
     }
 
-    public async Task<DocumentResponseDto> ConfirmDocumentAsync(int userId, int documentId, string title, string sharingPermission, int? folderId)
+    public async Task<DocumentResponseDto> ConfirmDocumentAsync(int userId, int documentId, string title, string subject, string sharingPermission, int? folderId)
     {
         var doc = await _dbContext.Documents.FirstOrDefaultAsync(d => d.DocumentId == documentId && d.UserId == userId);
         if (doc == null)
@@ -152,12 +157,14 @@ public class DocumentService : IDocumentService
         if (folderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == folderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Invalid destination folder.");
         sharingPermission = NormalizeSharingPermission(sharingPermission);
+        subject = NormalizeSubject(subject);
 
         // Check if user is suspended (then they cannot make new documents PUBLIC)
         var user = await _dbContext.Users.FindAsync(userId);
-        if (user == null) throw new ArgumentException("Người dùng không tồn tại.");
+        if (user == null)
+            throw new ArgumentException("Người dùng không tồn tại.");
 
-        if ("PUBLIC".Equals(sharingPermission, StringComparison.OrdinalIgnoreCase) && 
+        if ("PUBLIC".Equals(sharingPermission, StringComparison.OrdinalIgnoreCase) &&
             "SUSPENDED".Equals(user.Status, StringComparison.OrdinalIgnoreCase))
         {
             sharingPermission = "PRIVATE";
@@ -165,7 +172,7 @@ public class DocumentService : IDocumentService
 
         // Clean titles and handle duplicates
         string finalTitle = string.IsNullOrWhiteSpace(title) ? doc.Title : StripExtension(title);
-        bool hasDuplicate = await CheckDuplicateTitleAsync(userId, finalTitle, folderId, documentId);
+        bool hasDuplicate = await CheckDuplicateTitleAsync(userId, finalTitle, doc.FileExtension, folderId, documentId);
         if (hasDuplicate)
         {
             throw new InvalidOperationException("Tiêu đề tài liệu đã tồn tại trong thư mục này.");
@@ -176,8 +183,9 @@ public class DocumentService : IDocumentService
         string newUrl = RenamePhysicalFile(oldUrl, userId, finalTitle, doc.FileExtension);
 
         doc.Title = finalTitle;
+        doc.Subject = subject;
         doc.FolderId = folderId;
-        doc.SharingPermission = sharingPermission.ToUpper();
+        ApplyRequestedVisibility(doc, sharingPermission);
         doc.CloudStorageUrl = newUrl;
         doc.UpdatedAt = _clock.Now;
 
@@ -185,9 +193,10 @@ public class DocumentService : IDocumentService
         return MapToDto(doc, user.Username);
     }
 
-    public async Task<DocumentResponseDto> ReplaceDocumentAsync(int userId, int pendingDocId, int duplicateDocId, string title, string sharingPermission, int? folderId)
+    public async Task<DocumentResponseDto> ReplaceDocumentAsync(int userId, int pendingDocId, int duplicateDocId, string title, string subject, string sharingPermission, int? folderId)
     {
         sharingPermission = NormalizeSharingPermission(sharingPermission);
+        subject = NormalizeSubject(subject);
         if (folderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == folderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Invalid destination folder.");
         var pendingDoc = await _dbContext.Documents.FirstOrDefaultAsync(d => d.DocumentId == pendingDocId && d.UserId == userId);
@@ -197,10 +206,17 @@ public class DocumentService : IDocumentService
             throw new ArgumentException("Không tìm thấy tài liệu cần thiết.");
         }
 
-        var user = await _dbContext.Users.FindAsync(userId);
-        if (user == null) throw new ArgumentException("Người dùng không tồn tại.");
+        title = StripExtension(title).Trim();
+        if (!oldDoc.Title.Equals(title, StringComparison.OrdinalIgnoreCase)
+            || !oldDoc.FileExtension.Equals(pendingDoc.FileExtension, StringComparison.OrdinalIgnoreCase)
+            || oldDoc.FolderId != folderId)
+            throw new InvalidOperationException("Tài liệu được chọn thay thế không còn khớp tên, kiểu file hoặc thư mục.");
 
-        if ("PUBLIC".Equals(sharingPermission, StringComparison.OrdinalIgnoreCase) && 
+        var user = await _dbContext.Users.FindAsync(userId);
+        if (user == null)
+            throw new ArgumentException("Người dùng không tồn tại.");
+
+        if ("PUBLIC".Equals(sharingPermission, StringComparison.OrdinalIgnoreCase) &&
             "SUSPENDED".Equals(user.Status, StringComparison.OrdinalIgnoreCase))
         {
             sharingPermission = "PRIVATE";
@@ -217,13 +233,19 @@ public class DocumentService : IDocumentService
         oldDoc.FileSizeMb = pendingDoc.FileSizeMb;
         oldDoc.FileExtension = pendingDoc.FileExtension;
         oldDoc.Title = title;
+        oldDoc.Subject = subject;
         oldDoc.FolderId = folderId;
-        oldDoc.SharingPermission = sharingPermission.ToUpper();
+        ApplyRequestedVisibility(oldDoc, sharingPermission);
         oldDoc.UpdatedAt = _clock.Now;
 
         // Transfer extracted text
         var oldText = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(t => t.DocumentId == duplicateDocId);
         var pendingText = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(t => t.DocumentId == pendingDocId);
+        var oldChunks = await _dbContext.DocumentChunks.Where(c => c.DocumentId == duplicateDocId).ToListAsync();
+        var pendingChunks = await _dbContext.DocumentChunks.Where(c => c.DocumentId == pendingDocId).ToListAsync();
+        _dbContext.DocumentChunks.RemoveRange(oldChunks);
+        foreach (var chunk in pendingChunks)
+            chunk.DocumentId = duplicateDocId;
         if (oldText != null)
         {
             _dbContext.DocumentExtractedTexts.Remove(oldText);
@@ -240,9 +262,10 @@ public class DocumentService : IDocumentService
         return MapToDto(oldDoc, user.Username);
     }
 
-    public async Task<DocumentResponseDto> KeepBothDocumentsAsync(int userId, int pendingDocId, string title, string sharingPermission, int? folderId)
+    public async Task<DocumentResponseDto> KeepBothDocumentsAsync(int userId, int pendingDocId, string title, string subject, string sharingPermission, int? folderId)
     {
         sharingPermission = NormalizeSharingPermission(sharingPermission);
+        subject = NormalizeSubject(subject);
         if (folderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == folderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Invalid destination folder.");
         var pendingDoc = await _dbContext.Documents.FirstOrDefaultAsync(d => d.DocumentId == pendingDocId && d.UserId == userId);
@@ -252,28 +275,31 @@ public class DocumentService : IDocumentService
         }
 
         var user = await _dbContext.Users.FindAsync(userId);
-        if (user == null) throw new ArgumentException("Người dùng không tồn tại.");
+        if (user == null)
+            throw new ArgumentException("Người dùng không tồn tại.");
 
-        if ("PUBLIC".Equals(sharingPermission, StringComparison.OrdinalIgnoreCase) && 
+        if ("PUBLIC".Equals(sharingPermission, StringComparison.OrdinalIgnoreCase) &&
             "SUSPENDED".Equals(user.Status, StringComparison.OrdinalIgnoreCase))
         {
             sharingPermission = "PRIVATE";
         }
 
         // Generate unique title
+        title = StripExtension(title).Trim();
         string uniqueTitle = title;
         int counter = 1;
-        while (await CheckDuplicateTitleAsync(userId, uniqueTitle, folderId, pendingDocId))
+        while (await CheckDuplicateTitleAsync(userId, uniqueTitle, pendingDoc.FileExtension, folderId, pendingDocId))
         {
-            uniqueTitle = $"{title} ({counter})";
+            uniqueTitle = $"{title}({counter})";
             counter++;
         }
 
         string newUrl = RenamePhysicalFile(pendingDoc.CloudStorageUrl, userId, uniqueTitle, pendingDoc.FileExtension);
 
         pendingDoc.Title = uniqueTitle;
+        pendingDoc.Subject = subject;
         pendingDoc.FolderId = folderId;
-        pendingDoc.SharingPermission = sharingPermission.ToUpper();
+        ApplyRequestedVisibility(pendingDoc, sharingPermission);
         pendingDoc.CloudStorageUrl = newUrl;
         pendingDoc.UpdatedAt = _clock.Now;
 
@@ -324,7 +350,8 @@ public class DocumentService : IDocumentService
     public async Task<DocumentResponseDto?> GetDocumentByIdAsync(int documentId)
     {
         var doc = await _dbContext.Documents.Include(d => d.User).FirstOrDefaultAsync(d => d.DocumentId == documentId);
-        if (doc == null) return null;
+        if (doc == null)
+            return null;
         return MapToDto(doc, doc.User.Username);
     }
 
@@ -347,9 +374,13 @@ public class DocumentService : IDocumentService
         return text?.ExtractedText;
     }
 
-    public async Task<bool> CheckDuplicateTitleAsync(int userId, string title, int? folderId, int? excludeDocId)
+    public async Task<bool> CheckDuplicateTitleAsync(int userId, string title, string fileExtension, int? folderId, int? excludeDocId)
     {
-        var query = _dbContext.Documents.Where(d => d.UserId == userId && d.Title == title);
+        var normalizedTitle = StripExtension(title).Trim();
+        var normalizedExtension = fileExtension.Trim().TrimStart('.').ToLowerInvariant();
+        var query = _dbContext.Documents.Where(d => d.UserId == userId
+            && d.Title == normalizedTitle
+            && d.FileExtension == normalizedExtension);
         if (folderId.HasValue)
         {
             query = query.Where(d => d.FolderId == folderId);
@@ -388,7 +419,16 @@ public class DocumentService : IDocumentService
             Status = r.Status ?? "PENDING",
             CreatedAt = r.CreatedAt,
             ResolvedAt = r.ResolvedAt,
-            ResolvedByAdminName = r.ResolvedByAdmin?.Username
+            ResolvedByAdminName = r.ResolvedByAdmin?.Username,
+            ReportType = r.ReportType,
+            ClaimantName = r.ClaimantName,
+            ClaimantEmail = r.ClaimantEmail,
+            OriginalWorkUrl = r.OriginalWorkUrl,
+            EvidenceDescription = r.EvidenceDescription,
+            ModeratorNote = r.ModeratorNote,
+            AssignedModeratorId = r.AssignedModeratorId,
+            PreviousSharingPermission = r.PreviousSharingPermission,
+            RestrictedAt = r.RestrictedAt
         }).ToList();
     }
 
@@ -396,17 +436,28 @@ public class DocumentService : IDocumentService
     {
         var doc = await _dbContext.Documents.FindAsync(reportDto.DocumentId);
         var reason = await _dbContext.ReportReasonConfigs.FindAsync(reportDto.ReasonCode);
-        if (doc == null || reason == null) return false;
-        if (doc.UserId == reporterId || doc.SharingPermission != "PUBLIC" || doc.IsFlagged == true) return false;
+        if (doc == null || reason == null)
+            return false;
+        if (doc.UserId == reporterId || doc.SharingPermission != "PUBLIC" || doc.IsFlagged == true)
+            return false;
         if (await _dbContext.DocumentReports.AnyAsync(r => r.DocumentId == reportDto.DocumentId && r.ReporterId == reporterId))
             return false;
 
+        var reportType = reportDto.ReportType?.Trim().ToUpperInvariant() == "COPYRIGHT" ? "COPYRIGHT" : "COMMUNITY";
+        if (reportType == "COPYRIGHT" && (!reportDto.InformationConfirmed || string.IsNullOrWhiteSpace(reportDto.ClaimantName)
+            || string.IsNullOrWhiteSpace(reportDto.ClaimantEmail) || string.IsNullOrWhiteSpace(reportDto.EvidenceDescription)))
+            return false;
         var report = new DocumentReport
         {
             DocumentId = reportDto.DocumentId,
             ReporterId = reporterId,
             ReasonCode = reportDto.ReasonCode,
             AdditionalDetails = reportDto.AdditionalDetails,
+            ReportType = reportType,
+            ClaimantName = reportDto.ClaimantName?.Trim(),
+            ClaimantEmail = reportDto.ClaimantEmail?.Trim(),
+            OriginalWorkUrl = reportDto.OriginalWorkUrl?.Trim(),
+            EvidenceDescription = reportDto.EvidenceDescription?.Trim(),
             Status = "PENDING",
             CreatedAt = _clock.Now
         };
@@ -427,10 +478,24 @@ public class DocumentService : IDocumentService
         return true;
     }
 
+    public async Task<List<PublicReportReasonDto>> GetReportReasonsAsync()
+    {
+        return await _dbContext.ReportReasonConfigs
+            .OrderBy(r => r.SeverityLevel)
+            .ThenBy(r => r.ReasonCode)
+            .Select(r => new PublicReportReasonDto
+            {
+                ReasonCode = r.ReasonCode,
+                SeverityLevel = r.SeverityLevel,
+                Description = string.IsNullOrWhiteSpace(r.Description) ? r.ReasonCode : r.Description
+            }).ToListAsync();
+    }
+
     public async Task<bool> ResolveReportAsync(int adminId, int reportId, string action)
     {
         var report = await _dbContext.DocumentReports.Include(r => r.Document).FirstOrDefaultAsync(r => r.ReportId == reportId);
-        if (report == null || report.Status != "PENDING") return false;
+        if (report == null || report.Status != "PENDING")
+            return false;
 
         report.ResolvedByAdminId = adminId;
         report.ResolvedAt = _clock.Now;
@@ -454,6 +519,121 @@ public class DocumentService : IDocumentService
         return true;
     }
 
+    public async Task<List<int>> GetBookmarkedDocumentIdsAsync(int userId)
+    {
+        return await _dbContext.Bookmarks
+            .Where(bookmark => bookmark.UserId == userId)
+            .Select(bookmark => bookmark.DocumentId)
+            .ToListAsync();
+    }
+
+    public async Task<int?> AddBookmarkAsync(int userId, int documentId)
+    {
+        var document = await _dbContext.Documents.FirstOrDefaultAsync(item =>
+            item.DocumentId == documentId && item.SharingPermission == "PUBLIC" && item.IsFlagged == false);
+        if (document == null)
+            return null;
+
+        var exists = await _dbContext.Bookmarks.AnyAsync(bookmark =>
+            bookmark.UserId == userId && bookmark.DocumentId == documentId);
+        if (!exists)
+        {
+            _dbContext.Bookmarks.Add(new Bookmark
+            {
+                UserId = userId,
+                DocumentId = documentId,
+                CreatedAt = _clock.Now
+            });
+            document.BookmarkCount = (document.BookmarkCount ?? 0) + 1;
+            await _dbContext.SaveChangesAsync();
+        }
+
+        return document.BookmarkCount ?? 0;
+    }
+
+    public async Task<int?> RemoveBookmarkAsync(int userId, int documentId)
+    {
+        var document = await _dbContext.Documents.FirstOrDefaultAsync(item => item.DocumentId == documentId);
+        if (document == null)
+            return null;
+
+        var bookmark = await _dbContext.Bookmarks.FirstOrDefaultAsync(item =>
+            item.UserId == userId && item.DocumentId == documentId);
+        if (bookmark != null)
+        {
+            _dbContext.Bookmarks.Remove(bookmark);
+            document.BookmarkCount = Math.Max(0, (document.BookmarkCount ?? 0) - 1);
+            await _dbContext.SaveChangesAsync();
+        }
+
+        return document.BookmarkCount ?? 0;
+    }
+
+    public async Task<int?> IncrementDownloadCountAsync(int documentId, int userId)
+    {
+        var document = await _dbContext.Documents.FirstOrDefaultAsync(item => item.DocumentId == documentId);
+        if (document == null)
+            return null;
+        document.DownloadCount = (document.DownloadCount ?? 0) + 1;
+        _dbContext.DocumentActivities.Add(new DocumentActivity { DocumentId = documentId, UserId = userId, ActivityType = "DOWNLOAD", CreatedAt = _clock.Now });
+        await _dbContext.SaveChangesAsync();
+        return document.DownloadCount;
+    }
+
+    public async Task<int?> IncrementViewCountAsync(int documentId, int userId)
+    {
+        var document = await _dbContext.Documents.FirstOrDefaultAsync(item => item.DocumentId == documentId);
+        if (document == null)
+            return null;
+        if (document.UserId != userId)
+        {
+            document.ViewCount = (document.ViewCount ?? 0) + 1;
+            _dbContext.DocumentActivities.Add(new DocumentActivity { DocumentId = documentId, UserId = userId, ActivityType = "VIEW", CreatedAt = _clock.Now });
+            await _dbContext.SaveChangesAsync();
+        }
+        return document.ViewCount ?? 0;
+    }
+
+    public async Task<DocumentAnalyticsDto> GetUserAnalyticsAsync(int userId)
+    {
+        var user = await _dbContext.Users.FindAsync(userId);
+        var documents = await _dbContext.Documents.Where(d => d.UserId == userId && d.SharingPermission == "PUBLIC").OrderByDescending(d => d.CreatedAt).ToListAsync();
+        return new DocumentAnalyticsDto
+        {
+            TotalDocuments = documents.Count,
+            PublicDocuments = documents.Count,
+            PrivateDocuments = 0,
+            TotalDownloads = documents.Sum(d => d.DownloadCount ?? 0),
+            TotalViews = documents.Sum(d => d.ViewCount ?? 0),
+            TotalBookmarks = documents.Sum(d => d.BookmarkCount ?? 0),
+            Documents = documents.Select(d => MapToDto(d, user?.Username ?? "N/A")).ToList()
+        };
+    }
+
+    public async Task<DocumentDetailDto?> GetDocumentDetailAsync(int documentId)
+    {
+        var document = await _dbContext.Documents.Include(d => d.User).Include(d => d.DocumentExtractedText).FirstOrDefaultAsync(d => d.DocumentId == documentId);
+        if (document == null)
+            return null;
+        var activities = await _dbContext.DocumentActivities.Include(a => a.User).Where(a => a.DocumentId == documentId).ToListAsync();
+        var audience = activities.GroupBy(a => new { a.UserId, a.User.Username, a.User.Email }).Select(group => new DocumentAudienceDto
+        {
+            UserId = group.Key.UserId,
+            Username = group.Key.Username,
+            Email = group.Key.Email,
+            DownloadCount = group.Count(a => a.ActivityType == "DOWNLOAD"),
+            ViewCount = group.Count(a => a.ActivityType == "VIEW"),
+            LastActivityAt = group.Max(a => a.CreatedAt)
+        }).OrderByDescending(a => a.LastActivityAt).ToList();
+        var extracted = document.DocumentExtractedText?.ExtractedText?.Trim();
+        return new DocumentDetailDto
+        {
+            Document = MapToDto(document, document.User.Username),
+            Description = string.IsNullOrWhiteSpace(extracted) ? "Chưa có mô tả hoặc nội dung trích xuất." : extracted[..Math.Min(600, extracted.Length)],
+            Audience = audience
+        };
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // FILE MANAGEMENT HELPERS
     // ─────────────────────────────────────────────────────────────────────────
@@ -475,6 +655,23 @@ public class DocumentService : IDocumentService
         if (permission is not ("PRIVATE" or "PUBLIC"))
             throw new ArgumentException("Invalid sharing permission.");
         return permission;
+    }
+
+    private static void ApplyRequestedVisibility(Document document, string permission)
+    {
+        document.RequestedVisibility = permission;
+        document.SharingPermission = "PRIVATE";
+        document.ModerationStatus = permission == "PUBLIC" ? "PENDING_REVIEW" : "NOT_REQUESTED";
+        document.ModerationSubmittedAt = permission == "PUBLIC" ? DateTime.Now : null;
+        document.ModerationNote = null;
+    }
+
+    private static string NormalizeSubject(string? subject)
+    {
+        var value = string.IsNullOrWhiteSpace(subject) ? "Khác" : subject.Trim();
+        if (value.Length > 100)
+            throw new ArgumentException("Môn học không được dài quá 100 ký tự.");
+        return value;
     }
 
     private void DeletePhysicalFileByUrl(string fileUrl)
@@ -539,6 +736,9 @@ public class DocumentService : IDocumentService
             case "pdf":
                 return ExtractTextFromPdf(filePath);
 
+            case "pptx":
+                return ExtractTextFromPptx(filePath);
+
             default:
                 Console.WriteLine($"Unsupported file type for text extraction: {fileExtension}");
                 return "";
@@ -552,16 +752,23 @@ public class DocumentService : IDocumentService
             using (var zip = ZipFile.OpenRead(filePath))
             {
                 var entry = zip.GetEntry("word/document.xml");
-                if (entry == null) return "";
+                if (entry == null)
+                    return "";
                 using (var stream = entry.Open())
                 {
                     var doc = XDocument.Load(stream);
                     XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-                    var texts = doc.Descendants(w + "t");
                     var sb = new StringBuilder();
-                    foreach (var text in texts)
+                    foreach (var paragraph in doc.Descendants(w + "p"))
                     {
-                        sb.Append(text.Value).Append(" ");
+                        var value = string.Concat(paragraph.Descendants(w + "t").Select(t => t.Value)).Trim();
+                        if (value.Length == 0)
+                            continue;
+                        var style = paragraph.Descendants(w + "pStyle").FirstOrDefault()?.Attribute(w + "val")?.Value;
+                        if (style?.StartsWith("Heading", StringComparison.OrdinalIgnoreCase) == true
+                            && int.TryParse(Regex.Match(style, @"\d+").Value, out var level))
+                            value = $"{new string('#', Math.Clamp(level, 1, 6))} {value}";
+                        sb.AppendLine(value).AppendLine();
                     }
                     return sb.ToString().Trim();
                 }
@@ -618,20 +825,22 @@ public class DocumentService : IDocumentService
     {
         try
         {
-            using (var document = PdfReader.Open(filePath, PdfDocumentOpenMode.Import))
+            using (var document = PdfDocument.Open(filePath))
             {
                 var sb = new StringBuilder();
-                foreach (var page in document.Pages)
+                foreach (var page in document.GetPages())
                 {
-                    var contents = page.Contents;
-                    if (contents != null)
-                    {
-                        foreach (var content in contents)
-                        {
-                            var text = ExtractTextFromPdfStream(content.Stream.Value);
-                            sb.AppendLine(text);
-                        }
-                    }
+                    sb.AppendLine($"[PAGE {page.Number}]");
+                    var words = page.GetWords().OrderByDescending(w => w.BoundingBox.Bottom)
+                        .ThenBy(w => w.BoundingBox.Left).ToList();
+                    if (words.Count == 0)
+                        continue;
+                    var lines = words.GroupBy(w => Math.Round(w.BoundingBox.Bottom / 4.0) * 4)
+                        .OrderByDescending(group => group.Key)
+                        .Select(group => string.Join(" ", group.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)));
+                    foreach (var line in lines)
+                        sb.AppendLine(line);
+                    sb.AppendLine();
                 }
                 return sb.ToString();
             }
@@ -643,44 +852,34 @@ public class DocumentService : IDocumentService
         }
     }
 
-    private string ExtractTextFromPdfStream(byte[] streamBytes)
+    private string ExtractTextFromPptx(string filePath)
     {
-        if (streamBytes == null || streamBytes.Length == 0) return "";
-        string streamText = Encoding.UTF8.GetString(streamBytes);
-        var sb = new StringBuilder();
-        int index = 0;
-        bool inParentheses = false;
-        while (index < streamText.Length)
+        try
         {
-            char c = streamText[index];
-            if (c == '(' && !inParentheses)
+            using var archive = ZipFile.OpenRead(filePath);
+            XNamespace drawing = "http://schemas.openxmlformats.org/drawingml/2006/main";
+            var slides = archive.Entries
+                .Where(entry => Regex.IsMatch(entry.FullName, @"^ppt/slides/slide\d+\.xml$", RegexOptions.IgnoreCase))
+                .OrderBy(entry => int.Parse(Regex.Match(entry.Name, @"\d+").Value));
+            var sb = new StringBuilder();
+            foreach (var slide in slides)
             {
-                inParentheses = true;
-            }
-            else if (c == ')' && inParentheses)
-            {
-                inParentheses = false;
-                sb.Append(' ');
-            }
-            else if (inParentheses)
-            {
-                if (c == '\\' && index + 1 < streamText.Length)
+                using var stream = slide.Open();
+                var xml = XDocument.Load(stream);
+                var text = string.Join(" ", xml.Descendants(drawing + "t").Select(node => node.Value).Where(value => !string.IsNullOrWhiteSpace(value)));
+                if (!string.IsNullOrWhiteSpace(text))
                 {
-                    char next = streamText[index + 1];
-                    if (next == '(' || next == ')' || next == '\\')
-                    {
-                        sb.Append(next);
-                        index++;
-                    }
-                }
-                else
-                {
-                    sb.Append(c);
+                    var slideNumber = int.Parse(Regex.Match(slide.Name, @"\d+").Value);
+                    sb.AppendLine($"[PAGE {slideNumber}]").AppendLine(text).AppendLine();
                 }
             }
-            index++;
+            return sb.ToString().Trim();
         }
-        return sb.ToString().Trim();
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error extracting PPTX: {ex.Message}");
+            return "";
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -696,18 +895,37 @@ public class DocumentService : IDocumentService
             UploaderName = uploaderName,
             FolderId = doc.FolderId,
             Title = doc.Title,
+            Subject = doc.Subject,
             FileExtension = doc.FileExtension,
             CloudStorageUrl = doc.CloudStorageUrl,
+            FileAvailable = IsFileAvailable(doc.CloudStorageUrl),
             FileSizeMb = doc.FileSizeMb,
             AiParsingStatus = doc.AiParsingStatus ?? "PENDING",
             SharingPermission = doc.SharingPermission ?? "PRIVATE",
+            RequestedVisibility = doc.RequestedVisibility,
+            ModerationStatus = doc.ModerationStatus,
+            ModerationNote = doc.ModerationNote,
+            ModerationSubmittedAt = doc.ModerationSubmittedAt,
+            ModeratedAt = doc.ModeratedAt,
             ShareLinkToken = doc.ShareLinkToken,
             TotalReportScore = doc.TotalReportScore,
             IsFlagged = doc.IsFlagged,
             BookmarkCount = doc.BookmarkCount,
             DownloadCount = doc.DownloadCount,
+            ViewCount = doc.ViewCount,
             CreatedAt = doc.CreatedAt,
             UpdatedAt = doc.UpdatedAt
         };
+    }
+
+    private bool IsFileAvailable(string? fileUrl)
+    {
+        if (string.IsNullOrWhiteSpace(fileUrl))
+            return false;
+        try
+        {
+            return _fileStorage.FileExists(fileUrl.TrimStart('/'));
+        }
+        catch { return false; }
     }
 }

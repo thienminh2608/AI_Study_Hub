@@ -16,6 +16,9 @@ import { Premium } from './pages/Premium';
 import { Profile } from './pages/Profile';
 import { DocumentViewer } from './pages/DocumentViewer';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { PublicDocuments } from './pages/PublicDocuments';
+import { ModeratorDashboard } from './pages/ModeratorDashboard';
+import { Notifications } from './pages/Notifications';
 
 import './App.css';
 
@@ -30,8 +33,8 @@ const App: React.FC = () => {
           <Route path="/forgot-password" element={<ForgotPassword />} />
 
           {/* Protected Client Dashboard Routes */}
-          <Route 
-            path="/" 
+          <Route
+            path="/"
             element={
               <ProtectedRoute>
                 <SidebarLayout />
@@ -39,19 +42,29 @@ const App: React.FC = () => {
             }
           >
             <Route index element={<Dashboard />} />
+            <Route path="public-documents" element={<PublicDocuments />} />
             <Route path="chat" element={<ChatAssistant />} />
             <Route path="friends" element={<Friends />} />
             <Route path="wallet" element={<Wallet />} />
             <Route path="premium" element={<Premium />} />
             <Route path="profile" element={<Profile />} />
+            <Route path="notifications" element={<Notifications />} />
             <Route path="document/:id" element={<DocumentViewer />} />
-            
+
             {/* Protected Admin Routes */}
-            <Route 
-              path="admin" 
+            <Route
+              path="admin"
               element={
                 <ProtectedRoute allowedRoles={['ADMIN']}>
                   <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="moderator"
+              element={
+                <ProtectedRoute allowedRoles={['ADMIN', 'MODERATOR']}>
+                  <ModeratorDashboard />
                 </ProtectedRoute>
               }
             />

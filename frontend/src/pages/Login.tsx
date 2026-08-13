@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -10,8 +10,21 @@ export const Login: React.FC = () => {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const { login } = useAuth();
+  const { login, user, loading } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && user) {
+      navigate(
+        user.role.trim().toUpperCase() === 'ADMIN'
+          ? '/admin'
+          : user.role.trim().toUpperCase() === 'MODERATOR'
+            ? '/moderator'
+            : '/',
+        { replace: true },
+      );
+    }
+  }, [loading, navigate, user]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,7 +39,14 @@ export const Login: React.FC = () => {
     try {
       const response = await api.auth.login({ email, password });
       await login(response.token);
-      navigate('/');
+      navigate(
+        response.role?.trim().toUpperCase() === 'ADMIN'
+          ? '/admin'
+          : response.role?.trim().toUpperCase() === 'MODERATOR'
+            ? '/moderator'
+            : '/',
+        { replace: true },
+      );
     } catch (err: any) {
       setError(err.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản.');
     } finally {
@@ -67,7 +87,9 @@ export const Login: React.FC = () => {
           <div className="form-group">
             <div className="password-header">
               <label>Mật khẩu</label>
-              <Link to="/forgot-password" className="forgot-link">Quên mật khẩu?</Link>
+              <Link to="/forgot-password" className="forgot-link">
+                Quên mật khẩu?
+              </Link>
             </div>
             <div className="input-icon-wrapper">
               <Lock size={18} className="input-icon" />
@@ -88,7 +110,9 @@ export const Login: React.FC = () => {
         </form>
 
         <div className="auth-footer">
-          <p>Chưa có tài khoản? <Link to="/register">Đăng ký ngay</Link></p>
+          <p>
+            Chưa có tài khoản? <Link to="/register">Đăng ký ngay</Link>
+          </p>
         </div>
       </div>
 

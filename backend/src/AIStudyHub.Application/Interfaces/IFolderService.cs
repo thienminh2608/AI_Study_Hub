@@ -17,23 +17,41 @@ public interface IFolderService
 
 public class FolderDto
 {
-    public int FolderId { get; set; }
-    public int UserId { get; set; }
-    public int? ParentFolderId { get; set; }
+    public int FolderId
+    {
+        get; set;
+    }
+    public int UserId
+    {
+        get; set;
+    }
+    public int? ParentFolderId
+    {
+        get; set;
+    }
     public string FolderName { get; set; } = null!;
     public string SharingPermission { get; set; } = null!;
-    public DateTime? CreatedAt { get; set; }
+    public DateTime? CreatedAt
+    {
+        get; set;
+    }
 }
 
 public class CreateFolderDto
 {
     public string FolderName { get; set; } = null!;
-    public int? ParentFolderId { get; set; }
+    public int? ParentFolderId
+    {
+        get; set;
+    }
 }
 
 public class UpdateFolderDto
 {
     public string FolderName { get; set; } = null!;
-    public int? ParentFolderId { get; set; }
+    public int? ParentFolderId
+    {
+        get; set;
+    }
     public string SharingPermission { get; set; } = null!;
 }

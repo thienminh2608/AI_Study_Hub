@@ -78,8 +78,8 @@ export const ForgotPassword: React.FC = () => {
         <div className="auth-header">
           <h1>Quên Mật Khẩu</h1>
           <p>
-            {step === 1 
-              ? 'Nhập email đăng ký để nhận mã OTP xác minh.' 
+            {step === 1
+              ? 'Nhập email đăng ký để nhận mã OTP xác minh.'
               : 'Nhập mã OTP đã nhận và mật khẩu mới của bạn.'}
           </p>
         </div>
@@ -172,7 +172,9 @@ export const ForgotPassword: React.FC = () => {
         )}
 
         <div className="auth-footer">
-          <p>Quay lại trang <Link to="/login">Đăng nhập</Link></p>
+          <p>
+            Quay lại trang <Link to="/login">Đăng nhập</Link>
+          </p>
         </div>
       </div>
 

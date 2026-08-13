@@ -12,21 +12,25 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
 
   if (loading) {
     return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        backgroundColor: '#0a0a0f'
-      }}>
-        <div style={{
-          width: '50px',
-          height: '50px',
-          border: '3px solid rgba(157, 78, 221, 0.2)',
-          borderTopColor: '#00b4d8',
-          borderRadius: '50%',
-          animation: 'spin 1s linear infinite'
-        }}></div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+          backgroundColor: '#0a0a0f',
+        }}
+      >
+        <div
+          style={{
+            width: '50px',
+            height: '50px',
+            border: '3px solid rgba(157, 78, 221, 0.2)',
+            borderTopColor: '#00b4d8',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+          }}
+        ></div>
         <style>{`
           @keyframes spin {
             to { transform: rotate(360deg); }
@@ -40,7 +44,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
+  const normalizedRole = user.role?.trim().toUpperCase();
+  if (allowedRoles && !allowedRoles.map((role) => role.toUpperCase()).includes(normalizedRole)) {
     return <Navigate to="/" replace />;
   }
 

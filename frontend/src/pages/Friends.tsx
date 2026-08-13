@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { 
-  Search, 
-  UserCheck, 
-  UserMinus, 
-  UserX, 
-  UserPlus, 
-  Loader, 
-  Mail, 
+import {
+  Search,
+  UserCheck,
+  UserMinus,
+  UserX,
+  UserPlus,
+  Loader,
+  Mail,
   ShieldAlert,
-  Users
+  Users,
 } from 'lucide-react';
 
 interface Friend {
@@ -29,19 +29,21 @@ interface PendingRequest {
   isRequester: boolean; // Tells if the current user sent the request or received it
 }
 
+interface FriendSearchResult extends Friend {}
+
 export const Friends: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'friends' | 'pending' | 'blocked'>('friends');
-  
+
   // Lists
   const [friendsList, setFriendsList] = useState<Friend[]>([]);
   const [pendingList, setPendingRequestList] = useState<PendingRequest[]>([]);
   const [blockedList, setBlockedList] = useState<Friend[]>([]);
-  
+
   // Search
   const [searchEmail, setSearchEmail] = useState('');
-  const [searchResult, setSearchResult] = useState<any | null>(null);
+  const [searchResult, setSearchResult] = useState<FriendSearchResult | null>(null);
   const [searchError, setSearchError] = useState('');
-  
+
   // Loading
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
@@ -52,7 +54,7 @@ export const Friends: React.FC = () => {
       const friends = await api.friendship.getFriends();
       const pending = await api.friendship.getPending();
       const blocked = await api.friendship.getBlocked();
-      
+
       setFriendsList(friends as any[]);
       setPendingRequestList(pending as any[]);
       setBlockedList(blocked as any[]);
@@ -92,7 +94,7 @@ export const Friends: React.FC = () => {
       alert('Đã gửi lời mời kết bạn.');
       loadAllData();
       if (searchResult && searchResult.userId === targetId) {
-        setSearchResult({ ...searchResult, relationshipStatus: 'PENDING_SENT' });
+        setSearchResult({ ...searchResult, status: 'PENDING_SENT' });
       }
     } catch (err: any) {
       alert(err.message || 'Không thể kết bạn.');
@@ -104,7 +106,7 @@ export const Friends: React.FC = () => {
       await api.friendship.respond(targetId, status);
       loadAllData();
       if (searchResult && searchResult.userId === targetId) {
-        setSearchResult({ ...searchResult, relationshipStatus: status === 'ACCEPTED' ? 'ACCEPTED' : 'NONE' });
+        setSearchResult({ ...searchResult, status: status === 'ACCEPTED' ? 'ACCEPTED' : 'NONE' });
       }
     } catch (err: any) {
       alert(err.message || 'Thao tác thất bại.');
@@ -117,7 +119,7 @@ export const Friends: React.FC = () => {
       await api.friendship.delete(targetId);
       loadAllData();
       if (searchResult && searchResult.userId === targetId) {
-        setSearchResult({ ...searchResult, relationshipStatus: 'NONE' });
+        setSearchResult({ ...searchResult, status: 'NONE' });
       }
     } catch (err: any) {
       alert(err.message || 'Thao tác thất bại.');
@@ -127,26 +129,24 @@ export const Friends: React.FC = () => {
   return (
     <div className="social-container">
       <div className="social-grid">
-        
         {/* Left Side: Friends tabs & list view */}
         <div className="friends-pane glass-panel">
-          
           {/* Tab Selector */}
           <div className="tab-selector">
-            <button 
-              onClick={() => setActiveTab('friends')} 
+            <button
+              onClick={() => setActiveTab('friends')}
               className={`tab-btn ${activeTab === 'friends' ? 'active' : ''}`}
             >
               Bạn bè ({friendsList.length})
             </button>
-            <button 
-              onClick={() => setActiveTab('pending')} 
+            <button
+              onClick={() => setActiveTab('pending')}
               className={`tab-btn ${activeTab === 'pending' ? 'active' : ''}`}
             >
               Lời mời đang chờ ({pendingList.length})
             </button>
-            <button 
-              onClick={() => setActiveTab('blocked')} 
+            <button
+              onClick={() => setActiveTab('blocked')}
               className={`tab-btn ${activeTab === 'blocked' ? 'active' : ''}`}
             >
               Đã chặn ({blockedList.length})
@@ -168,23 +168,23 @@ export const Friends: React.FC = () => {
                 </div>
               ) : (
                 <div className="social-list">
-                  {friendsList.map(f => (
+                  {friendsList.map((f) => (
                     <div key={f.userId} className="social-card glass-card">
                       <div className="user-details">
                         <span className="username">{f.username}</span>
                         <span className="email">{f.email}</span>
                       </div>
                       <div className="card-actions">
-                        <button 
-                          onClick={() => handleRespondRequest(f.userId, 'BLOCKED')} 
+                        <button
+                          onClick={() => handleRespondRequest(f.userId, 'BLOCKED')}
                           className="btn-secondary block-btn"
                           title="Chặn người này"
                         >
                           <UserX size={16} />
                           <span>Chặn</span>
                         </button>
-                        <button 
-                          onClick={() => handleDeleteFriendship(f.userId)} 
+                        <button
+                          onClick={() => handleDeleteFriendship(f.userId)}
                           className="btn-secondary delete-btn"
                           title="Hủy kết bạn"
                         >
@@ -204,7 +204,7 @@ export const Friends: React.FC = () => {
                 </div>
               ) : (
                 <div className="social-list">
-                  {pendingList.map(p => (
+                  {pendingList.map((p) => (
                     <div key={p.userId} className="social-card glass-card">
                       <div className="user-details">
                         <span className="username">{p.username}</span>
@@ -215,23 +215,23 @@ export const Friends: React.FC = () => {
                       </div>
                       <div className="card-actions">
                         {p.isRequester ? (
-                          <button 
-                            onClick={() => handleDeleteFriendship(p.userId)} 
+                          <button
+                            onClick={() => handleDeleteFriendship(p.userId)}
                             className="btn-secondary delete-btn"
                           >
                             Hủy lời mời
                           </button>
                         ) : (
                           <>
-                            <button 
-                              onClick={() => handleRespondRequest(p.userId, 'ACCEPTED')} 
+                            <button
+                              onClick={() => handleRespondRequest(p.userId, 'ACCEPTED')}
                               className="btn-primary"
                             >
                               <UserCheck size={16} />
                               <span>Đồng ý</span>
                             </button>
-                            <button 
-                              onClick={() => handleDeleteFriendship(p.userId)} 
+                            <button
+                              onClick={() => handleDeleteFriendship(p.userId)}
                               className="btn-secondary delete-btn"
                             >
                               Từ chối
@@ -243,32 +243,30 @@ export const Friends: React.FC = () => {
                   ))}
                 </div>
               )
+            ) : blockedList.length === 0 ? (
+              <div className="empty-social">
+                <ShieldAlert size={48} className="empty-icon" />
+                <p>Không có người dùng nào bị chặn.</p>
+              </div>
             ) : (
-              blockedList.length === 0 ? (
-                <div className="empty-social">
-                  <ShieldAlert size={48} className="empty-icon" />
-                  <p>Không có người dùng nào bị chặn.</p>
-                </div>
-              ) : (
-                <div className="social-list">
-                  {blockedList.map(b => (
-                    <div key={b.userId} className="social-card glass-card">
-                      <div className="user-details">
-                        <span className="username">{b.username}</span>
-                        <span className="email">{b.email}</span>
-                      </div>
-                      <div className="card-actions">
-                        <button 
-                          onClick={() => handleDeleteFriendship(b.userId)} 
-                          className="btn-primary"
-                        >
-                          Hủy chặn
-                        </button>
-                      </div>
+              <div className="social-list">
+                {blockedList.map((b) => (
+                  <div key={b.userId} className="social-card glass-card">
+                    <div className="user-details">
+                      <span className="username">{b.username}</span>
+                      <span className="email">{b.email}</span>
                     </div>
-                  ))}
-                </div>
-              )
+                    <div className="card-actions">
+                      <button
+                        onClick={() => handleDeleteFriendship(b.userId)}
+                        className="btn-primary"
+                      >
+                        Hủy chặn
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -277,7 +275,7 @@ export const Friends: React.FC = () => {
         <div className="find-pane glass-panel">
           <h3>Tìm kiếm sinh viên</h3>
           <p className="subtitle">Điền email để tìm kiếm người học khác trên hệ thống.</p>
-          
+
           <form onSubmit={handleSearch} className="search-form">
             <div className="input-icon-wrapper">
               <Search size={18} className="input-icon" />
@@ -305,13 +303,13 @@ export const Friends: React.FC = () => {
               <h4>{searchResult.username}</h4>
               <p className="result-email">{searchResult.email}</p>
               <div className="status-indicator">
-                Quan hệ: <strong>{searchResult.relationshipStatus || 'Chưa kết nối'}</strong>
+                Quan hệ: <strong>{searchResult.status || 'Chưa kết nối'}</strong>
               </div>
 
               <div className="result-actions">
-                {searchResult.relationshipStatus === 'ACCEPTED' && (
-                  <button 
-                    onClick={() => handleDeleteFriendship(searchResult.userId)} 
+                {searchResult.status === 'ACCEPTED' && (
+                  <button
+                    onClick={() => handleDeleteFriendship(searchResult.userId)}
                     className="btn-secondary delete-btn"
                   >
                     <UserMinus size={16} />
@@ -319,16 +317,16 @@ export const Friends: React.FC = () => {
                   </button>
                 )}
 
-                {searchResult.relationshipStatus === 'PENDING_RECEIVED' && (
+                {searchResult.status === 'PENDING_RECEIVED' && (
                   <>
-                    <button 
-                      onClick={() => handleRespondRequest(searchResult.userId, 'ACCEPTED')} 
+                    <button
+                      onClick={() => handleRespondRequest(searchResult.userId, 'ACCEPTED')}
                       className="btn-primary"
                     >
                       Xác nhận kết bạn
                     </button>
-                    <button 
-                      onClick={() => handleDeleteFriendship(searchResult.userId)} 
+                    <button
+                      onClick={() => handleDeleteFriendship(searchResult.userId)}
                       className="btn-secondary"
                     >
                       Hủy bỏ
@@ -336,27 +334,27 @@ export const Friends: React.FC = () => {
                   </>
                 )}
 
-                {searchResult.relationshipStatus === 'PENDING_SENT' && (
-                  <button 
-                    onClick={() => handleDeleteFriendship(searchResult.userId)} 
+                {searchResult.status === 'PENDING_SENT' && (
+                  <button
+                    onClick={() => handleDeleteFriendship(searchResult.userId)}
                     className="btn-secondary"
                   >
                     Hủy yêu cầu kết bạn
                   </button>
                 )}
 
-                {searchResult.relationshipStatus === 'BLOCKED' && (
-                  <button 
-                    onClick={() => handleDeleteFriendship(searchResult.userId)} 
+                {searchResult.status === 'BLOCKED_BY_ME' && (
+                  <button
+                    onClick={() => handleDeleteFriendship(searchResult.userId)}
                     className="btn-primary"
                   >
                     Hủy chặn
                   </button>
                 )}
 
-                {(!searchResult.relationshipStatus || searchResult.relationshipStatus === 'NONE') && (
-                  <button 
-                    onClick={() => handleSendRequest(searchResult.userId)} 
+                {(!searchResult.status || searchResult.status === 'NONE') && (
+                  <button
+                    onClick={() => handleSendRequest(searchResult.userId)}
                     className="btn-primary"
                   >
                     <UserPlus size={16} />
@@ -367,7 +365,6 @@ export const Friends: React.FC = () => {
             </div>
           )}
         </div>
-
       </div>
 
       <style>{`

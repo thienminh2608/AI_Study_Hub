@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { User, Mail, Shield, Coins, Calendar, Loader, Key } from 'lucide-react';
+import { User, Mail, Shield, Coins, Calendar, Loader, Key, Pencil, Save, X } from 'lucide-react';
 
 export const Profile: React.FC = () => {
-  const { user } = useAuth();
-  
+  const { user, refreshUser } = useAuth();
+  const [editingUsername, setEditingUsername] = useState(false);
+  const [username, setUsername] = useState(user?.username ?? '');
+  const [savingUsername, setSavingUsername] = useState(false);
+
   // States for Password Change
   const [step, setStep] = useState<0 | 1 | 2>(0); // 0: Idle, 1: Sent OTP, 2: Reset
   const [otp, setOtp] = useState('');
@@ -29,6 +33,27 @@ export const Profile: React.FC = () => {
       setError(err.message || 'Không thể gửi mã xác minh.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveUsername = async () => {
+    const nextName = username.trim();
+    if (!nextName || nextName === user?.username) {
+      setEditingUsername(false);
+      return;
+    }
+    setError('');
+    setSuccess('');
+    setSavingUsername(true);
+    try {
+      await api.auth.updateUsername(nextName);
+      await refreshUser();
+      setSuccess('Đã cập nhật tên người dùng.');
+      setEditingUsername(false);
+    } catch (err: any) {
+      setError(err.message || 'Không thể cập nhật tên người dùng.');
+    } finally {
+      setSavingUsername(false);
     }
   };
 
@@ -79,7 +104,6 @@ export const Profile: React.FC = () => {
   return (
     <div className="profile-container">
       <div className="profile-grid animate-slide-up">
-        
         {/* Left Side: Account Info Card */}
         <div className="info-card glass-panel">
           <div className="avatar-glow"></div>
@@ -87,8 +111,63 @@ export const Profile: React.FC = () => {
             <div className="avatar-circle">
               <User size={48} className="avatar-icon" />
             </div>
-            <h2>{user?.username}</h2>
-            <span className={`badge ${user?.role === 'ADMIN' ? 'admin' : user?.tierId === 3 ? 'premium' : 'free'}`}>
+            <div className="username-editor">
+              {editingUsername ? (
+                <>
+                  <input
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    className="username-input"
+                    maxLength={50}
+                    autoFocus
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') handleSaveUsername();
+                      if (event.key === 'Escape') {
+                        setUsername(user?.username ?? '');
+                        setEditingUsername(false);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveUsername}
+                    disabled={savingUsername}
+                    aria-label="Lưu tên người dùng"
+                  >
+                    {savingUsername ? <Loader className="spin" size={17} /> : <Save size={17} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUsername(user?.username ?? '');
+                      setEditingUsername(false);
+                    }}
+                    disabled={savingUsername}
+                    aria-label="Hủy sửa tên"
+                  >
+                    <X size={17} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2>{user?.username}</h2>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUsername(user?.username ?? '');
+                      setEditingUsername(true);
+                    }}
+                    aria-label="Sửa tên người dùng"
+                    title="Sửa tên người dùng"
+                  >
+                    <Pencil size={17} />
+                  </button>
+                </>
+              )}
+            </div>
+            <span
+              className={`badge ${user?.role === 'ADMIN' ? 'admin' : user?.tierId === 3 ? 'premium' : 'free'}`}
+            >
               {user?.role === 'ADMIN' ? 'ADMIN' : user?.tierId === 3 ? 'PREMIUM' : 'FREE'}
             </span>
           </div>
@@ -103,9 +182,16 @@ export const Profile: React.FC = () => {
             </div>
             <div className="info-row">
               <Coins size={16} className="info-row-icon" />
-              <div className="info-details">
+              <div className="info-details balance-details">
                 <span className="label">Số dư khả dụng</span>
-                <span className="val balance">{(user?.balance || 0).toLocaleString()}đ</span>
+                <div className="profile-balance-actions">
+                  <span className="val balance">{(user?.balance || 0).toLocaleString()}đ</span>
+                  {user?.role !== 'ADMIN' && (
+                    <Link to="/wallet?deposit=1" className="profile-deposit-link">
+                      Nạp tiền
+                    </Link>
+                  )}
+                </div>
               </div>
             </div>
             <div className="info-row">
@@ -132,7 +218,9 @@ export const Profile: React.FC = () => {
         {/* Right Side: Security / Password Change settings */}
         <div className="security-card glass-panel">
           <h3>Bảo mật tài khoản</h3>
-          <p className="subtitle">Thay đổi mật khẩu đăng nhập bằng cách gửi mã OTP xác minh qua Email.</p>
+          <p className="subtitle">
+            Thay đổi mật khẩu đăng nhập bằng cách gửi mã OTP xác minh qua Email.
+          </p>
 
           {error && <div className="error-alert">{error}</div>}
           {success && <div className="success-alert">{success}</div>}
@@ -140,10 +228,13 @@ export const Profile: React.FC = () => {
           {step === 0 && (
             <div className="security-action">
               <p className="action-desc">
-                Nhấn nút bên dưới để gửi mã xác minh (OTP) về hộp thư <strong>{user?.email}</strong>.
+                Nhấn nút bên dưới để gửi mã xác minh (OTP) về hộp thư <strong>{user?.email}</strong>
+                .
               </p>
               <button onClick={handleStartPasswordReset} className="btn-primary" disabled={loading}>
-                {loading ? <Loader className="spin" size={18} /> : (
+                {loading ? (
+                  <Loader className="spin" size={18} />
+                ) : (
                   <>
                     <Key size={18} />
                     <span>Yêu cầu thay đổi mật khẩu</span>
@@ -169,7 +260,9 @@ export const Profile: React.FC = () => {
                 />
               </div>
               <div className="form-actions">
-                <button type="button" onClick={() => setStep(0)} className="btn-secondary">Hủy</button>
+                <button type="button" onClick={() => setStep(0)} className="btn-secondary">
+                  Hủy
+                </button>
                 <button type="submit" className="btn-primary" disabled={loading}>
                   {loading ? <Loader className="spin" size={16} /> : 'Xác nhận OTP'}
                 </button>
@@ -204,7 +297,9 @@ export const Profile: React.FC = () => {
                 />
               </div>
               <div className="form-actions">
-                <button type="button" onClick={() => setStep(0)} className="btn-secondary">Hủy</button>
+                <button type="button" onClick={() => setStep(0)} className="btn-secondary">
+                  Hủy
+                </button>
                 <button type="submit" className="btn-primary" disabled={loading}>
                   {loading ? <Loader className="spin" size={16} /> : 'Cập nhật mật khẩu'}
                 </button>
@@ -212,7 +307,6 @@ export const Profile: React.FC = () => {
             </form>
           )}
         </div>
-
       </div>
 
       <style>{`
@@ -280,6 +374,11 @@ export const Profile: React.FC = () => {
           font-size: 1.25rem;
         }
 
+        .username-editor { display:flex;align-items:center;justify-content:center;gap:.4rem;width:100%; }
+        .username-editor button { width:30px;height:30px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.1);border-radius:7px;background:rgba(255,255,255,.04);color:var(--accent-blue);cursor:pointer; }
+        .username-editor button:hover { border-color:var(--accent-blue);background:rgba(0,180,216,.1); }
+        .username-input { min-width:0;width:min(170px,60%);padding:.45rem .55rem;border:1px solid var(--accent-blue);border-radius:7px;background:rgba(0,0,0,.2);color:var(--text-primary);font-weight:600;text-align:center; }
+
         .badge {
           font-size: 0.75rem;
           padding: 0.25rem 0.6rem;
@@ -341,6 +440,35 @@ export const Profile: React.FC = () => {
 
         .val.balance {
           color: var(--success);
+        }
+
+        .balance-details {
+          flex: 1;
+        }
+
+        .profile-balance-actions {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.75rem;
+        }
+
+        .profile-deposit-link {
+          padding: 0.38rem 0.7rem;
+          border: 1px solid rgba(16, 185, 129, 0.35);
+          border-radius: 7px;
+          background: rgba(16, 185, 129, 0.1);
+          color: var(--success);
+          font-size: 0.78rem;
+          font-weight: 700;
+          white-space: nowrap;
+          transition: var(--transition-fast);
+        }
+
+        .profile-deposit-link:hover {
+          background: rgba(16, 185, 129, 0.2);
+          border-color: var(--success);
+          transform: translateY(-1px);
         }
 
         .status-tag {

@@ -1,22 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { 
-  Bot, 
-  Send, 
-  Trash2, 
-  Pin, 
-  Plus, 
-  Loader, 
+import {
+  Bot,
+  Send,
+  Trash2,
+  Pin,
+  Plus,
+  Loader,
   MessageSquare,
   Search,
   BookOpen,
   Calendar,
-  Link as LinkIcon
+  Link as LinkIcon,
 } from 'lucide-react';
 
 interface ChatSession {
   sessionId: number;
-  sessionTitle: string;
+  sessionName: string;
   isPinned: boolean;
   createdAt: string;
 }
@@ -29,16 +30,25 @@ interface ChatMessage {
   createdAt: string;
 }
 
+interface ChatDocument {
+  documentId: number;
+  title: string;
+  fileExtension: string;
+}
+
 export const ChatAssistant: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  
+
   // Forms & inputs
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [showCreateSession, setShowCreateSession] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
-  
+  const [documents, setDocuments] = useState<ChatDocument[]>([]);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null);
+
   // States
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -52,10 +62,7 @@ export const ChatAssistant: React.FC = () => {
     try {
       const data = await api.chat.getSessions();
       setSessions(data);
-      if (data.length > 0 && currentSessionId === null) {
-        // Auto-select first session
-        setCurrentSessionId(data[0].sessionId);
-      }
+      if (data.length > 0) setCurrentSessionId((current) => current ?? data[0].sessionId);
     } catch (err: any) {
       console.error('Error loading chat sessions:', err);
     } finally {
@@ -77,7 +84,29 @@ export const ChatAssistant: React.FC = () => {
   };
 
   useEffect(() => {
+    const requestedSessionId = Number(searchParams.get('sessionId'));
+    const requestedDocumentId = Number(searchParams.get('documentId'));
+    if (requestedSessionId > 0) setCurrentSessionId(requestedSessionId);
+    if (requestedDocumentId > 0) setSelectedDocumentId(requestedDocumentId);
     loadSessions();
+    Promise.all([
+      api.document.getUserDocuments(),
+      requestedDocumentId > 0
+        ? api.document.getById(requestedDocumentId).catch(() => null)
+        : Promise.resolve(null),
+    ])
+      .then(([data, requestedDocument]) => {
+        const next = data as ChatDocument[];
+        if (
+          requestedDocument &&
+          !next.some((document) => document.documentId === requestedDocument.documentId)
+        )
+          next.push(requestedDocument as ChatDocument);
+        setDocuments(next);
+        if (requestedSessionId > 0 || requestedDocumentId > 0)
+          setSearchParams({}, { replace: true });
+      })
+      .catch((err) => console.error('Error loading documents for chat:', err));
   }, []);
 
   useEffect(() => {
@@ -99,7 +128,7 @@ export const ChatAssistant: React.FC = () => {
     if (!newSessionTitle.trim()) return;
 
     try {
-      const newSession = await api.chat.createSession({ sessionTitle: newSessionTitle.trim() });
+      const newSession = await api.chat.createSession({ sessionName: newSessionTitle.trim() });
       setNewSessionTitle('');
       setShowCreateSession(false);
       await loadSessions();
@@ -146,9 +175,9 @@ export const ChatAssistant: React.FC = () => {
       sender: 'USER',
       messageContent: userMsgText,
       display: true,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
-    setMessages(prev => [...prev, tempUserMsg]);
+    setMessages((prev) => [...prev, tempUserMsg]);
 
     // 2. Loop indicator simulator
     // In our backend, Gemini agent runs a loop. We can simulate or show status updates based on typical agent flows
@@ -156,8 +185,12 @@ export const ChatAssistant: React.FC = () => {
 
     try {
       // Send question and get final response
-      await api.chat.askQuestion(currentSessionId, { messageContent: userMsgText });
-      
+      await api.chat.askQuestion(currentSessionId, {
+        messageContent: userMsgText,
+        documentId: selectedDocumentId ?? undefined,
+      });
+      setSelectedDocumentId(null);
+
       // Clear action and refresh message list
       setAgentAction(null);
       await loadMessages(currentSessionId);
@@ -181,11 +214,23 @@ export const ChatAssistant: React.FC = () => {
       formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
       // Code tags
       formatted = formatted.replace(/`(.*?)`/g, '<code class="inline-code">$1</code>');
-      
+
       if (line.startsWith('* ') || line.startsWith('- ')) {
-        return <li key={idx} dangerouslySetInnerHTML={{ __html: formatted.substring(2) }} style={{ marginLeft: '1.5rem', marginBottom: '0.25rem' }}></li>;
+        return (
+          <li
+            key={idx}
+            dangerouslySetInnerHTML={{ __html: formatted.substring(2) }}
+            style={{ marginLeft: '1.5rem', marginBottom: '0.25rem' }}
+          ></li>
+        );
       }
-      return <p key={idx} dangerouslySetInnerHTML={{ __html: formatted }} style={{ marginBottom: '0.5rem', minHeight: line ? 'auto' : '0.5rem' }}></p>;
+      return (
+        <p
+          key={idx}
+          dangerouslySetInnerHTML={{ __html: formatted }}
+          style={{ marginBottom: '0.5rem', minHeight: line ? 'auto' : '0.5rem' }}
+        ></p>
+      );
     });
   };
 
@@ -230,12 +275,15 @@ export const ChatAssistant: React.FC = () => {
   return (
     <div className="chat-container">
       <div className="chat-layout">
-        
         {/* Left Sessions Sidebar */}
         <aside className="chat-sessions glass-panel">
           <div className="sessions-header">
             <h3>Phiên trò chuyện</h3>
-            <button onClick={() => setShowCreateSession(true)} className="add-session-btn" title="Tạo phiên mới">
+            <button
+              onClick={() => setShowCreateSession(true)}
+              className="add-session-btn"
+              title="Tạo phiên mới"
+            >
               <Plus size={18} />
             </button>
           </div>
@@ -252,22 +300,25 @@ export const ChatAssistant: React.FC = () => {
               </div>
             ) : (
               <div className="sessions-list">
-                {sessions.map(s => (
-                  <div key={s.sessionId} className={`session-item ${currentSessionId === s.sessionId ? 'active' : ''}`}>
+                {sessions.map((s) => (
+                  <div
+                    key={s.sessionId}
+                    className={`session-item ${currentSessionId === s.sessionId ? 'active' : ''}`}
+                  >
                     <div onClick={() => setCurrentSessionId(s.sessionId)} className="session-title">
                       <MessageSquare size={16} />
-                      <span>{s.sessionTitle}</span>
+                      <span>{s.sessionName}</span>
                     </div>
                     <div className="session-actions">
-                      <button 
-                        onClick={() => handlePinSession(s.sessionId, s.isPinned)} 
+                      <button
+                        onClick={() => handlePinSession(s.sessionId, s.isPinned)}
                         className={`pin-btn ${s.isPinned ? 'pinned' : ''}`}
                         title={s.isPinned ? 'Bỏ ghim' : 'Ghim phiên chat'}
                       >
                         <Pin size={14} />
                       </button>
-                      <button 
-                        onClick={() => handleDeleteSession(s.sessionId)} 
+                      <button
+                        onClick={() => handleDeleteSession(s.sessionId)}
                         className="delete-btn"
                         title="Xóa phiên"
                       >
@@ -289,7 +340,8 @@ export const ChatAssistant: React.FC = () => {
               <div className="chat-header-bar">
                 <Bot size={22} className="bot-avatar-icon" />
                 <h4>
-                  {sessions.find(s => s.sessionId === currentSessionId)?.sessionTitle || 'Trợ lý học tập AI'}
+                  {sessions.find((s) => s.sessionId === currentSessionId)?.sessionName ||
+                    'Trợ lý học tập AI'}
                 </h4>
               </div>
 
@@ -302,17 +354,22 @@ export const ChatAssistant: React.FC = () => {
                   </div>
                 ) : (
                   <>
-                    {messages.map(m => {
+                    {messages.map((m) => {
                       // Filter command logs
-                      const isStatusCard = !m.display && m.sender === 'BOT' && (
-                        m.messageContent.startsWith('SEARCH') || 
-                        m.messageContent.startsWith('VIEW/') || 
-                        m.messageContent.startsWith('TODAY') || 
-                        m.messageContent.startsWith('GETLINK/')
-                      );
+                      const isStatusCard =
+                        !m.display &&
+                        m.sender === 'BOT' &&
+                        (m.messageContent.startsWith('SEARCH') ||
+                          m.messageContent.startsWith('VIEW/') ||
+                          m.messageContent.startsWith('TODAY') ||
+                          m.messageContent.startsWith('GETLINK/'));
 
                       if (isStatusCard) {
-                        return <React.Fragment key={m.messageId}>{renderAgentStatusCard(m.messageContent)}</React.Fragment>;
+                        return (
+                          <React.Fragment key={m.messageId}>
+                            {renderAgentStatusCard(m.messageContent)}
+                          </React.Fragment>
+                        );
                       }
 
                       // If standard message is not displayed in frontend chat flow, hide it
@@ -320,7 +377,10 @@ export const ChatAssistant: React.FC = () => {
 
                       const isBot = m.sender === 'BOT';
                       return (
-                        <div key={m.messageId} className={`message-bubble-wrapper ${isBot ? 'bot' : 'user'}`}>
+                        <div
+                          key={m.messageId}
+                          className={`message-bubble-wrapper ${isBot ? 'bot' : 'user'}`}
+                        >
                           {isBot && <Bot size={28} className="chat-avatar bot" />}
                           <div className={`message-bubble glass-card ${isBot ? 'bot' : 'user'}`}>
                             {renderMessageContent(m.messageContent)}
@@ -347,6 +407,22 @@ export const ChatAssistant: React.FC = () => {
 
               {/* Message Input Form */}
               <form onSubmit={handleSendMessage} className="chat-input-form">
+                <select
+                  value={selectedDocumentId ?? ''}
+                  onChange={(e) =>
+                    setSelectedDocumentId(e.target.value ? Number(e.target.value) : null)
+                  }
+                  className="input-control"
+                  disabled={sending}
+                  aria-label="Tài liệu đính kèm"
+                >
+                  <option value="">Không đính kèm tài liệu</option>
+                  {documents.map((document) => (
+                    <option key={document.documentId} value={document.documentId}>
+                      {document.title}.{document.fileExtension}
+                    </option>
+                  ))}
+                </select>
                 <input
                   type="text"
                   placeholder="Hỏi trợ lý về các bài tập hoặc tài liệu của bạn (ví dụ: Tóm tắt file 123)..."
@@ -355,7 +431,11 @@ export const ChatAssistant: React.FC = () => {
                   className="input-control chat-input"
                   disabled={sending}
                 />
-                <button type="submit" className="btn-primary send-btn" disabled={sending || !inputMessage.trim()}>
+                <button
+                  type="submit"
+                  className="btn-primary send-btn"
+                  disabled={sending || !inputMessage.trim()}
+                >
                   {sending ? <Loader className="spin" size={18} /> : <Send size={18} />}
                 </button>
               </form>
@@ -364,7 +444,10 @@ export const ChatAssistant: React.FC = () => {
             <div className="empty-chat-state">
               <Bot size={64} className="empty-icon" />
               <h3>Chào mừng đến với Trợ lý AI</h3>
-              <p>Chọn một phiên trò chuyện hiện có hoặc nhấn nút "+" ở cột bên để bắt đầu học tập cùng AI.</p>
+              <p>
+                Chọn một phiên trò chuyện hiện có hoặc nhấn nút "+" ở cột bên để bắt đầu học tập
+                cùng AI.
+              </p>
             </div>
           )}
         </div>
@@ -385,8 +468,16 @@ export const ChatAssistant: React.FC = () => {
                 autoFocus
               />
               <div className="modal-actions">
-                <button type="button" onClick={() => setShowCreateSession(false)} className="btn-secondary">Hủy</button>
-                <button type="submit" className="btn-primary">Tạo mới</button>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateSession(false)}
+                  className="btn-secondary"
+                >
+                  Hủy
+                </button>
+                <button type="submit" className="btn-primary">
+                  Tạo mới
+                </button>
               </div>
             </form>
           </div>

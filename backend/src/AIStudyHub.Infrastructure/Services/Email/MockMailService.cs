@@ -1,6 +1,5 @@
-using AIStudyHub.Application.Interfaces;
-
 using System;
+using AIStudyHub.Application.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace AIStudyHub.Infrastructure.Services.Email;

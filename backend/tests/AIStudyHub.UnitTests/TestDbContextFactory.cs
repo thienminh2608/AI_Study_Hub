@@ -1,7 +1,7 @@
+using AIStudyHub.Infrastructure.Persistence;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
-using Microsoft.Data.Sqlite;
-using AIStudyHub.Infrastructure.Persistence;
 
 namespace AIStudyHub.UnitTests;
 

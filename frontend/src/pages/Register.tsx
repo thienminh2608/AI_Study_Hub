@@ -130,7 +130,9 @@ export const Register: React.FC = () => {
         </form>
 
         <div className="auth-footer">
-          <p>Đã có tài khoản? <Link to="/login">Đăng nhập</Link></p>
+          <p>
+            Đã có tài khoản? <Link to="/login">Đăng nhập</Link>
+          </p>
         </div>
       </div>
 

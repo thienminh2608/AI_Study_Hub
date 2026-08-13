@@ -1,8 +1,8 @@
-using AIStudyHub.Application.Interfaces;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -49,14 +49,16 @@ public class FolderService : IFolderService
     public async Task<FolderDto?> GetFolderByIdAsync(int folderId)
     {
         var folder = await _dbContext.Folders.FindAsync(folderId);
-        if (folder == null) return null;
+        if (folder == null)
+            return null;
         return MapToDto(folder);
     }
 
     public async Task<bool> CreateFolderAsync(int userId, CreateFolderDto dto)
     {
         string cleanName = dto.FolderName.Trim();
-        if (string.IsNullOrWhiteSpace(cleanName)) throw new ArgumentException("Tên thư mục không được để trống.");
+        if (string.IsNullOrWhiteSpace(cleanName))
+            throw new ArgumentException("Tên thư mục không được để trống.");
         if (dto.ParentFolderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == dto.ParentFolderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Thư mục cha không hợp lệ.");
         bool hasDuplicate = await CheckDuplicateFolderNameAsync(userId, cleanName, dto.ParentFolderId);
@@ -81,10 +83,12 @@ public class FolderService : IFolderService
     public async Task<bool> UpdateFolderAsync(int userId, int folderId, UpdateFolderDto dto)
     {
         var folder = await _dbContext.Folders.FirstOrDefaultAsync(f => f.FolderId == folderId && f.UserId == userId);
-        if (folder == null) return false;
+        if (folder == null)
+            return false;
 
         string cleanName = dto.FolderName.Trim();
-        if (string.IsNullOrWhiteSpace(cleanName)) throw new ArgumentException("Tên thư mục không được để trống.");
+        if (string.IsNullOrWhiteSpace(cleanName))
+            throw new ArgumentException("Tên thư mục không được để trống.");
         if (dto.ParentFolderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == dto.ParentFolderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Thư mục cha không hợp lệ.");
         if (folder.FolderName != cleanName || folder.ParentFolderId != dto.ParentFolderId)
@@ -115,7 +119,8 @@ public class FolderService : IFolderService
         folder.FolderName = cleanName;
         folder.ParentFolderId = dto.ParentFolderId;
         var permission = dto.SharingPermission?.Trim().ToUpperInvariant();
-        if (permission is not ("PRIVATE" or "PUBLIC")) throw new ArgumentException("Quyền chia sẻ không hợp lệ.");
+        if (permission is not ("PRIVATE" or "PUBLIC"))
+            throw new ArgumentException("Quyền chia sẻ không hợp lệ.");
         folder.SharingPermission = permission;
 
         return await _dbContext.SaveChangesAsync() > 0;
@@ -124,7 +129,8 @@ public class FolderService : IFolderService
     public async Task<bool> DeleteFolderRecursiveAsync(int userId, int folderId)
     {
         var folder = await _dbContext.Folders.FirstOrDefaultAsync(f => f.FolderId == folderId && f.UserId == userId);
-        if (folder == null) return false;
+        if (folder == null)
+            return false;
 
         var allFolderIds = new List<int> { folderId };
         await GetDescendantFolderIdsAsync(folderId, allFolderIds);
