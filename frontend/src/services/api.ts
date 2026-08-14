@@ -166,6 +166,12 @@ export const api = {
       return request<any[]>(url, { method: 'GET' });
     },
     getPublicDocuments: () => request<any[]>('/document/public', { method: 'GET' }),
+    getSharedWithMe: () => request<any[]>('/document/shared-with-me', { method: 'GET' }),
+    getShares: (id: number) => request<any[]>(`/document/${id}/shares`, { method: 'GET' }),
+    shareWithFriend: (id: number, friendUserId: number) =>
+      request<any>(`/document/${id}/shares/${friendUserId}`, { method: 'POST' }),
+    removeShare: (id: number, friendUserId: number) =>
+      request<any>(`/document/${id}/shares/${friendUserId}`, { method: 'DELETE' }),
     getAnalytics: () => request<any>('/document/analytics', { method: 'GET' }),
     getAudience: (id: number) => request<any>(`/document/${id}/audience`, { method: 'GET' }),
     getById: (id: number) => request<any>(`/document/${id}`, { method: 'GET' }),
@@ -198,6 +204,7 @@ export const api = {
   },
 
   moderation: {
+    getSummary: () => request<any>('/moderation/summary', { method: 'GET' }),
     getQueue: () => request<any[]>('/moderation/queue', { method: 'GET' }),
     getDocument: (id: number) => request<any>(`/moderation/documents/${id}`, { method: 'GET' }),
     reviewDocument: (id: number, action: string, note = '') =>
@@ -245,6 +252,11 @@ export const api = {
       request<any>(`/chat/sessions/${sessionId}/pin?pin=${pin}`, { method: 'POST' }),
     deleteSession: (sessionId: number) =>
       request<any>(`/chat/sessions/${sessionId}`, { method: 'DELETE' }),
+    setDocument: (sessionId: number, documentId: number | null) =>
+      request<any>(`/chat/sessions/${sessionId}/document`, {
+        method: 'PUT',
+        body: JSON.stringify({ documentId }),
+      }),
     getMessages: (sessionId: number) =>
       request<any[]>(`/chat/sessions/${sessionId}/messages`, { method: 'GET' }),
     askQuestion: (sessionId: number, dto: any) =>

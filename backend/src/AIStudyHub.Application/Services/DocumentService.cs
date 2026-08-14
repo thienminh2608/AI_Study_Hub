@@ -180,6 +180,8 @@ public class DocumentService : IDocumentService
         {
             sharingPermission = "PRIVATE";
         }
+        if (sharingPermission == "PUBLIC")
+            await EnsurePublicReviewAllowedAsync(doc.DocumentId);
 
         // Clean titles and handle duplicates
         string finalTitle = string.IsNullOrWhiteSpace(title) ? doc.Title : StripExtension(title);
@@ -233,6 +235,8 @@ public class DocumentService : IDocumentService
         {
             sharingPermission = "PRIVATE";
         }
+        if (sharingPermission == "PUBLIC")
+            await EnsurePublicReviewAllowedAsync(oldDoc.DocumentId);
 
         // Delete old physical file
         DeletePhysicalFileByUrl(oldDoc.CloudStorageUrl);
@@ -348,7 +352,25 @@ public class DocumentService : IDocumentService
         }
 
         var docs = await query.ToListAsync();
-        return docs.Select(d => MapToDto(d, uploaderName)).ToList();
+        var documentIds = docs.Select(d => d.DocumentId).ToList();
+        var appealableDocumentIds = await _dbContext.DocumentReports.AsNoTracking()
+            .Where(r => documentIds.Contains(r.DocumentId) &&
+                (r.Status == "VIOLATION_CONFIRMED" || r.Status == "ACTION_TAKEN" || r.Status == "ACTIONED") &&
+                !_dbContext.ModerationAppeals.Any(a => a.ReportId == r.ReportId))
+            .Select(r => r.DocumentId).ToListAsync();
+        var appealable = appealableDocumentIds.ToHashSet();
+        var appealStates = await GetAppealStatesAsync(documentIds);
+        return docs.Select(d =>
+        {
+            var dto = MapToDto(d, uploaderName);
+            dto.RequiresAppeal = appealable.Contains(d.DocumentId);
+            if (appealStates.TryGetValue(d.DocumentId, out var appealState))
+            {
+                dto.AppealStatus = appealState;
+                dto.PublicReviewBlocked = appealState != "RESTORED";
+            }
+            return dto;
+        }).ToList();
     }
 
     public async Task<List<DocumentResponseDto>> GetPublicDocumentsAsync()
@@ -366,7 +388,18 @@ public class DocumentService : IDocumentService
         var doc = await _dbContext.Documents.Include(d => d.User).FirstOrDefaultAsync(d => d.DocumentId == documentId);
         if (doc == null)
             return null;
-        return MapToDto(doc, doc.User.Username);
+        var dto = MapToDto(doc, doc.User.Username);
+        dto.RequiresAppeal = await _dbContext.DocumentReports.AsNoTracking().AnyAsync(r =>
+            r.DocumentId == documentId &&
+            (r.Status == "VIOLATION_CONFIRMED" || r.Status == "ACTION_TAKEN" || r.Status == "ACTIONED") &&
+            !_dbContext.ModerationAppeals.Any(a => a.ReportId == r.ReportId));
+        var appealStates = await GetAppealStatesAsync([documentId]);
+        if (appealStates.TryGetValue(documentId, out var appealState))
+        {
+            dto.AppealStatus = appealState;
+            dto.PublicReviewBlocked = appealState != "RESTORED";
+        }
+        return dto;
     }
 
     public async Task<bool> DeleteDocumentAsync(int userId, int documentId)
@@ -625,7 +658,9 @@ public class DocumentService : IDocumentService
     public async Task<DocumentAnalyticsDto> GetUserAnalyticsAsync(int userId)
     {
         var user = await _dbContext.Users.FindAsync(userId);
-        var documents = await _dbContext.Documents.Where(d => d.UserId == userId && d.SharingPermission == "PUBLIC").OrderByDescending(d => d.CreatedAt).ToListAsync();
+        var allDocuments = await _dbContext.Documents.Where(d => d.UserId == userId).OrderByDescending(d => d.CreatedAt).ToListAsync();
+        var documents = allDocuments.Where(d => d.SharingPermission == "PUBLIC").ToList();
+        var pending = allDocuments.Where(d => d.ModerationStatus is "PENDING_REVIEW" or "IN_REVIEW").ToList();
         return new DocumentAnalyticsDto
         {
             TotalDocuments = documents.Count,
@@ -634,7 +669,9 @@ public class DocumentService : IDocumentService
             TotalDownloads = documents.Sum(d => d.DownloadCount ?? 0),
             TotalViews = documents.Sum(d => d.ViewCount ?? 0),
             TotalBookmarks = documents.Sum(d => d.BookmarkCount ?? 0),
-            Documents = documents.Select(d => MapToDto(d, user?.Username ?? "N/A")).ToList()
+            Documents = documents.Select(d => MapToDto(d, user?.Username ?? "N/A")).ToList(),
+            PendingReviewCount = pending.Count,
+            PendingReviewDocuments = pending.Select(d => MapToDto(d, user?.Username ?? "N/A")).ToList()
         };
     }
 
@@ -692,6 +729,35 @@ public class DocumentService : IDocumentService
         document.ModerationStatus = permission == "PUBLIC" ? "PENDING_REVIEW" : "NOT_REQUESTED";
         document.ModerationSubmittedAt = permission == "PUBLIC" ? DateTime.Now : null;
         document.ModerationNote = null;
+    }
+
+    private async Task EnsurePublicReviewAllowedAsync(int documentId)
+    {
+        var state = (await GetAppealStatesAsync([documentId])).GetValueOrDefault(documentId);
+        if (state == null || state == "RESTORED")
+            return;
+        if (state == "NOT_SUBMITTED")
+            throw new InvalidOperationException("Tài liệu đã bị xác nhận vi phạm. Bạn phải gửi giải trình trước khi xin duyệt công khai.");
+        if (state == "PENDING")
+            throw new InvalidOperationException("Giải trình đang chờ Moderator giải quyết. Chưa thể xin duyệt công khai.");
+        throw new InvalidOperationException("Moderator đã giữ nguyên quyết định vi phạm. Tài liệu này chưa đủ điều kiện xin duyệt công khai.");
+    }
+
+    private async Task<Dictionary<int, string>> GetAppealStatesAsync(IReadOnlyCollection<int> documentIds)
+    {
+        var violations = await _dbContext.DocumentReports.AsNoTracking()
+            .Where(r => documentIds.Contains(r.DocumentId) &&
+                (r.Status == "VIOLATION_CONFIRMED" || r.Status == "ACTION_TAKEN" || r.Status == "ACTIONED" ||
+                 r.Status == "APPEALED" || r.Status == "CLOSED" || r.Status == "RESTORED"))
+            .Select(r => new
+            {
+                r.DocumentId,
+                r.ResolvedAt,
+                AppealStatus = _dbContext.ModerationAppeals.Where(a => a.ReportId == r.ReportId)
+                    .Select(a => a.Status).FirstOrDefault()
+            }).ToListAsync();
+        return violations.GroupBy(item => item.DocumentId).ToDictionary(group => group.Key,
+            group => group.OrderByDescending(item => item.ResolvedAt).First().AppealStatus ?? "NOT_SUBMITTED");
     }
 
     private async Task AddModeratorDocumentNoticesAsync(Document document)

@@ -494,6 +494,29 @@ select optgroup {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 1rem;
 }
+
+/* Viewport-level dialogs rendered through React Portal. Keep this above every
+   document viewer, sidebar, notification and toast stacking context. */
+.viewport-modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483000 !important;
+  display: grid !important;
+  place-items: center !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  padding: 1rem !important;
+  overflow: auto !important;
+  isolation: isolate;
+  background: rgba(3, 7, 18, 0.88) !important;
+  backdrop-filter: blur(10px);
+}
+
+.viewport-modal-overlay > * {
+  position: relative;
+  z-index: 1;
+  margin: auto;
+}
 .app-confirm-icon {
   width: 46px;
   height: 46px;

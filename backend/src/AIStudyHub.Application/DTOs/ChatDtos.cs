@@ -21,6 +21,8 @@ public class ChatSessionDto
     {
         get; set;
     }
+    public int? AttachedDocumentId { get; set; }
+    public string? AttachedDocumentTitle { get; set; }
 }
 
 public class ChatMessageDto
@@ -57,4 +59,9 @@ public class AskQuestionDto
     {
         get; set;
     } // Optional document context for AI Chat
+}
+
+public class SetChatDocumentDto
+{
+    public int? DocumentId { get; set; }
 }

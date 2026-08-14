@@ -123,6 +123,20 @@ public class ChatBotController : ControllerBase
         }
     }
 
+    [HttpPut("sessions/{sessionId}/document")]
+    public async Task<IActionResult> SetAttachedDocument(int sessionId, [FromBody] SetChatDocumentDto dto)
+    {
+        try
+        {
+            var result = await _chatService.SetAttachedDocumentAsync(GetCurrentUserId(), sessionId, dto.DocumentId);
+            return result == null ? NotFound(new { message = "Không tìm thấy phiên chat." }) : Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [HttpGet("sessions/{sessionId}/messages")]
     public async Task<IActionResult> GetMessages(int sessionId)
     {

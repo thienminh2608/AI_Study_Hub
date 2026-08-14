@@ -32,13 +32,18 @@ public class ChatService : IChatService
             .ThenByDescending(s => s.CreatedAt)
             .ToListAsync();
 
+        var documentTitles = await _dbContext.Documents.AsNoTracking()
+            .Where(d => sessions.Select(s => s.AttachedDocumentId).Contains(d.DocumentId))
+            .ToDictionaryAsync(d => d.DocumentId, d => d.Title);
         return sessions.Select(s => new ChatSessionDto
         {
             SessionId = s.SessionId,
             SessionName = s.SessionName,
             UserId = s.UserId,
             IsPinned = s.IsPinned,
-            CreatedAt = s.CreatedAt
+            CreatedAt = s.CreatedAt,
+            AttachedDocumentId = s.AttachedDocumentId,
+            AttachedDocumentTitle = s.AttachedDocumentId.HasValue && documentTitles.TryGetValue(s.AttachedDocumentId.Value, out var title) ? title : null
         }).ToList();
     }
 
@@ -98,6 +103,26 @@ public class ChatService : IChatService
         return await _dbContext.SaveChangesAsync() > 0;
     }
 
+    public async Task<ChatSessionDto?> SetAttachedDocumentAsync(int userId, int sessionId, int? documentId)
+    {
+        var session = await _dbContext.ChatSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.UserId == userId);
+        if (session == null)
+            return null;
+        Document? document = null;
+        if (documentId.HasValue)
+        {
+            document = await _dbContext.Documents.AsNoTracking().FirstOrDefaultAsync(d => d.DocumentId == documentId.Value &&
+                d.AiParsingStatus == "READY" && (d.UserId == userId || (d.SharingPermission == "PUBLIC" && d.IsFlagged != true) ||
+                    _dbContext.DocumentShares.Any(s => s.DocumentId == d.DocumentId && s.SharedWithUserId == userId)));
+            if (document == null)
+                throw new ArgumentException("Tài liệu không tồn tại, chưa sẵn sàng hoặc bạn không có quyền truy cập.");
+        }
+        session.AttachedDocumentId = documentId;
+        await _dbContext.SaveChangesAsync();
+        return new ChatSessionDto { SessionId = session.SessionId, SessionName = session.SessionName, UserId = session.UserId,
+            IsPinned = session.IsPinned, CreatedAt = session.CreatedAt, AttachedDocumentId = documentId, AttachedDocumentTitle = document?.Title };
+    }
+
     public async Task<List<ChatMessageDto>> GetSessionMessagesAsync(int userId, int sessionId)
     {
         var session = await _dbContext.ChatSessions.AnyAsync(s => s.SessionId == sessionId && s.UserId == userId);
@@ -122,9 +147,8 @@ public class ChatService : IChatService
 
     public async Task<string> ProcessUserMessageAsync(int userId, int sessionId, AskQuestionDto dto)
     {
-        var ownsSession = await _dbContext.ChatSessions
-            .AnyAsync(s => s.SessionId == sessionId && s.UserId == userId);
-        if (!ownsSession)
+        var session = await _dbContext.ChatSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.UserId == userId);
+        if (session == null)
         {
             throw new UnauthorizedAccessException("Bạn không có quyền truy cập phiên chat này.");
         }
@@ -155,6 +179,21 @@ public class ChatService : IChatService
         // Increment prompt count
         user.AiPromptsToday = currentPrompts + 1;
         user.LastPromptReset = lastReset;
+        var remainingPrompts = limitPerDay - user.AiPromptsToday.Value;
+        if (remainingPrompts is 1 or 2 && !await _dbContext.ModerationNotices.AnyAsync(n =>
+            n.UserId == userId && n.Type == "AI_PROMPT_LOW" && n.CreatedAt.Date == now.Date && n.Message.Contains($"{remainingPrompts} lượt")))
+        {
+            _dbContext.ModerationNotices.Add(new ModerationNotice
+            {
+                UserId = userId,
+                Type = "AI_PROMPT_LOW",
+                Title = "Bạn sắp hết lượt chat AI",
+                Message = $"Bạn còn {remainingPrompts} lượt hỏi AI trong chu kỳ hiện tại.",
+                ActionUrl = "/premium",
+                IsRead = false,
+                CreatedAt = now
+            });
+        }
         await _dbContext.SaveChangesAsync();
 
         // 2. Save User Message (if present)
@@ -180,6 +219,7 @@ public class ChatService : IChatService
                 (d.UserId == userId || (d.SharingPermission == "PUBLIC" && d.IsFlagged != true)));
             if (doc != null)
             {
+                session.AttachedDocumentId = doc.DocumentId;
                 string attachmentText;
                 if (string.IsNullOrWhiteSpace(dto.MessageContent))
                 {
@@ -203,10 +243,14 @@ public class ChatService : IChatService
             }
         }
 
+        var attachedDocumentId = session.AttachedDocumentId;
+
         // 4. Agent Loop
         int loopCount = 0;
         string? finalResponse = null;
         HashSet<int> allowedCitationChunkIds = [];
+        bool searchedDocuments = false;
+        bool utilityCommandHandled = false;
 
         while (loopCount < MaxAiLoop)
         {
@@ -234,11 +278,43 @@ public class ChatService : IChatService
 
             if (trimmedResponse.StartsWith("RESPONSE:", StringComparison.OrdinalIgnoreCase))
             {
+                if (attachedDocumentId.HasValue && allowedCitationChunkIds.Count == 0)
+                {
+                    _dbContext.ChatMessages.Add(new ChatMessage
+                    {
+                        SessionId = sessionId,
+                        Sender = "USER",
+                        MessageContent = $"Phiên này chỉ được trả lời từ tài liệu đính kèm. Hãy đọc VIEW/{attachedDocumentId.Value} trước và không dùng kiến thức hay tài liệu khác.",
+                        Display = false,
+                        CreatedAt = DateTime.Now
+                    });
+                    await _dbContext.SaveChangesAsync();
+                    continue;
+                }
+                if (!attachedDocumentId.HasValue && allowedCitationChunkIds.Count == 0 && !utilityCommandHandled)
+                {
+                    if (!searchedDocuments)
+                    {
+                        _dbContext.ChatMessages.Add(new ChatMessage
+                        {
+                            SessionId = sessionId,
+                            Sender = "USER",
+                            MessageContent = "Không được trả lời bằng kiến thức bên ngoài. Hãy dùng SEARCH rồi VIEW tài liệu phù hợp trước khi trả lời.",
+                            Display = false,
+                            CreatedAt = DateTime.Now
+                        });
+                        await _dbContext.SaveChangesAsync();
+                        continue;
+                    }
+                    finalResponse = "Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.";
+                    break;
+                }
                 finalResponse = trimmedResponse.Substring("RESPONSE:".Length).Trim();
                 break;
             }
             else if (trimmedResponse.StartsWith("SEARCH", StringComparison.OrdinalIgnoreCase))
             {
+                searchedDocuments = true;
                 // Save AI Command
                 var botCmdMsg = new ChatMessage
                 {
@@ -251,8 +327,14 @@ public class ChatService : IChatService
                 _dbContext.ChatMessages.Add(botCmdMsg);
 
                 // Build Folder Tree
-                string folderTree = await BuildFolderTreeTextAsync(userId);
-                string treeMsg = $"Đây là cấu trúc cây tài liệu hiện tại của sinh viên:\n{folderTree}";
+                string treeMsg;
+                if (attachedDocumentId.HasValue)
+                    treeMsg = $"Phiên chat đang khóa vào tài liệu ID {attachedDocumentId.Value}. Không được tìm kiếm hay đọc tài liệu khác. Hãy dùng VIEW/{attachedDocumentId.Value}.";
+                else
+                {
+                    string folderTree = await BuildFolderTreeTextAsync(userId);
+                    treeMsg = $"Đây là cấu trúc cây tài liệu hiện tại của sinh viên:\n{folderTree}";
+                }
 
                 var sysMsg = new ChatMessage
                 {
@@ -284,9 +366,16 @@ public class ChatService : IChatService
 
                 if (int.TryParse(docIdStr, out int docId))
                 {
+                    if (attachedDocumentId.HasValue && docId != attachedDocumentId.Value)
+                    {
+                        systemResponseText = $"Phiên chat chỉ được phép đọc tài liệu đang đính kèm ID {attachedDocumentId.Value}. Không được truy cập tài liệu ID {docId}.";
+                    }
+                    else
+                    {
                     var doc = await _dbContext.Documents.FirstOrDefaultAsync(d =>
                         d.DocumentId == docId &&
-                        (d.UserId == userId || (d.SharingPermission == "PUBLIC" && d.IsFlagged != true)));
+                        (d.UserId == userId || (d.SharingPermission == "PUBLIC" && d.IsFlagged != true) ||
+                         _dbContext.DocumentShares.Any(s => s.DocumentId == d.DocumentId && s.SharedWithUserId == userId)));
                     if (doc == null)
                     {
                         systemResponseText = $"Hệ thống không tìm thấy tài liệu có id \"{docId}\" trong kho lưu trữ của sinh viên. Hãy thông báo cho sinh viên biết và hỏi lại tên chính xác.";
@@ -330,12 +419,18 @@ public class ChatService : IChatService
                                     selected = await RetrieveContextAsync(docId, question);
                                 }
                                 allowedCitationChunkIds = selected.ChunkIds.ToHashSet();
-                                systemResponseText = $"Document: \"{doc.Title}\". Only use the context below. "
+                                if (!selected.HasRelevantMatch)
+                                {
+                                    finalResponse = "Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.";
+                                    systemResponseText = "Không tìm thấy chunk nào liên quan đến câu hỏi. Không được dùng kiến thức bên ngoài để trả lời.";
+                                }
+                                else systemResponseText = $"Document: \"{doc.Title}\". Only use the context below. "
                                     + "Return strict JSON with this schema: {\"answer\":\"...\",\"citations\":[{\"chunkId\":1,\"page\":1}],\"insufficientContext\":false}. "
                                     + "Citations may only reference chunk IDs present in the context. Set insufficientContext=true when the answer is not supported.\n\n"
                                     + selected.Context;
                             }
                         }
+                    }
                     }
                 }
                 else
@@ -353,9 +448,12 @@ public class ChatService : IChatService
                 };
                 _dbContext.ChatMessages.Add(sysMsg);
                 await _dbContext.SaveChangesAsync();
+                if (finalResponse != null)
+                    break;
             }
             else if (trimmedResponse.StartsWith("TODAY", StringComparison.OrdinalIgnoreCase))
             {
+                utilityCommandHandled = true;
                 var botCmdMsg = new ChatMessage
                 {
                     SessionId = sessionId,
@@ -381,6 +479,7 @@ public class ChatService : IChatService
             else if (trimmedResponse.StartsWith("GETLINK/", StringComparison.OrdinalIgnoreCase) ||
                      trimmedResponse.StartsWith("GETLINK /", StringComparison.OrdinalIgnoreCase))
             {
+                utilityCommandHandled = true;
                 var botCmdMsg = new ChatMessage
                 {
                     SessionId = sessionId,
@@ -463,7 +562,7 @@ public class ChatService : IChatService
         }
         var candidates = await query.OrderBy(c => c.ChunkIndex).Take(24).ToListAsync();
         if (candidates.Count == 0)
-            candidates = await _dbContext.DocumentChunks.AsNoTracking().Where(c => c.DocumentId == documentId).OrderBy(c => c.ChunkIndex).Take(8).ToListAsync();
+            return new RetrievedContext(string.Empty, [], false);
         var termSet = queryTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var scored = candidates.Select(chunk => new
         {
@@ -475,8 +574,8 @@ public class ChatService : IChatService
             .OrderByDescending(item => item.Score).ThenBy(item => item.Chunk.ChunkIndex)
             .Take(6).Select(item => item.Chunk).ToList();
 
-        if (scored.Count == 0 || scored.All(c => !Tokenize(c.Text).Any(termSet.Contains)))
-            scored = candidates.Take(5).ToList();
+        if (scored.Count == 0 || scored.All(c => !Tokenize($"{c.HeadingPath} {c.Text}").Any(termSet.Contains)))
+            return new RetrievedContext(string.Empty, [], false);
         var indexes = scored.Select(c => c.ChunkIndex).ToHashSet();
         foreach (var index in scored.Select(c => c.ChunkIndex).ToList())
         {
@@ -487,7 +586,7 @@ public class ChatService : IChatService
         var selected = await _dbContext.DocumentChunks.AsNoTracking()
             .Where(c => c.DocumentId == documentId && indexes.Contains(c.ChunkIndex))
             .OrderBy(c => c.ChunkIndex).Take(8).ToListAsync();
-        return new RetrievedContext(FormatChunks(selected), selected.Select(c => c.ChunkId).ToList());
+        return new RetrievedContext(FormatChunks(selected), selected.Select(c => c.ChunkId).ToList(), true);
     }
 
     private async Task<RetrievedContext> SummarizeWholeDocumentAsync(List<DocumentChunk> chunks, string question)
@@ -504,7 +603,7 @@ public class ChatService : IChatService
             ]));
         }
         return new RetrievedContext("Map summaries for the whole-document request: " + question + "\n\n" + string.Join("\n\n", summaries),
-            chunks.Select(c => c.ChunkId).ToList());
+            chunks.Select(c => c.ChunkId).ToList(), chunks.Count > 0);
     }
 
     private static string FormatChunks(IEnumerable<DocumentChunk> chunks) => string.Join("\n\n", chunks.Select(c =>
@@ -530,11 +629,14 @@ public class ChatService : IChatService
             if (parsed == null || string.IsNullOrWhiteSpace(parsed.Answer))
                 return false;
             var valid = parsed.Citations.Where(c => allowedIds.Contains(c.ChunkId)).DistinctBy(c => c.ChunkId).ToList();
+            if (parsed.InsufficientContext)
+            {
+                response = "Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.";
+                return true;
+            }
             response = parsed.Answer.Trim();
             if (valid.Count > 0)
                 response += "\n\nNguồn: " + string.Join(", ", valid.Select(c => c.Page.HasValue ? $"chunk {c.ChunkId} (trang {c.Page})" : $"chunk {c.ChunkId}"));
-            if (parsed.InsufficientContext)
-                response += "\n\nLưu ý: ngữ cảnh truy xuất chưa đủ để xác nhận đầy đủ câu trả lời.";
             return true;
         }
         catch (JsonException) { return false; }
@@ -542,7 +644,7 @@ public class ChatService : IChatService
 
     private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
         { "và", "của", "cho", "trong", "là", "the", "and", "for", "with", "this", "that", "from" };
-    private sealed record RetrievedContext(string Context, List<int> ChunkIds);
+    private sealed record RetrievedContext(string Context, List<int> ChunkIds, bool HasRelevantMatch);
     private sealed class GroundedAiResponse
     {
         public string Answer { get; set; } = string.Empty;
@@ -567,7 +669,7 @@ public class ChatService : IChatService
     private async Task<string> CreateInitPromptAsync(int userId)
     {
         string folderTree = await BuildFolderTreeTextAsync(userId);
-        return "System: You are an intelligent virtual personal assistant for a student inside 'AI Study Hub'.\n\n"
+        return "System: You are an intelligent virtual personal assistant for a student inside 'AI Study Hub'. ALWAYS answer the user in Vietnamese, even when the question or retrieved content is in another language.\n\n"
                + "--- CURRENT CONTEXT ---\n"
                + $"Today's Date: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n"
                + "Folder Tree (Format: [ID] Name (Date)):\n" + folderTree + "\n"
@@ -577,6 +679,8 @@ public class ChatService : IChatService
                + "2. Help the student locate specific folders and documents.\n"
                + "3. Analyze or summarize document contents when requested.\n\n"
                + "--- STRICT RULES ---\n"
+               + "0. LANGUAGE: Every user-facing answer must be in natural Vietnamese. Do not answer in English unless the user explicitly asks for English.\n"
+               + "0A. KNOWLEDGE SCOPE: For every substantive question, only answer from the user's accessible uploaded documents. First use SEARCH and then VIEW the most relevant document. Never use outside knowledge. If no document is relevant, reply exactly: 'RESPONSE: Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.'\n"
                + "1. DATA PRIVACY: NEVER expose raw Folder IDs, Document IDs, or raw Creation Dates to the user in your normal responses. If asked to show the folder tree, format it into a friendly, clean list (e.g., using bullet points or emojis) without the system IDs or timestamps.\n"
                + "2. NORMAL RESPONSE FORMAT: Every response that is directed to the user MUST start exactly with the prefix 'RESPONSE: '.\n"
                + "3. TIMEOUT HANDLING: If you request a file's content and the system returns the status 'PENDING' for 3 consecutive times, you must inform the user: 'RESPONSE: The file text extraction has failed.'\n\n"

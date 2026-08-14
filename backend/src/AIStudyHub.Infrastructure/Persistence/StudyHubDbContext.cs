@@ -41,6 +41,7 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
     {
         get; set;
     }
+    public virtual DbSet<DocumentShare> DocumentShares { get; set; }
 
     public virtual DbSet<DocumentExtractedText> DocumentExtractedTexts
     {
@@ -171,6 +172,7 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.IsPinned)
                 .HasDefaultValue(false)
                 .HasColumnName("is_pinned");
+            entity.Property(e => e.AttachedDocumentId).HasColumnName("attached_document_id");
             entity.Property(e => e.SessionName)
                 .HasMaxLength(255)
                 .HasColumnName("session_name");
@@ -272,6 +274,20 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
             entity.HasOne(e => e.Document).WithMany(d => d.DocumentActivities).HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.User).WithMany(u => u.DocumentActivities).HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<DocumentShare>(entity =>
+        {
+            entity.HasKey(e => e.ShareId);
+            entity.ToTable("document_shares");
+            entity.HasIndex(e => new { e.DocumentId, e.SharedWithUserId }).IsUnique();
+            entity.Property(e => e.ShareId).HasColumnName("share_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.OwnerUserId).HasColumnName("owner_user_id");
+            entity.Property(e => e.SharedWithUserId).HasColumnName("shared_with_user_id");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.HasOne(e => e.Document).WithMany().HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.SharedWithUser).WithMany().HasForeignKey(e => e.SharedWithUserId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<DocumentExtractedText>(entity =>

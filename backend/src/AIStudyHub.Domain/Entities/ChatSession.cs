@@ -27,6 +27,8 @@ public partial class ChatSession
         get; set;
     }
 
+    public int? AttachedDocumentId { get; set; }
+
     public virtual ICollection<ChatMessage> ChatMessages { get; set; } = new List<ChatMessage>();
 
     public virtual User User { get; set; } = null!;

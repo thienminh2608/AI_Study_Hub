@@ -37,6 +37,9 @@ public class DocumentController : ControllerBase
         return userId;
     }
 
+    private Task<bool> IsSharedWithAsync(int documentId, int userId) =>
+        _db.DocumentShares.AnyAsync(s => s.DocumentId == documentId && s.SharedWithUserId == userId);
+
     [HttpPost("upload")]
     public async Task<IActionResult> Upload(IFormFile file, [FromQuery] int? folderId)
     {
@@ -199,7 +202,7 @@ public class DocumentController : ControllerBase
 
         // Access check
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
@@ -242,7 +245,7 @@ public class DocumentController : ControllerBase
         }
 
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC")
+        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId))
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
@@ -269,7 +272,7 @@ public class DocumentController : ControllerBase
             });
 
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
                 message = "Bạn không có quyền tải tài liệu này."
@@ -300,6 +303,61 @@ public class DocumentController : ControllerBase
 
     [HttpGet("analytics")]
     public async Task<IActionResult> GetAnalytics() => Ok(await _documentService.GetUserAnalyticsAsync(GetCurrentUserId()));
+
+    [HttpGet("shared-with-me")]
+    public async Task<IActionResult> SharedWithMe()
+    {
+        var userId = GetCurrentUserId();
+        var ids = await _db.DocumentShares.AsNoTracking().Where(s => s.SharedWithUserId == userId)
+            .OrderByDescending(s => s.CreatedAt).Select(s => s.DocumentId).ToListAsync();
+        var result = new List<DocumentResponseDto>();
+        foreach (var id in ids)
+        {
+            var document = await _documentService.GetDocumentByIdAsync(id);
+            if (document != null) result.Add(document);
+        }
+        return Ok(result);
+    }
+
+    [HttpGet("{id}/shares")]
+    public async Task<IActionResult> Shares(int id)
+    {
+        var userId = GetCurrentUserId();
+        if (!await _db.Documents.AnyAsync(d => d.DocumentId == id && d.UserId == userId)) return Forbid();
+        return Ok(await _db.DocumentShares.AsNoTracking().Where(s => s.DocumentId == id)
+            .Select(s => new { s.SharedWithUserId, s.SharedWithUser.Username, s.SharedWithUser.Email, s.CreatedAt }).ToListAsync());
+    }
+
+    [HttpPost("{id}/shares/{friendUserId}")]
+    public async Task<IActionResult> ShareWithFriend(int id, int friendUserId)
+    {
+        var userId = GetCurrentUserId();
+        var document = await _db.Documents.FirstOrDefaultAsync(d => d.DocumentId == id && d.UserId == userId);
+        if (document == null) return NotFound(new { message = "Không tìm thấy tài liệu." });
+        var areFriends = await _db.Friendships.AnyAsync(f => f.Status == "ACCEPTED" &&
+            ((f.RequesterId == userId && f.AddresseeId == friendUserId) || (f.RequesterId == friendUserId && f.AddresseeId == userId)));
+        if (!areFriends) return BadRequest(new { message = "Chỉ có thể chia sẻ tài liệu cho bạn bè." });
+        if (!await _db.DocumentShares.AnyAsync(s => s.DocumentId == id && s.SharedWithUserId == friendUserId))
+        {
+            _db.DocumentShares.Add(new DocumentShare { DocumentId = id, OwnerUserId = userId, SharedWithUserId = friendUserId, CreatedAt = DateTime.Now });
+            _db.ModerationNotices.Add(new ModerationNotice { UserId = friendUserId, DocumentId = id, RelatedUserId = userId,
+                Type = "DOCUMENT_SHARED", Title = "Bạn nhận được một tài liệu", Message = $"Một người bạn đã chia sẻ tài liệu “{document.Title}” với bạn.",
+                ActionUrl = $"/document/{id}", IsRead = false, CreatedAt = DateTime.Now });
+            await _db.SaveChangesAsync();
+        }
+        return Ok(new { message = "Đã chia sẻ tài liệu." });
+    }
+
+    [HttpDelete("{id}/shares/{friendUserId}")]
+    public async Task<IActionResult> RemoveShare(int id, int friendUserId)
+    {
+        var userId = GetCurrentUserId();
+        var share = await _db.DocumentShares.FirstOrDefaultAsync(s => s.DocumentId == id && s.OwnerUserId == userId && s.SharedWithUserId == friendUserId);
+        if (share == null) return NotFound();
+        _db.DocumentShares.Remove(share);
+        await _db.SaveChangesAsync();
+        return NoContent();
+    }
 
     [HttpGet("{id}/audience")]
     public async Task<IActionResult> GetAudience(int id)
@@ -334,7 +392,7 @@ public class DocumentController : ControllerBase
     {
         var userId = GetCurrentUserId();
         var report = await _db.DocumentReports.Include(r => r.Document).FirstOrDefaultAsync(r => r.ReportId == reportId && r.Document.UserId == userId);
-        if (report == null || report.Status != "VIOLATION_CONFIRMED" || string.IsNullOrWhiteSpace(dto.Explanation) || await _db.ModerationAppeals.AnyAsync(a => a.ReportId == reportId))
+        if (report == null || report.Status is not ("VIOLATION_CONFIRMED" or "ACTION_TAKEN" or "ACTIONED") || string.IsNullOrWhiteSpace(dto.Explanation) || await _db.ModerationAppeals.AnyAsync(a => a.ReportId == reportId))
             return BadRequest(new
             {
                 message = "Không thể gửi giải trình."
@@ -367,7 +425,8 @@ public class DocumentController : ControllerBase
     public async Task<IActionResult> AppealableReport(int documentId)
     {
         var userId = GetCurrentUserId();
-        var reportId = await _db.DocumentReports.AsNoTracking().Where(r => r.DocumentId == documentId && r.Document.UserId == userId && r.Status == "VIOLATION_CONFIRMED")
+        var reportId = await _db.DocumentReports.AsNoTracking().Where(r => r.DocumentId == documentId && r.Document.UserId == userId &&
+            (r.Status == "VIOLATION_CONFIRMED" || r.Status == "ACTION_TAKEN" || r.Status == "ACTIONED"))
             .OrderByDescending(r => r.ResolvedAt).Select(r => (int?)r.ReportId).FirstOrDefaultAsync();
         return Ok(new
         {

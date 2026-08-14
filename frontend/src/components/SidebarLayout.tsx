@@ -29,7 +29,9 @@ export const SidebarLayout: React.FC = () => {
 
   return (
     <div className="layout-container">
-      {user && !isAdmin && !isModerator && <ModerationNoticePopup />}
+      {user && !isAdmin && !isModerator && location.pathname !== '/notifications' && (
+        <ModerationNoticePopup />
+      )}
       {/* Sidebar Navigation */}
       <aside className="sidebar glass-panel">
         <div className="logo-section">

@@ -3,6 +3,7 @@ import { Bell, CheckCheck, ExternalLink, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
 import { NotificationTypeIcon } from './NotificationTypeIcon';
+import { formatDateTime } from '../utils/dateTime';
 
 export const NotificationBell: React.FC = () => {
   const [open, setOpen] = useState(false);
@@ -50,7 +51,10 @@ export const NotificationBell: React.FC = () => {
         className="notification-trigger"
         aria-label={`Thông báo${unread ? `, ${unread} chưa đọc` : ''}`}
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (!open) load();
+          setOpen((value) => !value);
+        }}
       >
         <Bell size={21} />
         {unread > 0 && <span className="notification-count">{unread > 99 ? '99+' : unread}</span>}
@@ -94,7 +98,7 @@ export const NotificationBell: React.FC = () => {
                   <span>
                     <strong>{notice.title}</strong>
                     <small>{notice.message}</small>
-                    <time>{new Date(notice.createdAt).toLocaleString('vi-VN')}</time>
+                    <time>{formatDateTime(notice.createdAt)}</time>
                   </span>
                 </Link>
               ))

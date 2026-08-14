@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
+import { formatDateTime } from '../utils/dateTime';
 import { Loader, X } from 'lucide-react';
 
 const DEPOSIT_AMOUNTS = [20_000, 50_000, 100_000, 200_000, 500_000, 1_000_000];
@@ -317,8 +318,8 @@ export const Wallet: React.FC = () => {
                         {tx.amount.toLocaleString()}đ
                       </td>
                       <td>{renderStatusBadge(tx.status)}</td>
-                      <td>{tx.startedAt ? new Date(tx.startedAt).toLocaleString() : 'N/A'}</td>
-                      <td>{tx.completedAt ? new Date(tx.completedAt).toLocaleString() : '---'}</td>
+                      <td>{formatDateTime(tx.startedAt)}</td>
+                      <td>{formatDateTime(tx.completedAt)}</td>
                     </tr>
                   );
                 })}

@@ -77,6 +77,9 @@ public class DocumentResponseDto
     {
         get; set;
     }
+    public bool RequiresAppeal { get; set; }
+    public bool PublicReviewBlocked { get; set; }
+    public string? AppealStatus { get; set; }
 }
 
 public class DocumentAudienceDto
@@ -131,6 +134,8 @@ public class DocumentAnalyticsDto
         get; set;
     }
     public List<DocumentResponseDto> Documents { get; set; } = [];
+    public int PendingReviewCount { get; set; }
+    public List<DocumentResponseDto> PendingReviewDocuments { get; set; } = [];
 }
 
 public class DocumentDetailDto

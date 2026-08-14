@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import { FileTypeIcon } from '../components/FileTypeIcon';
 import { AdminConfiguration } from './AdminConfiguration';
 import { useUiFeedback } from '../context/UiFeedbackContext';
+import { formatDateTime } from '../utils/dateTime';
 import {
   Users,
   FileText,
@@ -773,7 +774,7 @@ export const AdminDashboard: React.FC = () => {
                           <td>
                             <span className={`tx-status-badge ${tx.status}`}>{tx.status}</span>
                           </td>
-                          <td>{tx.startedAt ? new Date(tx.startedAt).toLocaleString() : 'N/A'}</td>
+                          <td>{formatDateTime(tx.startedAt)}</td>
                           <td>
                             {isPending ? (
                               <div className="table-actions">
@@ -1175,7 +1176,7 @@ export const AdminDashboard: React.FC = () => {
                 <span>Thời gian</span>
                 <strong>
                   {selectedReport.createdAt
-                    ? new Date(selectedReport.createdAt).toLocaleString('vi-VN')
+                    ? formatDateTime(selectedReport.createdAt)
                     : 'Không có dữ liệu'}
                 </strong>
               </div>

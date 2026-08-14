@@ -2,6 +2,7 @@ using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Services;
 using AIStudyHub.Domain.Entities;
 using AIStudyHub.Infrastructure.Services.Gemini;
+using Microsoft.EntityFrameworkCore;
 
 namespace AIStudyHub.UnitTests;
 
@@ -43,6 +44,10 @@ public class SecurityRegressionTests
 
         Assert.False(await service.UpdateFriendshipStatusAsync(1, 2, "ACCEPTED"));
         Assert.True(await service.UpdateFriendshipStatusAsync(2, 1, "ACCEPTED"));
+        var notice = await db.ModerationNotices.SingleAsync();
+        Assert.Equal(1, notice.UserId);
+        Assert.Equal(2, notice.RelatedUserId);
+        Assert.Equal("FRIEND_ACCEPTED", notice.Type);
     }
 
     private static User CreateUser(int id) => new()

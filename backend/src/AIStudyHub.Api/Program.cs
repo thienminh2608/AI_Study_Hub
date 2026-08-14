@@ -98,6 +98,8 @@ using (var scope = app.Services.CreateScope())
     await db.Database.ExecuteSqlRawAsync("""
         IF COL_LENGTH('documents', 'view_count') IS NULL
             ALTER TABLE documents ADD view_count INT NOT NULL CONSTRAINT DF_documents_view_count DEFAULT 0;
+        IF COL_LENGTH('chat_sessions', 'attached_document_id') IS NULL
+            ALTER TABLE chat_sessions ADD attached_document_id INT NULL;
         IF COL_LENGTH('documents', 'subject') IS NULL
             ALTER TABLE documents ADD subject NVARCHAR(100) NOT NULL CONSTRAINT DF_documents_subject DEFAULT N'Khác';
         IF COL_LENGTH('documents', 'requested_visibility') IS NULL ALTER TABLE documents ADD requested_visibility VARCHAR(20) NOT NULL CONSTRAINT DF_documents_requested_visibility DEFAULT 'PRIVATE';
@@ -153,6 +155,19 @@ using (var scope = app.Services.CreateScope())
                 CONSTRAINT FK_document_activities_user FOREIGN KEY(user_id) REFERENCES users(user_id)
             );
             CREATE INDEX IX_document_activities_document_type ON document_activities(document_id, activity_type);
+        END
+        IF OBJECT_ID('document_shares', 'U') IS NULL
+        BEGIN
+            CREATE TABLE document_shares (
+                share_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                document_id INT NOT NULL,
+                owner_user_id INT NOT NULL,
+                shared_with_user_id INT NOT NULL,
+                created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                CONSTRAINT UQ_document_shares UNIQUE(document_id, shared_with_user_id),
+                CONSTRAINT FK_document_shares_document FOREIGN KEY(document_id) REFERENCES documents(document_id) ON DELETE CASCADE,
+                CONSTRAINT FK_document_shares_user FOREIGN KEY(shared_with_user_id) REFERENCES users(user_id)
+            );
         END
         IF OBJECT_ID('document_chunks', 'U') IS NULL
         BEGIN

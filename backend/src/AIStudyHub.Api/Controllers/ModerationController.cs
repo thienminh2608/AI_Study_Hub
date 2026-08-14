@@ -14,6 +14,15 @@ public class ModerationController(IStudyHubDbContext db, IDocumentService docume
 {
     private int ActorId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
+    [HttpGet("summary")]
+    public async Task<IActionResult> Summary() => Ok(new
+    {
+        PendingDocuments = await db.Documents.CountAsync(d => d.ModerationStatus == "PENDING_REVIEW" || d.ModerationStatus == "IN_REVIEW"),
+        PendingReports = await db.DocumentReports.CountAsync(r => r.Status == "PENDING" || r.Status == "IN_REVIEW" || r.Status == "RESTRICTED"),
+        PendingAppeals = await db.ModerationAppeals.CountAsync(a => a.Status == "PENDING"),
+        Completed = await db.ModerationActions.CountAsync()
+    });
+
     [HttpGet("queue")]
     public async Task<IActionResult> Queue() => Ok(await db.Documents.AsNoTracking().Include(d => d.User)
         .Where(d => d.ModerationStatus == "PENDING_REVIEW" || d.ModerationStatus == "IN_REVIEW")
@@ -87,6 +96,9 @@ public class ModerationController(IStudyHubDbContext db, IDocumentService docume
         if (normalized is "REJECT" or "REQUEST-CHANGES")
             db.ModerationNotices.Add(Notice(doc.UserId, doc.DocumentId, null, normalized, doc.Title,
                 normalized == "REJECT" ? $"Tài liệu đã bị từ chối công khai. Lý do: {dto.Note}" : $"Tài liệu cần được chỉnh sửa trước khi gửi duyệt lại. Nội dung: {dto.Note}", false));
+        else if (normalized == "APPROVE")
+            db.ModerationNotices.Add(Notice(doc.UserId, doc.DocumentId, null, "DOCUMENT_APPROVED", "Tài liệu đã được xét duyệt",
+                $"Tài liệu “{doc.Title}” đã được xét duyệt thành công và hiện được công khai.", false));
         db.ModerationActions.Add(Action(id, null, normalized, previous, doc.ModerationStatus, dto.Note));
         await db.SaveChangesAsync();
         return Ok(new
@@ -216,8 +228,10 @@ public class ModerationController(IStudyHubDbContext db, IDocumentService docume
         {
             appeal.Status = "RESTORED";
             appeal.Report.Status = "RESTORED";
-            appeal.Report.Document.SharingPermission = "PUBLIC";
-            appeal.Report.Document.ModerationStatus = "APPROVED";
+            appeal.Report.Document.SharingPermission = "PRIVATE";
+            appeal.Report.Document.RequestedVisibility = "PRIVATE";
+            appeal.Report.Document.ModerationStatus = "NOT_REQUESTED";
+            appeal.Report.Document.ModerationSubmittedAt = null;
             appeal.Report.Document.IsFlagged = false;
         }
         else if (normalized == "UPHOLD")
@@ -239,7 +253,7 @@ public class ModerationController(IStudyHubDbContext db, IDocumentService docume
             Type = normalized == "RESTORE" ? "APPEAL_RESTORED" : "APPEAL_UPHELD",
             Title = normalized == "RESTORE" ? "Tài liệu đã được khôi phục" : "Quyết định xử lý được giữ nguyên",
             Message = normalized == "RESTORE"
-                ? $"Giải trình cho tài liệu “{appeal.Report.Document.Title}” đã được chấp nhận và tài liệu được khôi phục."
+                ? $"Giải trình cho tài liệu “{appeal.Report.Document.Title}” đã được chấp nhận. Tài liệu đã được khôi phục ở chế độ riêng tư; bạn có thể gửi yêu cầu xét duyệt công khai mới."
                 : $"Giải trình cho tài liệu “{appeal.Report.Document.Title}” không làm thay đổi quyết định xử lý. {dto.Note}",
             ActionUrl = $"/notifications?reportId={appeal.ReportId}",
             IsRead = false,

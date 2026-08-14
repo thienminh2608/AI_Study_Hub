@@ -14,6 +14,7 @@ import {
   BookOpen,
   Calendar,
   Link as LinkIcon,
+  X,
 } from 'lucide-react';
 
 interface ChatSession {
@@ -21,6 +22,8 @@ interface ChatSession {
   sessionName: string;
   isPinned: boolean;
   createdAt: string;
+  attachedDocumentId?: number | null;
+  attachedDocumentTitle?: string | null;
 }
 
 interface ChatMessage {
@@ -47,6 +50,7 @@ export const ChatAssistant: React.FC = () => {
   // Forms & inputs
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [showCreateSession, setShowCreateSession] = useState(false);
+  const [createSessionError, setCreateSessionError] = useState('');
   const [inputMessage, setInputMessage] = useState('');
   const [documents, setDocuments] = useState<ChatDocument[]>([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null);
@@ -93,12 +97,16 @@ export const ChatAssistant: React.FC = () => {
     loadSessions();
     Promise.all([
       api.document.getUserDocuments(),
+      api.document.getSharedWithMe(),
       requestedDocumentId > 0
         ? api.document.getById(requestedDocumentId).catch(() => null)
         : Promise.resolve(null),
     ])
-      .then(([data, requestedDocument]) => {
-        const next = data as ChatDocument[];
+      .then(([data, sharedDocuments, requestedDocument]) => {
+        const next = [...data, ...sharedDocuments].filter(
+          (document, index, all) =>
+            all.findIndex((item) => item.documentId === document.documentId) === index,
+        ) as ChatDocument[];
         if (
           requestedDocument &&
           !next.some((document) => document.documentId === requestedDocument.documentId)
@@ -114,6 +122,8 @@ export const ChatAssistant: React.FC = () => {
   useEffect(() => {
     if (currentSessionId) {
       loadMessages(currentSessionId);
+      const session = sessions.find((item) => item.sessionId === currentSessionId);
+      if (session) setSelectedDocumentId(session.attachedDocumentId ?? null);
     } else {
       setMessages([]);
     }
@@ -127,11 +137,15 @@ export const ChatAssistant: React.FC = () => {
   // Session Handlers
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSessionTitle.trim()) return;
+    if (!newSessionTitle.trim()) {
+      setCreateSessionError('Vui lòng nhập tên phiên trò chuyện.');
+      return;
+    }
 
     try {
       const newSession = await api.chat.createSession({ sessionName: newSessionTitle.trim() });
       setNewSessionTitle('');
+      setCreateSessionError('');
       setShowCreateSession(false);
       await loadSessions();
       setCurrentSessionId(newSession.sessionId);
@@ -200,7 +214,7 @@ export const ChatAssistant: React.FC = () => {
         messageContent: userMsgText,
         documentId: selectedDocumentId ?? undefined,
       });
-      setSelectedDocumentId(null);
+      await loadSessions();
 
       // Clear action and refresh message list
       setAgentAction(null);
@@ -420,9 +434,18 @@ export const ChatAssistant: React.FC = () => {
               <form onSubmit={handleSendMessage} className="chat-input-form">
                 <select
                   value={selectedDocumentId ?? ''}
-                  onChange={(e) =>
-                    setSelectedDocumentId(e.target.value ? Number(e.target.value) : null)
-                  }
+                  onChange={async (e) => {
+                    const documentId = e.target.value ? Number(e.target.value) : null;
+                    setSelectedDocumentId(documentId);
+                    if (!currentSessionId) return;
+                    try {
+                      await api.chat.setDocument(currentSessionId, documentId);
+                      await loadSessions();
+                      if (!documentId) notify('Đã gỡ tài liệu khỏi phiên chat.', 'success');
+                    } catch (err: any) {
+                      notify(err.message || 'Không thể cập nhật tài liệu đính kèm.', 'error');
+                    }
+                  }}
                   className="input-control"
                   disabled={sending}
                   aria-label="Tài liệu đính kèm"
@@ -466,18 +489,41 @@ export const ChatAssistant: React.FC = () => {
 
       {/* Modal: Create Chat Session */}
       {showCreateSession && (
-        <div className="modal-overlay">
-          <div className="modal-box glass-panel animate-slide-up">
-            <h3>Tạo phiên trò chuyện mới</h3>
+        <div className="modal-overlay" onMouseDown={() => setShowCreateSession(false)}>
+          <div
+            className="modal-box create-session-modal glass-panel animate-slide-up"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className="create-session-close"
+              onClick={() => setShowCreateSession(false)}
+              aria-label="Đóng"
+            >
+              <X size={20} />
+            </button>
+            <span className="create-session-icon">
+              <MessageSquare size={22} />
+            </span>
+            <small>PHIÊN TRÒ CHUYỆN MỚI</small>
+            <h3>Bạn muốn học về chủ đề gì?</h3>
+            <p>Đặt một tên ngắn gọn để dễ tìm lại cuộc trò chuyện.</p>
             <form onSubmit={handleCreateSession}>
+              <label htmlFor="session-name">Tên phiên trò chuyện</label>
               <input
+                id="session-name"
                 type="text"
                 placeholder="Nhập chủ đề cuộc hội thoại..."
                 value={newSessionTitle}
-                onChange={(e) => setNewSessionTitle(e.target.value)}
+                onChange={(e) => {
+                  setNewSessionTitle(e.target.value);
+                  if (e.target.value.trim()) setCreateSessionError('');
+                }}
                 className="input-control"
                 autoFocus
               />
+              {createSessionError && (
+                <span className="create-session-error">{createSessionError}</span>
+              )}
               <div className="modal-actions">
                 <button
                   type="button"
@@ -499,6 +545,9 @@ export const ChatAssistant: React.FC = () => {
         .chat-container {
           height: calc(100vh - 6rem);
         }
+
+        .modal-overlay{position:fixed;inset:0;z-index:3000;display:grid;place-items:center;padding:1rem;background:rgba(3,7,18,.82);backdrop-filter:blur(8px)}
+        .create-session-modal{position:relative;width:min(500px,calc(100vw - 2rem));max-height:calc(100vh - 2rem);overflow:auto;padding:1.7rem;border:1px solid rgba(255,255,255,.1);border-radius:var(--radius-md);box-shadow:0 24px 80px rgba(0,0,0,.45);background:rgba(17,17,26,.98)}.create-session-close{position:absolute;right:1rem;top:1rem;display:grid;place-items:center;width:34px;height:34px;border:0;border-radius:8px;background:rgba(255,255,255,.05);color:var(--text-secondary);cursor:pointer}.create-session-close:hover{color:var(--text-primary);background:rgba(255,255,255,.1)}.create-session-icon{width:46px;height:46px;display:grid;place-items:center;margin-bottom:.8rem;border-radius:13px;background:rgba(0,180,216,.12);color:var(--accent-blue)}.create-session-modal h3{margin:.3rem 0;padding-right:2rem}.create-session-modal>p{margin-bottom:1.2rem;color:var(--text-secondary)}.create-session-modal form{display:grid;gap:.7rem}.create-session-modal form>label{font-weight:700}.create-session-modal .input-control{width:100%;padding:.78rem .9rem;border:1px solid rgba(255,255,255,.12);border-radius:9px;outline:0;background:rgba(255,255,255,.04);color:var(--text-primary)}.create-session-modal .input-control:focus{border-color:var(--accent-blue);box-shadow:0 0 0 3px rgba(0,180,216,.12)}.create-session-error{color:var(--danger);font-size:.82rem}.create-session-modal .modal-actions{display:flex;justify-content:flex-end;gap:.65rem;margin-top:.75rem}.create-session-modal .modal-actions button{min-width:105px}@media(max-width:520px){.create-session-modal{padding:1.25rem}.create-session-modal .modal-actions{display:grid;grid-template-columns:1fr 1fr}.create-session-modal .modal-actions button{width:100%;min-width:0}}
 
         .chat-layout {
           display: flex;

@@ -93,6 +93,22 @@ public class FriendshipService : IFriendshipService
             return false;
         }
 
+        if (status == "ACCEPTED")
+        {
+            var accepterName = await _dbContext.Users.Where(u => u.UserId == myUserId).Select(u => u.Username).FirstAsync();
+            _dbContext.ModerationNotices.Add(new ModerationNotice
+            {
+                UserId = rel.RequesterId,
+                RelatedUserId = myUserId,
+                Type = "FRIEND_ACCEPTED",
+                Title = "Lời mời kết bạn đã được chấp nhận",
+                Message = $"{accepterName} và bạn đã trở thành bạn bè.",
+                ActionUrl = "/friends",
+                IsRead = false,
+                CreatedAt = DateTime.Now
+            });
+        }
+
         rel.Status = status;
         if (status == "BLOCKED")
         {

@@ -26,6 +26,7 @@ public interface IStudyHubDbContext
     {
         get; set;
     }
+    DbSet<DocumentShare> DocumentShares { get; set; }
     DbSet<DocumentExtractedText> DocumentExtractedTexts
     {
         get; set;

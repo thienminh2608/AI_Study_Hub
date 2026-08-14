@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink } from 'react-router-dom';
+import { formatDateTime } from '../utils/dateTime';
 import {
   Bookmark,
   CalendarDays,
@@ -404,7 +405,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
                     </button>
                   </td>
                   <td>{doc.uploaderName}</td>
-                  <td>{doc.createdAt ? new Date(doc.createdAt).toLocaleString('vi-VN') : '—'}</td>
+                  <td>{formatDateTime(doc.createdAt)}</td>
                   <td>{doc.bookmarkCount ?? 0}</td>
                   <td>{doc.viewCount ?? 0}</td>
                   <td>{doc.downloadCount ?? 0}</td>
@@ -638,7 +639,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
                     <span>Ngày đăng</span>
                     <strong>
                       {detail.document.createdAt
-                        ? new Date(detail.document.createdAt).toLocaleString('vi-VN')
+                        ? formatDateTime(detail.document.createdAt)
                         : 'Không có dữ liệu'}
                     </strong>
                   </div>
@@ -668,9 +669,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
                           <strong>
                             {person.viewCount} xem · {person.downloadCount} tải
                           </strong>
-                          <small>
-                            Lần cuối: {new Date(person.lastActivityAt).toLocaleString('vi-VN')}
-                          </small>
+                          <small>Lần cuối: {formatDateTime(person.lastActivityAt)}</small>
                         </span>
                       </div>
                     ))

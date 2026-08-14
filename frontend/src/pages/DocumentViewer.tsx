@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
@@ -24,6 +25,9 @@ interface DocumentDetails {
   shareLinkToken?: string;
   createdAt?: string;
   fileAvailable?: boolean;
+  requiresAppeal?: boolean;
+  publicReviewBlocked?: boolean;
+  appealStatus?: string;
 }
 
 export const DocumentViewer: React.FC = () => {
@@ -54,6 +58,7 @@ export const DocumentViewer: React.FC = () => {
     explanation: string;
     evidenceUrl: string;
   } | null>(null);
+  const [publicRequestBlock, setPublicRequestBlock] = useState<string | null>(null);
 
   const loadDocumentDetails = async () => {
     if (!documentId) return;
@@ -89,6 +94,16 @@ export const DocumentViewer: React.FC = () => {
   const handleToggleSharing = async () => {
     if (!doc) return;
     const nextPermission = sharingPermission === 'PUBLIC' ? 'PRIVATE' : 'PUBLIC';
+    if (nextPermission === 'PUBLIC' && doc.publicReviewBlocked) {
+      setPublicRequestBlock(
+        doc.appealStatus === 'PENDING'
+          ? 'Giải trình của tài liệu đang chờ Moderator giải quyết. Bạn chỉ có thể yêu cầu công khai sau khi giải trình được chấp nhận.'
+          : doc.requiresAppeal
+            ? 'Tài liệu đã bị xử lý vi phạm. Bạn phải gửi giải trình và được Moderator chấp nhận trước khi yêu cầu công khai.'
+            : 'Moderator đã giữ nguyên quyết định vi phạm. Tài liệu này chưa đủ điều kiện yêu cầu công khai.',
+      );
+      return;
+    }
 
     setUpdatingPermission(true);
     try {
@@ -193,6 +208,15 @@ export const DocumentViewer: React.FC = () => {
                 onClick={handleToggleSharing}
                 className={`btn-secondary ${sharingPermission === 'PUBLIC' ? 'shared-active' : ''}`}
                 disabled={updatingPermission}
+                title={
+                  doc.publicReviewBlocked
+                    ? doc.appealStatus === 'PENDING'
+                      ? 'Đang chờ Moderator giải quyết giải trình'
+                      : doc.requiresAppeal
+                        ? 'Cần gửi giải trình trước'
+                        : 'Quyết định vi phạm vẫn còn hiệu lực'
+                    : undefined
+                }
               >
                 {updatingPermission ? (
                   <Loader className="spin" size={16} />
@@ -204,11 +228,17 @@ export const DocumentViewer: React.FC = () => {
                 <span>
                   {sharingPermission === 'PUBLIC'
                     ? 'Đang công khai'
-                    : doc.moderationStatus === 'PENDING_REVIEW'
-                      ? 'Đang chờ duyệt'
-                      : doc.moderationStatus === 'NEEDS_CHANGES'
-                        ? 'Cần chỉnh sửa'
-                        : 'Yêu cầu công khai'}
+                    : doc.appealStatus === 'PENDING'
+                      ? 'Chờ giải quyết giải trình'
+                      : doc.publicReviewBlocked
+                        ? doc.requiresAppeal
+                          ? 'Cần gửi giải trình'
+                          : 'Chưa đủ điều kiện công khai'
+                        : doc.moderationStatus === 'PENDING_REVIEW'
+                          ? 'Đang chờ duyệt'
+                          : doc.moderationStatus === 'NEEDS_CHANGES'
+                            ? 'Cần chỉnh sửa'
+                            : 'Yêu cầu công khai'}
                 </span>
               </button>
             )}
@@ -252,10 +282,10 @@ export const DocumentViewer: React.FC = () => {
                 <span>Xóa</span>
               </button>
             )}
-            {isOwner && doc.moderationStatus === 'HIDDEN' && (
+            {isOwner && doc.requiresAppeal && (
               <button onClick={handleAppeal} className="btn-secondary">
                 <AlertOctagon size={16} />
-                <span>Gửi giải trình</span>
+                <span>Cần gửi giải trình</span>
               </button>
             )}
           </div>
@@ -429,66 +459,155 @@ export const DocumentViewer: React.FC = () => {
           </div>
         </div>
       )}
-      {appealForm && (
-        <div className="modal-overlay">
-          <div className="modal-box glass-panel">
-            <h3>Gửi giải trình</h3>
-            <p>Trình bày căn cứ để Moderator xem xét lại quyết định.</p>
-            <div className="report-form">
-              <textarea
-                className="input-control"
-                rows={5}
-                value={appealForm.explanation}
-                onChange={(e) => {
-                  setAppealForm({ ...appealForm, explanation: e.target.value });
-                  if (e.target.value.trim()) setFormError('');
-                }}
-                placeholder="Nội dung giải trình và căn cứ..."
-              />
-              <input
-                className="input-control"
-                value={appealForm.evidenceUrl}
-                onChange={(e) => setAppealForm({ ...appealForm, evidenceUrl: e.target.value })}
-                placeholder="URL bằng chứng (không bắt buộc)"
-              />
-              {formError && (
-                <span className="form-error" role="alert">
-                  {formError}
+      {appealForm &&
+        createPortal(
+          <div
+            className="viewport-modal-overlay appeal-overlay"
+            onMouseDown={() => !reporting && setAppealForm(null)}
+          >
+            <form
+              className="modal-box glass-panel appeal-modal animate-slide-up"
+              onMouseDown={(event) => event.stopPropagation()}
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (!appealForm.explanation.trim()) {
+                  setFormError('Vui lòng nhập nội dung giải trình.');
+                  return;
+                }
+                setReporting(true);
+                try {
+                  await api.document.appeal(appealForm.reportId, {
+                    explanation: appealForm.explanation.trim(),
+                    evidenceUrl: appealForm.evidenceUrl.trim() || null,
+                  });
+                  setDoc((current) =>
+                    current
+                      ? {
+                          ...current,
+                          requiresAppeal: false,
+                          publicReviewBlocked: true,
+                          appealStatus: 'PENDING',
+                        }
+                      : current,
+                  );
+                  setAppealForm(null);
+                  notify('Đã gửi giải trình tới Moderator.', 'success');
+                } catch (error: any) {
+                  setFormError(error.message || 'Không thể gửi giải trình.');
+                } finally {
+                  setReporting(false);
+                }
+              }}
+            >
+              <button
+                type="button"
+                className="appeal-close"
+                onClick={() => setAppealForm(null)}
+                aria-label="Đóng"
+              >
+                ×
+              </button>
+              <div className="appeal-heading">
+                <span className="appeal-heading-icon">
+                  <AlertOctagon size={23} />
                 </span>
-              )}
+                <div>
+                  <small>YÊU CẦU XEM XÉT LẠI</small>
+                  <h2>Gửi giải trình</h2>
+                  <p>
+                    Tài liệu:{' '}
+                    <strong>
+                      {doc?.title}.{doc?.fileExtension}
+                    </strong>
+                  </p>
+                </div>
+              </div>
+              <p className="appeal-guidance">
+                Giải thích rõ lý do và cung cấp căn cứ để Moderator xem xét lại quyết định vi phạm.
+                Trong thời gian chờ xử lý, tài liệu không thể yêu cầu công khai.
+              </p>
+              <div className="report-form">
+                <label>
+                  <span>
+                    Nội dung giải trình <em>*</em>
+                  </span>
+                  <textarea
+                    className="input-control"
+                    rows={5}
+                    value={appealForm.explanation}
+                    onChange={(e) => {
+                      setAppealForm({ ...appealForm, explanation: e.target.value });
+                      if (e.target.value.trim()) setFormError('');
+                    }}
+                    placeholder="Nội dung giải trình và căn cứ..."
+                  />
+                </label>
+                <label>
+                  <span>
+                    Liên kết bằng chứng <small>(không bắt buộc)</small>
+                  </span>
+                  <input
+                    type="url"
+                    className="input-control"
+                    value={appealForm.evidenceUrl}
+                    onChange={(e) => setAppealForm({ ...appealForm, evidenceUrl: e.target.value })}
+                    placeholder="URL bằng chứng (không bắt buộc)"
+                  />
+                </label>
+                {formError && (
+                  <span className="form-error" role="alert">
+                    {formError}
+                  </span>
+                )}
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setAppealForm(null)}
+                  >
+                    Hủy
+                  </button>
+                  <button type="submit" className="btn-primary" disabled={reporting}>
+                    {reporting ? <Loader className="spin" size={16} /> : 'Gửi giải trình'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>,
+          document.body,
+        )}
+      {publicRequestBlock &&
+        createPortal(
+          <div className="viewport-modal-overlay" onMouseDown={() => setPublicRequestBlock(null)}>
+            <div
+              className="modal-box glass-panel public-block-modal animate-slide-up"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <span className="public-block-icon">
+                <AlertOctagon size={26} />
+              </span>
+              <h3>Chưa thể yêu cầu công khai</h3>
+              <p>{publicRequestBlock}</p>
               <div className="modal-actions">
-                <button className="btn-secondary" onClick={() => setAppealForm(null)}>
-                  Hủy
+                <button className="btn-secondary" onClick={() => setPublicRequestBlock(null)}>
+                  Đã hiểu
                 </button>
-                <button
-                  className="btn-primary"
-                  onClick={async () => {
-                    if (!appealForm.explanation.trim()) {
-                      setFormError('Vui lòng nhập nội dung giải trình.');
-                      return;
-                    }
-                    setReporting(true);
-                    try {
-                      await api.document.appeal(appealForm.reportId, {
-                        explanation: appealForm.explanation.trim(),
-                        evidenceUrl: appealForm.evidenceUrl.trim() || null,
-                      });
-                      setAppealForm(null);
-                    } catch (e: any) {
-                      setFormError(e.message || 'Không thể gửi giải trình.');
-                    } finally {
-                      setReporting(false);
-                    }
-                  }}
-                  disabled={reporting}
-                >
-                  {reporting ? <Loader className="spin" size={16} /> : 'Gửi giải trình'}
-                </button>
+                {doc?.requiresAppeal && (
+                  <button
+                    className="btn-primary"
+                    onClick={async () => {
+                      setPublicRequestBlock(null);
+                      await handleAppeal();
+                    }}
+                  >
+                    Gửi giải trình ngay
+                  </button>
+                )}
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
 
       <style>{`
         .viewer-container {
@@ -696,6 +815,8 @@ export const DocumentViewer: React.FC = () => {
           flex-direction: column;
           gap: 1rem;
         }
+
+        .appeal-overlay{z-index:3200}.appeal-modal{position:relative;width:min(640px,calc(100vw - 2rem));max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;display:grid;gap:1rem;background:rgba(17,17,26,.98)}.appeal-close{position:absolute;right:1rem;top:1rem;width:34px;height:34px;border:0;border-radius:8px;background:rgba(255,255,255,.05);color:var(--text-secondary);font-size:1.35rem;cursor:pointer}.appeal-heading{display:flex;align-items:flex-start;gap:.9rem;padding-right:2rem}.appeal-heading h2{margin:.15rem 0}.appeal-heading p{margin:.2rem 0 0;color:var(--text-secondary)}.appeal-heading-icon,.public-block-icon{width:46px;height:46px;display:grid;place-items:center;flex:0 0 auto;border-radius:12px;background:rgba(239,68,68,.12);color:#f87171}.appeal-guidance{padding:.85rem 1rem;border:1px solid rgba(56,189,248,.18);border-radius:9px;background:rgba(56,189,248,.06);color:var(--text-secondary);line-height:1.55}.appeal-modal label{display:grid;gap:.45rem}.appeal-modal label>span{font-weight:700}.appeal-modal label small{color:var(--text-muted);font-weight:400}.appeal-modal em{color:var(--danger)}.appeal-modal textarea{resize:vertical;min-height:130px}.appeal-modal .modal-actions{padding-top:.8rem;border-top:1px solid rgba(255,255,255,.08)}.public-block-modal{position:relative;width:min(520px,calc(100vw - 2rem));padding:1.5rem}.public-block-modal h3{margin:.9rem 0 .45rem}.public-block-modal>p{color:var(--text-secondary);line-height:1.65}.public-block-modal .modal-actions{flex-wrap:wrap}
 
         .text-area {
           resize: vertical;

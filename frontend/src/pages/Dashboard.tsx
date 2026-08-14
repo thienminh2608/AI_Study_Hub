@@ -11,10 +11,16 @@ import {
   AlertTriangle,
   FolderPlus,
   Loader,
+  Clock3,
+  X,
+  Share2,
+  Star,
+  ArrowUpDown,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { FileTypeIcon } from '../components/FileTypeIcon';
 import { useUiFeedback } from '../context/UiFeedbackContext';
+import { formatDateTime } from '../utils/dateTime';
 
 interface FolderItem {
   folderId: number;
@@ -37,6 +43,9 @@ interface DocumentItem {
   viewCount?: number;
   bookmarkCount?: number;
   subject?: string;
+  requiresAppeal?: boolean;
+  publicReviewBlocked?: boolean;
+  appealStatus?: string;
 }
 
 export const Dashboard: React.FC = () => {
@@ -59,8 +68,26 @@ export const Dashboard: React.FC = () => {
     totalViews: 0,
     totalBookmarks: 0,
     documents: [],
+    pendingReviewCount: 0,
+    pendingReviewDocuments: [],
   });
   const [audienceDetail, setAudienceDetail] = useState<any | null>(null);
+  const [showPendingReviews, setShowPendingReviews] = useState(false);
+  const [pendingNameDirection, setPendingNameDirection] = useState<'asc' | 'desc'>('asc');
+  const [shareTarget, setShareTarget] = useState<DocumentItem | null>(null);
+  const [friends, setFriends] = useState<any[]>([]);
+  const [sharedUserIds, setSharedUserIds] = useState<Set<number>>(new Set());
+  const [shareDraftUserIds, setShareDraftUserIds] = useState<Set<number>>(new Set());
+  const [favoriteFriendIds, setFavoriteFriendIds] = useState<Set<number>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('favorite-share-friends') ?? '[]'));
+    } catch {
+      return new Set();
+    }
+  });
+  const [friendNameDirection, setFriendNameDirection] = useState<'asc' | 'desc'>('asc');
+  const [savingShares, setSavingShares] = useState(false);
+  const [sharedWithMe, setSharedWithMe] = useState<DocumentItem[]>([]);
 
   // Modals & Forms
   const [showCreateFolder, setShowCreateFolder] = useState(false);
@@ -100,6 +127,7 @@ export const Dashboard: React.FC = () => {
       const allFoldersData = await api.folder.getAllFolders();
       setAllFolders(allFoldersData);
       setAnalytics(await api.document.getAnalytics());
+      if (currentFolderId === undefined) setSharedWithMe(await api.document.getSharedWithMe());
 
       // 3. Build Breadcrumbs
       if (currentFolderId) {
@@ -323,6 +351,56 @@ export const Dashboard: React.FC = () => {
     ));
   };
 
+  const openShare = async (document: DocumentItem) => {
+    const [friendItems, shares] = await Promise.all([
+      api.friendship.getFriends(),
+      api.document.getShares(document.documentId),
+    ]);
+    setFriends(friendItems);
+    const existing = new Set<number>(shares.map((item: any) => item.sharedWithUserId));
+    setSharedUserIds(existing);
+    setShareDraftUserIds(new Set(existing));
+    setShareTarget(document);
+  };
+
+  const toggleShareDraft = (friendUserId: number) => {
+    setShareDraftUserIds((current) => {
+      const next = new Set(current);
+      if (next.has(friendUserId)) next.delete(friendUserId);
+      else next.add(friendUserId);
+      return next;
+    });
+  };
+
+  const toggleFavoriteFriend = (friendUserId: number) => {
+    setFavoriteFriendIds((current) => {
+      const next = new Set(current);
+      if (next.has(friendUserId)) next.delete(friendUserId);
+      else next.add(friendUserId);
+      localStorage.setItem('favorite-share-friends', JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const confirmShares = async () => {
+    if (!shareTarget) return;
+    setSavingShares(true);
+    try {
+      const additions = [...shareDraftUserIds].filter((id) => !sharedUserIds.has(id));
+      const removals = [...sharedUserIds].filter((id) => !shareDraftUserIds.has(id));
+      await Promise.all([
+        ...additions.map((id) => api.document.shareWithFriend(shareTarget.documentId, id)),
+        ...removals.map((id) => api.document.removeShare(shareTarget.documentId, id)),
+      ]);
+      notify('Đã cập nhật danh sách bạn bè được chia sẻ.', 'success');
+      setShareTarget(null);
+    } catch (err: any) {
+      notify(err.message || 'Không thể cập nhật chia sẻ tài liệu.', 'error');
+    } finally {
+      setSavingShares(false);
+    }
+  };
+
   return (
     <div className="dashboard-container">
       <section className="user-analytics glass-panel">
@@ -334,6 +412,12 @@ export const Dashboard: React.FC = () => {
           <span>{analytics.totalDocuments} tài liệu</span>
         </div>
         <div className="analytics-stats">
+          <button className="analytics-stat-action" onClick={() => setShowPendingReviews(true)}>
+            <strong>{analytics.pendingReviewCount ?? 0}</strong>
+            <span>
+              <Clock3 size={14} /> Chờ xét duyệt
+            </span>
+          </button>
           <div>
             <strong>{analytics.publicDocuments}</strong>
             <span>Công khai</span>
@@ -496,9 +580,29 @@ export const Dashboard: React.FC = () => {
                               {doc.subject || 'Khác'} • {doc.fileSizeMb.toFixed(2)} MB •{' '}
                               {doc.aiParsingStatus}
                             </span>
+                            {doc.requiresAppeal && (
+                              <span className="appeal-required-badge">Cần gửi giải trình</span>
+                            )}
+                            {!doc.requiresAppeal && doc.appealStatus === 'PENDING' && (
+                              <span className="appeal-required-badge">
+                                Giải trình đang chờ xử lý
+                              </span>
+                            )}
+                            {doc.publicReviewBlocked && doc.appealStatus === 'UPHELD' && (
+                              <span className="appeal-required-badge">
+                                Vi phạm vẫn còn hiệu lực
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="card-actions">
+                          <button
+                            onClick={() => openShare(doc)}
+                            className="action-btn"
+                            title="Chia sẻ cho bạn bè"
+                          >
+                            <Share2 size={16} />
+                          </button>
                           <button
                             onClick={() => handleAskAi(doc)}
                             className="action-btn ask-ai-btn"
@@ -518,6 +622,37 @@ export const Dashboard: React.FC = () => {
                           >
                             <Trash2 size={16} />
                           </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {currentFolderId === undefined && sharedWithMe.length > 0 && (
+                <div className="section-block" style={{ marginTop: '1.5rem' }}>
+                  <h4>Được bạn bè chia sẻ ({sharedWithMe.length})</h4>
+                  <div className="grid-layout">
+                    {sharedWithMe.map((doc) => (
+                      <div
+                        key={`shared-${doc.documentId}`}
+                        className="item-card doc-card glass-card"
+                      >
+                        <div
+                          onClick={() => navigate(`/document/${doc.documentId}`)}
+                          className="item-info"
+                        >
+                          <FileTypeIcon
+                            extension={doc.fileExtension}
+                            size={28}
+                            className="doc-icon"
+                          />
+                          <div className="doc-metadata">
+                            <span className="item-title">
+                              {doc.title}.{doc.fileExtension}
+                            </span>
+                            <span className="doc-size">Tài liệu được chia sẻ</span>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -730,6 +865,163 @@ export const Dashboard: React.FC = () => {
         </div>
       )}
 
+      {showPendingReviews && (
+        <div className="modal-overlay" onMouseDown={() => setShowPendingReviews(false)}>
+          <div
+            className="modal-box pending-review-modal glass-panel"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              aria-label="Đóng"
+              onClick={() => setShowPendingReviews(false)}
+            >
+              <X size={20} />
+            </button>
+            <h3>Tài liệu đang chờ xét duyệt</h3>
+            <p>{analytics.pendingReviewCount ?? 0} tài liệu đang trong quy trình xét duyệt.</p>
+            <div className="pending-table-wrap">
+              <table className="pending-review-table">
+                <thead>
+                  <tr>
+                    <th>
+                      <button
+                        onClick={() =>
+                          setPendingNameDirection((v) => (v === 'asc' ? 'desc' : 'asc'))
+                        }
+                      >
+                        Tên tài liệu {pendingNameDirection === 'asc' ? '↑' : '↓'}
+                      </button>
+                    </th>
+                    <th>Trạng thái</th>
+                    <th>Ngày yêu cầu</th>
+                    <th>Ngày xét duyệt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...(analytics.pendingReviewDocuments ?? [])]
+                    .sort((a: any, b: any) => {
+                      const result = String(a.title).localeCompare(String(b.title), 'vi');
+                      return pendingNameDirection === 'asc' ? result : -result;
+                    })
+                    .map((doc: any) => (
+                      <tr key={doc.documentId}>
+                        <td>
+                          {doc.title}.{doc.fileExtension}
+                        </td>
+                        <td>
+                          {doc.moderationStatus === 'IN_REVIEW' ? 'Đang xử lý' : 'Chờ xét duyệt'}
+                        </td>
+                        <td>{formatDateTime(doc.moderationSubmittedAt)}</td>
+                        <td>{formatDateTime(doc.moderatedAt)}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              {!analytics.pendingReviewDocuments?.length && (
+                <div className="empty-state">
+                  <p>Không có tài liệu đang chờ xét duyệt.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shareTarget && (
+        <div className="modal-overlay" onMouseDown={() => setShareTarget(null)}>
+          <div
+            className="modal-box share-modal glass-panel"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button className="modal-close" onClick={() => setShareTarget(null)}>
+              <X size={20} />
+            </button>
+            <h3>Chia sẻ tài liệu cho bạn bè</h3>
+            <p>
+              {shareTarget.title}.{shareTarget.fileExtension}
+            </p>
+            <div className="share-toolbar">
+              <span>
+                Đã chọn {shareDraftUserIds.size}/{friends.length} người
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setFriendNameDirection((value) => (value === 'asc' ? 'desc' : 'asc'))
+                }
+              >
+                <ArrowUpDown size={15} /> Tên {friendNameDirection === 'asc' ? 'A–Z' : 'Z–A'}
+              </button>
+            </div>
+            <div className="share-friend-list">
+              {[...friends]
+                .sort((a, b) => {
+                  const favoriteDiff =
+                    Number(favoriteFriendIds.has(b.userId)) -
+                    Number(favoriteFriendIds.has(a.userId));
+                  if (favoriteDiff) return favoriteDiff;
+                  const result = String(a.username).localeCompare(String(b.username), 'vi');
+                  return friendNameDirection === 'asc' ? result : -result;
+                })
+                .map((friend) => (
+                  <label key={friend.userId}>
+                    <button
+                      type="button"
+                      className={`favorite-friend ${favoriteFriendIds.has(friend.userId) ? 'active' : ''}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        toggleFavoriteFriend(friend.userId);
+                      }}
+                      title="Ghim bạn bè để chọn nhanh lần sau"
+                      aria-label={`Ghim ${friend.username}`}
+                    >
+                      <Star
+                        size={18}
+                        fill={favoriteFriendIds.has(friend.userId) ? 'currentColor' : 'none'}
+                      />
+                    </button>
+                    <span>
+                      <strong>{friend.username}</strong>
+                      <small>{friend.email}</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={shareDraftUserIds.has(friend.userId)}
+                      onChange={() => toggleShareDraft(friend.userId)}
+                    />
+                  </label>
+                ))}
+              {!friends.length && <p>Bạn chưa có bạn bè để chia sẻ tài liệu.</p>}
+            </div>
+            <div className="modal-actions share-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShareTarget(null)}
+                disabled={savingShares}
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={confirmShares}
+                disabled={savingShares || !friends.length}
+              >
+                {savingShares ? (
+                  <>
+                    <Loader className="spin" size={16} /> Đang gửi...
+                  </>
+                ) : (
+                  'Xác nhận gửi'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteDocumentTarget && (
         <div className="modal-overlay">
           <div className="modal-box glass-panel">
@@ -768,7 +1060,10 @@ export const Dashboard: React.FC = () => {
           height: calc(100vh - 6rem);
         }
 
+        .analytics-stats{grid-template-columns:repeat(5,1fr)}.analytics-stat-action{padding:.8rem;border:0;border-radius:var(--radius-sm);background:rgba(255,255,255,.04);color:var(--text-primary);display:flex;flex-direction:column;text-align:left;cursor:pointer}.analytics-stat-action:hover{background:rgba(0,180,216,.12)}.analytics-stat-action span{display:flex;align-items:center;gap:.35rem}.pending-review-modal{position:relative;width:min(900px,94vw);max-height:82vh;overflow:auto}.modal-close{position:absolute;right:1rem;top:1rem;border:0;background:transparent;color:var(--text-primary);cursor:pointer}.pending-table-wrap{overflow-x:auto;margin-top:1rem}.pending-review-table{width:100%;border-collapse:collapse}.pending-review-table th,.pending-review-table td{padding:.8rem;text-align:left;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap}.pending-review-table th button{border:0;background:transparent;color:var(--text-primary);font:inherit;font-weight:700;cursor:pointer}
         @media(max-width:768px){.analytics-stats{grid-template-columns:repeat(2,1fr)}.analytics-heading,.audience-row{align-items:flex-start;flex-direction:column}}
+
+        .share-modal{position:relative;width:min(620px,94vw);padding:1.5rem}.share-toolbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-top:1rem;padding:.65rem .8rem;border-radius:9px;background:rgba(255,255,255,.035);color:var(--text-muted);font-size:.88rem}.share-toolbar button{display:flex;align-items:center;gap:.35rem;border:0;background:transparent;color:var(--accent-blue);cursor:pointer}.share-friend-list{display:grid;gap:.55rem;margin-top:.75rem;max-height:360px;overflow:auto;padding-right:.2rem}.share-friend-list label{display:flex;align-items:center;gap:.8rem;padding:.8rem;border:1px solid rgba(255,255,255,.08);border-radius:9px;background:rgba(255,255,255,.03);cursor:pointer}.share-friend-list label:hover{border-color:rgba(0,180,216,.35)}.share-friend-list label span{display:grid;flex:1;min-width:0}.share-friend-list small{color:var(--text-muted);overflow:hidden;text-overflow:ellipsis}.share-friend-list input{width:18px;height:18px;flex:0 0 auto}.favorite-friend{display:grid;place-items:center;border:0;background:transparent;color:var(--text-muted);cursor:pointer;padding:.2rem}.favorite-friend.active{color:#f6c344}.share-actions{margin-top:1rem}.share-actions .btn-primary{display:flex;align-items:center;justify-content:center;gap:.4rem;min-width:140px}@media(max-width:520px){.share-toolbar{align-items:flex-start;flex-direction:column}.share-actions{display:grid;grid-template-columns:1fr 1fr}.share-actions button{width:100%}}
 
         .tree-explorer {
           width: 250px;
@@ -965,6 +1260,8 @@ export const Dashboard: React.FC = () => {
           color: var(--text-muted);
           margin-top: 0.15rem;
         }
+
+        .appeal-required-badge{display:inline-flex;align-self:flex-start;margin-top:.4rem;padding:.25rem .5rem;border:1px solid rgba(245,158,11,.35);border-radius:999px;background:rgba(245,158,11,.12);color:#fbbf24;font-size:.68rem;font-weight:800}
 
         .delete-item-btn {
           background: transparent;
