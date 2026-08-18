@@ -14,10 +14,12 @@ namespace AIStudyHub.Api.Controllers;
 public class FolderController : ControllerBase
 {
     private readonly IFolderService _folderService;
+    private readonly IPermissionService _permissionService;
 
-    public FolderController(IFolderService folderService)
+    public FolderController(IFolderService folderService, IPermissionService permissionService)
     {
         _folderService = folderService;
+        _permissionService = permissionService;
     }
 
     private int GetCurrentUserId()
@@ -79,7 +81,8 @@ public class FolderController : ControllerBase
         }
 
         int userId = GetCurrentUserId();
-        if (folder.UserId != userId)
+        var effectiveRole = await _permissionService.GetEffectiveFolderRoleAsync(id, userId);
+        if (folder.UserId != userId && effectiveRole == "NONE")
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {

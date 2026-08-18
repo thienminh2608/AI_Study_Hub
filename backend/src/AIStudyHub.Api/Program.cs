@@ -95,7 +95,82 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<StudyHubDbContext>();
+    await db.Database.EnsureCreatedAsync();
     await db.Database.ExecuteSqlRawAsync("""
+        IF COL_LENGTH('users', 'downgrade_notice_pending') IS NULL
+            ALTER TABLE users ADD downgrade_notice_pending BIT NOT NULL CONSTRAINT DF_users_downgrade_notice_pending DEFAULT 0;
+        IF COL_LENGTH('users', 'expiry_notified') IS NULL
+            ALTER TABLE users ADD expiry_notified BIT NOT NULL CONSTRAINT DF_users_expiry_notified DEFAULT 0;
+        IF COL_LENGTH('users', 'expires_at') IS NULL
+            ALTER TABLE users ADD expires_at DATETIME2 NULL;
+        IF COL_LENGTH('documents', 'general_access') IS NULL
+            ALTER TABLE documents ADD general_access VARCHAR(20) NOT NULL CONSTRAINT DF_documents_general_access DEFAULT 'RESTRICTED';
+        IF COL_LENGTH('documents', 'lifecycle_status') IS NULL
+            ALTER TABLE documents ADD lifecycle_status VARCHAR(30) NOT NULL CONSTRAINT DF_documents_lifecycle_status DEFAULT 'PRIVATE';
+        IF COL_LENGTH('documents', 'is_deleted') IS NULL
+            ALTER TABLE documents ADD is_deleted BIT NOT NULL CONSTRAINT DF_documents_is_deleted DEFAULT 0;
+        IF COL_LENGTH('documents', 'deleted_at') IS NULL
+            ALTER TABLE documents ADD deleted_at DATETIME2 NULL;
+        IF COL_LENGTH('documents', 'deleted_by_user_id') IS NULL
+            ALTER TABLE documents ADD deleted_by_user_id INT NULL;
+        IF COL_LENGTH('documents', 'current_version_id') IS NULL
+            ALTER TABLE documents ADD current_version_id INT NULL;
+        IF COL_LENGTH('documents', 'share_link_expires_at') IS NULL
+            ALTER TABLE documents ADD share_link_expires_at DATETIME2 NULL;
+        IF COL_LENGTH('documents', 'is_share_link_revoked') IS NULL
+            ALTER TABLE documents ADD is_share_link_revoked BIT NOT NULL CONSTRAINT DF_documents_is_share_link_revoked DEFAULT 0;
+        IF COL_LENGTH('folders', 'general_access') IS NULL
+            ALTER TABLE folders ADD general_access VARCHAR(20) NOT NULL CONSTRAINT DF_folders_general_access DEFAULT 'RESTRICTED';
+        IF COL_LENGTH('folders', 'is_deleted') IS NULL
+            ALTER TABLE folders ADD is_deleted BIT NOT NULL CONSTRAINT DF_folders_is_deleted DEFAULT 0;
+        IF COL_LENGTH('folders', 'deleted_at') IS NULL
+            ALTER TABLE folders ADD deleted_at DATETIME2 NULL;
+        IF COL_LENGTH('document_shares', 'role') IS NULL
+            ALTER TABLE document_shares ADD role VARCHAR(20) NOT NULL CONSTRAINT DF_document_shares_role DEFAULT 'VIEWER';
+        IF OBJECT_ID('folder_shares', 'U') IS NULL
+        BEGIN
+            CREATE TABLE folder_shares (
+                share_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                folder_id INT NOT NULL,
+                owner_user_id INT NOT NULL,
+                shared_with_user_id INT NOT NULL,
+                role VARCHAR(20) NOT NULL CONSTRAINT DF_folder_shares_role DEFAULT 'VIEWER',
+                created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                CONSTRAINT UQ_folder_shares UNIQUE(folder_id, shared_with_user_id),
+                CONSTRAINT FK_folder_shares_folder FOREIGN KEY(folder_id) REFERENCES folders(folder_id) ON DELETE CASCADE,
+                CONSTRAINT FK_folder_shares_user FOREIGN KEY(shared_with_user_id) REFERENCES users(user_id)
+            );
+        END
+        IF OBJECT_ID('document_versions', 'U') IS NULL
+        BEGIN
+            CREATE TABLE document_versions (
+                version_id INT IDENTITY(1,1) PRIMARY KEY,
+                document_id INT NOT NULL,
+                version_number INT NOT NULL,
+                cloud_storage_url NVARCHAR(500) NOT NULL,
+                file_extension NVARCHAR(10) NOT NULL,
+                file_size_mb DECIMAL(5,2) NOT NULL,
+                change_summary NVARCHAR(500) NULL,
+                created_by_user_id INT NOT NULL,
+                created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                CONSTRAINT UQ_document_versions UNIQUE(document_id, version_number),
+                CONSTRAINT FK_document_versions_document FOREIGN KEY(document_id) REFERENCES documents(document_id) ON DELETE CASCADE,
+                CONSTRAINT FK_document_versions_user FOREIGN KEY(created_by_user_id) REFERENCES users(user_id)
+            );
+        END
+        IF OBJECT_ID('audit_logs', 'U') IS NULL
+        BEGIN
+            CREATE TABLE audit_logs (
+                audit_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                actor_user_id INT NOT NULL,
+                action VARCHAR(50) NOT NULL,
+                target_type VARCHAR(20) NOT NULL,
+                target_id INT NOT NULL,
+                details NVARCHAR(2000) NULL,
+                created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                CONSTRAINT FK_audit_logs_actor FOREIGN KEY(actor_user_id) REFERENCES users(user_id)
+            );
+        END
         IF COL_LENGTH('documents', 'view_count') IS NULL
             ALTER TABLE documents ADD view_count INT NOT NULL CONSTRAINT DF_documents_view_count DEFAULT 0;
         IF COL_LENGTH('chat_sessions', 'attached_document_id') IS NULL
@@ -203,6 +278,16 @@ using (var scope = app.Services.CreateScope())
             INSERT INTO transfer_configurations (bank_code, bank_name, account_number, account_name, is_active)
             VALUES ('', '', '', '', 0);
         END
+        IF NOT EXISTS (SELECT 1 FROM subscriptions)
+        BEGIN
+            SET IDENTITY_INSERT subscriptions ON;
+            INSERT INTO subscriptions (tier_id, tier_name, price, max_storage_mb, ai_prompt_limit_per_day, total_storage_mb)
+            VALUES 
+                (1, 'Free', 0, 50, 5, 50),
+                (2, 'Basic', 0, 200, 20, 200),
+                (3, 'Premium', 100000, 500, 100, 500);
+            SET IDENTITY_INSERT subscriptions OFF;
+        END
         """);
 
     var missingChunks = await db.DocumentExtractedTexts.AsNoTracking()
@@ -219,11 +304,12 @@ using (var scope = app.Services.CreateScope())
 
     if (app.Environment.IsDevelopment())
     {
+        // 1. Seed Moderator
         const string moderatorEmail = "moderator@aistudyhub.local";
         var moderator = await db.Users.FirstOrDefaultAsync(user => user.Email == moderatorEmail);
         if (moderator == null)
         {
-            moderator = new AIStudyHub.Domain.Entities.User
+            db.Users.Add(new AIStudyHub.Domain.Entities.User
             {
                 Username = "moderator.demo",
                 Email = moderatorEmail,
@@ -235,15 +321,49 @@ using (var scope = app.Services.CreateScope())
                 AiPromptsToday = 0,
                 CreatedAt = DateTime.Now,
                 UpdatedAt = DateTime.Now
-            };
-            db.Users.Add(moderator);
+            });
         }
-        else
+
+        // 2. Seed Admin
+        const string adminEmail = "admin@aistudyhub.local";
+        var admin = await db.Users.FirstOrDefaultAsync(user => user.Email == adminEmail);
+        if (admin == null)
         {
-            moderator.Role = "MODERATOR";
-            moderator.Status = "ACTIVE";
-            moderator.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Moderator@123");
+            db.Users.Add(new AIStudyHub.Domain.Entities.User
+            {
+                Username = "admin.demo",
+                Email = adminEmail,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123"),
+                Role = "ADMIN",
+                Status = "ACTIVE",
+                TierId = 3,
+                Balance = 1000000,
+                AiPromptsToday = 0,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            });
         }
+
+        // 3. Seed Student
+        const string studentEmail = "student@aistudyhub.local";
+        var student = await db.Users.FirstOrDefaultAsync(user => user.Email == studentEmail);
+        if (student == null)
+        {
+            db.Users.Add(new AIStudyHub.Domain.Entities.User
+            {
+                Username = "student.demo",
+                Email = studentEmail,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Student@123"),
+                Role = "STUDENT",
+                Status = "ACTIVE",
+                TierId = 2,
+                Balance = 500000,
+                AiPromptsToday = 0,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            });
+        }
+
         await db.SaveChangesAsync();
     }
 }

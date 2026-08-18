@@ -19,12 +19,14 @@ public class DocumentController : ControllerBase
     private readonly IDocumentService _documentService;
     private readonly IFileStorage _fileStorage;
     private readonly IStudyHubDbContext _db;
+    private readonly IDocumentProcessingQueue _queue;
 
-    public DocumentController(IDocumentService documentService, IFileStorage fileStorage, IStudyHubDbContext db)
+    public DocumentController(IDocumentService documentService, IFileStorage fileStorage, IStudyHubDbContext db, IDocumentProcessingQueue queue)
     {
         _documentService = documentService;
         _fileStorage = fileStorage;
         _db = db;
+        _queue = queue;
     }
 
     private int GetCurrentUserId()
@@ -84,6 +86,7 @@ public class DocumentController : ControllerBase
         {
             int userId = GetCurrentUserId();
             var doc = await _documentService.ConfirmDocumentAsync(userId, documentId, title, subject, sharingPermission, folderId);
+            _queue.EnqueueDocument(doc.DocumentId);
             return Ok(doc);
         }
         catch (Exception ex)
@@ -533,6 +536,61 @@ public class DocumentController : ControllerBase
                 message = "Không tìm thấy tài liệu."
             });
     }
+
+    [HttpPost("{id}/retry-extraction")]
+    public async Task<IActionResult> RetryExtraction(int id)
+    {
+        await _documentService.RetryExtractionAsync(id, GetCurrentUserId());
+        return Ok(new { message = "Extraction retry initiated" });
+    }
+
+    [HttpGet("storage-quota")]
+    public async Task<IActionResult> GetStorageQuota()
+    {
+        var quota = await _documentService.GetUserStorageQuotaAsync(GetCurrentUserId());
+        return Ok(quota);
+    }
+
+    [HttpGet("my-documents/paged")]
+    public async Task<IActionResult> GetMyDocumentsPaged([FromQuery] int? folderId, [FromQuery] int page = 1, [FromQuery] int pageSize = 12, [FromQuery] string? search = null, [FromQuery] string? subject = null)
+    {
+        var paged = await _documentService.GetMyDocumentsPagedAsync(GetCurrentUserId(), folderId, page, pageSize, search, subject);
+        return Ok(paged);
+    }
+
+    [HttpGet("shared-with-me/paged")]
+    public async Task<IActionResult> GetSharedWithMePaged([FromQuery] int page = 1, [FromQuery] int pageSize = 12)
+    {
+        var paged = await _documentService.GetSharedWithMePagedAsync(GetCurrentUserId(), page, pageSize);
+        return Ok(paged);
+    }
+
+    [HttpGet("bookmarks/paged")]
+    public async Task<IActionResult> GetBookmarksPaged([FromQuery] int page = 1, [FromQuery] int pageSize = 12)
+    {
+        var paged = await _documentService.GetBookmarksPagedAsync(GetCurrentUserId(), page, pageSize);
+        return Ok(paged);
+    }
+
+    [HttpPost("bulk-delete")]
+    public async Task<IActionResult> BulkDelete([FromBody] List<int> documentIds)
+    {
+        await _documentService.BulkDeleteDocumentsAsync(documentIds, GetCurrentUserId());
+        return Ok(new { message = "Bulk delete successful" });
+    }
+
+    [HttpPost("bulk-move")]
+    public async Task<IActionResult> BulkMove([FromBody] BulkMoveRequest request)
+    {
+        await _documentService.BulkMoveDocumentsAsync(request.DocumentIds, request.TargetFolderId, GetCurrentUserId());
+        return Ok(new { message = "Bulk move successful" });
+    }
+}
+
+public class BulkMoveRequest
+{
+    public List<int> DocumentIds { get; set; } = new();
+    public int? TargetFolderId { get; set; }
 }
 
 public class AppealDto

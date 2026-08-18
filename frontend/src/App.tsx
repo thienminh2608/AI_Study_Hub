@@ -20,6 +20,7 @@ import { AdminDashboard } from './pages/AdminDashboard';
 import { PublicDocuments } from './pages/PublicDocuments';
 import { ModeratorDashboard } from './pages/ModeratorDashboard';
 import { Notifications } from './pages/Notifications';
+import { TrashPage } from './pages/Trash';
 
 import './App.css';
 
@@ -51,6 +52,7 @@ const App: React.FC = () => {
               <Route path="premium" element={<Premium />} />
               <Route path="profile" element={<Profile />} />
               <Route path="notifications" element={<Notifications />} />
+              <Route path="trash" element={<TrashPage />} />
               <Route path="document/:id" element={<DocumentViewer />} />
 
               {/* Protected Admin Routes */}

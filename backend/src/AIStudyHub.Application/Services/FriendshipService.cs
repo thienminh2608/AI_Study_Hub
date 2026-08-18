@@ -256,4 +256,28 @@ public class FriendshipService : IFriendshipService
             IsRequester = isRequester
         };
     }
+
+    public async Task<PagedResult<FriendDto>> GetAcceptedFriendsPagedAsync(int userId, int pageNumber, int pageSize)
+    {
+        var all = await GetAcceptedFriendsAsync(userId);
+        int total = all.Count;
+        var paged = all.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
+        return new PagedResult<FriendDto>(paged, total, pageNumber, pageSize);
+    }
+
+    public async Task<PagedResult<FriendDto>> GetPendingRequestsPagedAsync(int userId, int pageNumber, int pageSize)
+    {
+        var all = await GetPendingRequestsAsync(userId);
+        int total = all.Count;
+        var paged = all.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
+        return new PagedResult<FriendDto>(paged, total, pageNumber, pageSize);
+    }
+
+    public async Task<PagedResult<FriendDto>> GetBlockedUsersPagedAsync(int userId, int pageNumber, int pageSize)
+    {
+        var all = await GetBlockedUsersAsync(userId);
+        int total = all.Count;
+        var paged = all.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
+        return new PagedResult<FriendDto>(paged, total, pageNumber, pageSize);
+    }
 }

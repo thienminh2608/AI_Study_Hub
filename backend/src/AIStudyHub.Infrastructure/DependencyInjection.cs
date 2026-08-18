@@ -48,7 +48,11 @@ public static class DependencyInjection
             services.AddScoped<IGeminiService, GeminiService>();
         }
 
-        // 5. Register Hosted background service for renewal schedules
+        // 5. Register Background Processing Queue & Workers
+        services.AddSingleton<IDocumentProcessingQueue, DocumentProcessingQueue>();
+        services.AddHostedService<DocumentExtractionWorker>();
+
+        // 6. Register Hosted background service for renewal schedules
         services.AddHostedService<SubscriptionRenewalScheduler>();
 
         return services;

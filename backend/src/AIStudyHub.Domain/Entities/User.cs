@@ -103,4 +103,7 @@ public partial class User
     }
 
     public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
+    public virtual ICollection<FolderShare> FolderShares { get; set; } = new List<FolderShare>();
+    public virtual ICollection<DocumentVersion> DocumentVersions { get; set; } = new List<DocumentVersion>();
+    public virtual ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
 }

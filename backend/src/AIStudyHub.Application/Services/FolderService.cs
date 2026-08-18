@@ -23,7 +23,7 @@ public class FolderService : IFolderService
     public async Task<List<FolderDto>> GetAllUserFoldersAsync(int userId)
     {
         var folders = await _dbContext.Folders
-            .Where(f => f.UserId == userId)
+            .Where(f => f.UserId == userId && !f.IsDeleted)
             .OrderBy(f => f.FolderName)
             .ToListAsync();
 
@@ -32,14 +32,19 @@ public class FolderService : IFolderService
 
     public async Task<List<FolderDto>> GetChildFoldersAsync(int userId, int? parentFolderId)
     {
-        var query = _dbContext.Folders.Where(f => f.UserId == userId);
+        IQueryable<Folder> query;
         if (parentFolderId.HasValue)
         {
-            query = query.Where(f => f.ParentFolderId == parentFolderId.Value);
+            query = _dbContext.Folders.Where(f => !f.IsDeleted && f.ParentFolderId == parentFolderId.Value);
         }
         else
         {
-            query = query.Where(f => f.ParentFolderId == null);
+            var sharedFolderIds = await _dbContext.FolderShares
+                .Where(fs => fs.SharedWithUserId == userId)
+                .Select(fs => fs.FolderId)
+                .ToListAsync();
+
+            query = _dbContext.Folders.Where(f => !f.IsDeleted && f.ParentFolderId == null && (f.UserId == userId || sharedFolderIds.Contains(f.FolderId)));
         }
 
         var folders = await query.OrderBy(f => f.FolderName).ToListAsync();
@@ -48,7 +53,7 @@ public class FolderService : IFolderService
 
     public async Task<FolderDto?> GetFolderByIdAsync(int folderId)
     {
-        var folder = await _dbContext.Folders.FindAsync(folderId);
+        var folder = await _dbContext.Folders.FirstOrDefaultAsync(f => f.FolderId == folderId && !f.IsDeleted);
         if (folder == null)
             return null;
         return MapToDto(folder);
@@ -140,34 +145,23 @@ public class FolderService : IFolderService
             .Where(d => d.UserId == userId && d.FolderId.HasValue && allFolderIds.Contains(d.FolderId.Value))
             .ToListAsync();
 
-        // Delete files from storage
+        // Soft delete child documents
         foreach (var doc in docs)
         {
-            try
-            {
-                string relativePath = doc.CloudStorageUrl.TrimStart('/');
-                if (_fileStorage.FileExists(relativePath))
-                {
-                    _fileStorage.DeleteFile(relativePath);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error deleting file {doc.CloudStorageUrl}: {ex.Message}");
-            }
+            doc.IsDeleted = true;
+            doc.DeletedAt = DateTime.Now;
+            doc.DeletedByUserId = userId;
+            doc.LifeCycleStatus = "TRASHED";
         }
 
-        // Remove documents from database
-        _dbContext.Documents.RemoveRange(docs);
-
-        // Remove folders from database (we delete child folders first to respect self-referencing constraints)
-        allFolderIds.Reverse(); // Reverse so descendants are deleted first
+        // Soft delete folders
         foreach (var id in allFolderIds)
         {
             var f = await _dbContext.Folders.FindAsync(id);
             if (f != null)
             {
-                _dbContext.Folders.Remove(f);
+                f.IsDeleted = true;
+                f.DeletedAt = DateTime.Now;
             }
         }
 

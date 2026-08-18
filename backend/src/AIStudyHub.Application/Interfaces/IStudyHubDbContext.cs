@@ -79,6 +79,10 @@ public interface IStudyHubDbContext
     {
         get; set;
     }
+    DbSet<FolderShare> FolderShares { get; set; }
+    DbSet<DocumentVersion> DocumentVersions { get; set; }
+    DbSet<AuditLog> AuditLogs { get; set; }
+
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     DatabaseFacade Database

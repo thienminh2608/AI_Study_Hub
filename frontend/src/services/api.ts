@@ -1,3 +1,81 @@
+export interface PagedResult<T> {
+  items: T[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
+export interface UserShare {
+  shareId: number;
+  userId: number;
+  username: string;
+  email: string;
+  role: 'VIEWER' | 'EDITOR';
+  createdAt: string;
+}
+
+export interface ShareLinkInfo {
+  token?: string;
+  shareUrl?: string;
+  expiresAt?: string;
+  isRevoked: boolean;
+  hasExpiration: boolean;
+  isExpired: boolean;
+}
+
+export interface ItemAccessSettings {
+  itemId: number;
+  itemType: 'DOCUMENT' | 'FOLDER';
+  title: string;
+  ownerUserId: number;
+  ownerName: string;
+  generalAccess: 'RESTRICTED' | 'LINK' | 'PUBLIC';
+  isInherited: boolean;
+  parentFolderId?: number;
+  shares: UserShare[];
+  shareLink?: ShareLinkInfo;
+  userEffectiveRole: 'OWNER' | 'EDITOR' | 'VIEWER' | 'NONE';
+}
+
+export interface TrashItem {
+  itemId: number;
+  itemType: 'DOCUMENT' | 'FOLDER';
+  name: string;
+  fileExtension?: string;
+  fileSizeMb?: number;
+  deletedAt: string;
+  deletedByUserId: number;
+  deletedByName: string;
+}
+
+export interface DocumentVersion {
+  versionId: number;
+  documentId: number;
+  versionNumber: number;
+  cloudStorageUrl: string;
+  fileExtension: string;
+  fileSizeMb: number;
+  changeSummary?: string;
+  createdByUserId: number;
+  createdByName: string;
+  createdAt: string;
+  isCurrent: boolean;
+}
+
+export interface StorageQuota {
+  userId: number;
+  tierName: string;
+  usedStorageMb: number;
+  maxStorageMb: number;
+  usagePercentage: number;
+  isQuotaExceeded: boolean;
+  aiPromptsToday: number;
+  aiPromptLimitPerDay: number;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5065/api';
 
 const getAccessToken = () => localStorage.getItem('token') || sessionStorage.getItem('token');
@@ -346,5 +424,107 @@ export const api = {
     getTransferConfig: () => request<any>('/admin/transfer-config', { method: 'GET' }),
     updateTransferConfig: (dto: any) =>
       request<any>('/admin/transfer-config', { method: 'PUT', body: JSON.stringify(dto) }),
+    getAuditLogs: (page = 1, pageSize = 20) =>
+      request<any>(`/admin/audit-logs?page=${page}&pageSize=${pageSize}`, { method: 'GET' }),
+  },
+  access: {
+    getAccessSettings: (type: 'document' | 'folder', id: number) =>
+      request<any>(`/access/${type}/${id}`, { method: 'GET' }),
+    updateGeneralAccess: (type: 'document' | 'folder', id: number, generalAccess: string) =>
+      request<any>(`/access/${type}/${id}/general`, {
+        method: 'PUT',
+        body: JSON.stringify({ generalAccess }),
+      }),
+    addUserShare: (type: 'document' | 'folder', id: number, email: string, role: string) =>
+      request<any>(`/access/${type}/${id}/share`, {
+        method: 'POST',
+        body: JSON.stringify({ email, role }),
+      }),
+    removeUserShare: (type: 'document' | 'folder', id: number, targetUserId: number) =>
+      request<any>(`/access/${type}/${id}/share/${targetUserId}`, { method: 'DELETE' }),
+    rotateShareLink: (id: number) =>
+      request<any>(`/access/document/${id}/link/rotate`, { method: 'POST' }),
+    revokeShareLink: (id: number) =>
+      request<any>(`/access/document/${id}/link/revoke`, { method: 'POST' }),
+  },
+  trash: {
+    getTrashItems: (page = 1, pageSize = 12) =>
+      request<any>(`/trash?page=${page}&pageSize=${pageSize}`, { method: 'GET' }),
+    moveDocumentToTrash: (id: number) => request<any>(`/trash/document/${id}`, { method: 'POST' }),
+    moveFolderToTrash: (id: number) => request<any>(`/trash/folder/${id}`, { method: 'POST' }),
+    restoreDocument: (id: number) =>
+      request<any>(`/trash/restore/document/${id}`, { method: 'POST' }),
+    restoreFolder: (id: number) =>
+      request<any>(`/trash/restore/folder/${id}`, { method: 'POST' }),
+    permanentDeleteDocument: (id: number) =>
+      request<any>(`/trash/permanent/document/${id}`, { method: 'DELETE' }),
+    permanentDeleteFolder: (id: number) =>
+      request<any>(`/trash/permanent/folder/${id}`, { method: 'DELETE' }),
+    emptyTrash: () => request<any>('/trash/empty', { method: 'POST' }),
+  },
+  versions: {
+    getVersionHistory: (documentId: number) =>
+      request<any[]>(`/documents/${documentId}/versions`, { method: 'GET' }),
+    uploadNewVersion: (documentId: number, file: File, changeSummary?: string) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (changeSummary) formData.append('changeSummary', changeSummary);
+      return request<any>(`/documents/${documentId}/versions`, {
+        method: 'POST',
+        body: formData,
+      });
+    },
+    restoreVersion: (documentId: number, versionId: number) =>
+      request<any>(`/documents/${documentId}/versions/${versionId}/restore`, { method: 'POST' }),
+  },
+  documentExtra: {
+    getStorageQuota: () => request<any>('/document/storage-quota', { method: 'GET' }),
+    retryExtraction: (documentId: number) =>
+      request<any>(`/document/${documentId}/retry-extraction`, { method: 'POST' }),
+    getMyDocumentsPaged: (
+      folderId?: number | null,
+      page = 1,
+      pageSize = 12,
+      search = '',
+      subject = ''
+    ) => {
+      let url = `/document/my-documents/paged?page=${page}&pageSize=${pageSize}`;
+      if (folderId) url += `&folderId=${folderId}`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
+      if (subject) url += `&subject=${encodeURIComponent(subject)}`;
+      return request<any>(url, { method: 'GET' });
+    },
+    getSharedWithMePaged: (page = 1, pageSize = 12) =>
+      request<any>(`/document/shared-with-me/paged?page=${page}&pageSize=${pageSize}`, {
+        method: 'GET',
+      }),
+    getBookmarksPaged: (page = 1, pageSize = 12) =>
+      request<any>(`/document/bookmarks/paged?page=${page}&pageSize=${pageSize}`, {
+        method: 'GET',
+      }),
+    bulkDelete: (documentIds: number[]) =>
+      request<any>('/document/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify(documentIds),
+      }),
+    bulkMove: (documentIds: number[], targetFolderId?: number | null) =>
+      request<any>('/document/bulk-move', {
+        method: 'POST',
+        body: JSON.stringify({ documentIds, targetFolderId }),
+      }),
+  },
+  friendshipExtra: {
+    getFriendsPaged: (page = 1, pageSize = 10) =>
+      request<any>(`/friendship/friends/paged?page=${page}&pageSize=${pageSize}`, {
+        method: 'GET',
+      }),
+    getPendingRequestsPaged: (page = 1, pageSize = 10) =>
+      request<any>(`/friendship/pending/paged?page=${page}&pageSize=${pageSize}`, {
+        method: 'GET',
+      }),
+    getBlockedUsersPaged: (page = 1, pageSize = 10) =>
+      request<any>(`/friendship/blocked/paged?page=${page}&pageSize=${pageSize}`, {
+        method: 'GET',
+      }),
   },
 };

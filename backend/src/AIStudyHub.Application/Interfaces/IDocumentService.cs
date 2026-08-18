@@ -29,4 +29,14 @@ public interface IDocumentService
     Task<int?> IncrementViewCountAsync(int documentId, int userId);
     Task<DocumentAnalyticsDto> GetUserAnalyticsAsync(int userId);
     Task<DocumentDetailDto?> GetDocumentDetailAsync(int documentId);
+
+    // New Features & Background Processing Queue
+    Task ProcessExtractionAsync(int documentId);
+    Task RetryExtractionAsync(int documentId, int userId);
+    Task<StorageQuotaDto> GetUserStorageQuotaAsync(int userId);
+    Task<PagedResult<DocumentResponseDto>> GetMyDocumentsPagedAsync(int userId, int? folderId, int pageNumber, int pageSize, string? search, string? subject);
+    Task<PagedResult<DocumentResponseDto>> GetSharedWithMePagedAsync(int userId, int pageNumber, int pageSize);
+    Task<PagedResult<DocumentResponseDto>> GetBookmarksPagedAsync(int userId, int pageNumber, int pageSize);
+    Task BulkDeleteDocumentsAsync(List<int> documentIds, int userId);
+    Task BulkMoveDocumentsAsync(List<int> documentIds, int? targetFolderId, int userId);
 }
