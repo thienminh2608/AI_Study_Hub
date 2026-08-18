@@ -21,30 +21,52 @@ public class AdminConfigurationController : ControllerBase
     }
 
     [HttpGet("documents")]
-    public async Task<IActionResult> GetDocuments([FromQuery] string? query = null)
+    public async Task<IActionResult> GetDocuments(
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 8,
+        [FromQuery] string? query = null,
+        [FromQuery] string? status = null)
     {
         var documents = _db.Documents.Include(document => document.User).AsQueryable();
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var keyword = query.Trim();
-            documents = documents.Where(document => document.Title.Contains(keyword) || document.User.Username.Contains(keyword));
+            var keyword = query.Trim().ToLower();
+            documents = documents.Where(document => document.Title.ToLower().Contains(keyword) || document.User.Username.ToLower().Contains(keyword));
         }
-        return Ok(await documents.OrderByDescending(document => document.CreatedAt).Select(document => new
+        if (!string.IsNullOrWhiteSpace(status) && status != "ALL")
         {
-            document.DocumentId,
-            document.Title,
-            document.Subject,
-            document.FileExtension,
-            document.UserId,
-            UploaderName = document.User.Username,
-            document.SharingPermission,
-            document.IsFlagged,
-            document.TotalReportScore,
-            document.BookmarkCount,
-            document.DownloadCount,
-            document.ViewCount,
-            document.CreatedAt
-        }).ToListAsync());
+            documents = documents.Where(document => document.SharingPermission == status);
+        }
+
+        var totalCount = await documents.CountAsync();
+        var items = await documents
+            .OrderByDescending(document => document.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(document => new
+            {
+                document.DocumentId,
+                document.Title,
+                document.Subject,
+                document.FileExtension,
+                document.UserId,
+                UploaderName = document.User.Username,
+                document.SharingPermission,
+                document.IsFlagged,
+                document.TotalReportScore,
+                document.BookmarkCount,
+                document.DownloadCount,
+                document.ViewCount,
+                document.CreatedAt
+            })
+            .ToListAsync();
+
+        return Ok(new {
+            items,
+            pageNumber,
+            pageSize,
+            totalCount
+        });
     }
 
     [HttpGet("documents/{documentId}/detail")]

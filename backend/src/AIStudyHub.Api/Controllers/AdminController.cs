@@ -34,29 +34,78 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("dashboard")]
-    public async Task<IActionResult> GetDashboardStats()
+    public async Task<IActionResult> GetDashboardStats([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
     {
-        int totalUsers = await _dbContext.Users.CountAsync();
+        // 1. Lọc theo khoảng thời gian nếu có
+        var usersQuery = _dbContext.Users.AsQueryable();
+        var txsQuery = _dbContext.Transactions.AsQueryable();
+        var docsQuery = _dbContext.Documents.AsQueryable();
+        var reportsQuery = _dbContext.DocumentReports.AsQueryable();
+
+        if (startDate.HasValue)
+        {
+            usersQuery = usersQuery.Where(u => u.CreatedAt >= startDate.Value);
+            txsQuery = txsQuery.Where(t => t.StartedAt >= startDate.Value);
+            docsQuery = docsQuery.Where(d => d.CreatedAt >= startDate.Value);
+            reportsQuery = reportsQuery.Where(r => r.CreatedAt >= startDate.Value);
+        }
+
+        if (endDate.HasValue)
+        {
+            usersQuery = usersQuery.Where(u => u.CreatedAt <= endDate.Value);
+            txsQuery = txsQuery.Where(t => t.StartedAt <= endDate.Value);
+            docsQuery = docsQuery.Where(d => d.CreatedAt <= endDate.Value);
+            reportsQuery = reportsQuery.Where(r => r.CreatedAt <= endDate.Value);
+        }
+
+        int totalUsers = await _dbContext.Users.CountAsync(); // Tổng user mọi thời đại vẫn hiển thị
+        int newUsersInPeriod = await usersQuery.CountAsync(); // User mới trong kỳ
+
         int activeUsers = await _dbContext.Users.CountAsync(u => u.Status == "ACTIVE");
         int suspendedUsers = await _dbContext.Users.CountAsync(u => u.Status == "SUSPENDED");
         int premiumUsers = await _dbContext.Users.CountAsync(u => u.TierId == 3);
         int studentUsers = await _dbContext.Users.CountAsync(u => u.Role == "STUDENT");
         int freeUsers = await _dbContext.Users.CountAsync(u => u.Role == "STUDENT" && u.TierId == 2);
-        int totalTransactions = await _dbContext.Transactions.CountAsync();
-        int pendingTransactions = await _dbContext.Transactions.CountAsync(t => t.Status == "PENDING");
-        decimal successfulDeposits = await _dbContext.Transactions.Where(t => t.Status == "SUCCESS" && t.Type == "DEPOSIT").SumAsync(t => (decimal?)t.Amount) ?? 0;
-        int totalDocuments = await _dbContext.Documents.CountAsync();
-        int publicDocuments = await _dbContext.Documents.CountAsync(d => d.SharingPermission == "PUBLIC");
-        int privateDocuments = await _dbContext.Documents.CountAsync(d => d.SharingPermission == "PRIVATE");
-        int flaggedDocuments = await _dbContext.Documents.CountAsync(d => d.IsFlagged == true);
-        int totalReports = await _dbContext.DocumentReports.CountAsync();
-        int pendingReports = await _dbContext.DocumentReports.CountAsync(r => r.Status == "PENDING");
-        var recentTransactions = await _dbContext.Transactions.Include(t => t.User).OrderByDescending(t => t.StartedAt).Take(5).Select(t => new { t.TransactionId, t.User.Username, t.Amount, t.Status, t.StartedAt }).ToListAsync();
-        var recentReports = await _dbContext.DocumentReports.Include(r => r.Reporter).Include(r => r.Document).OrderByDescending(r => r.CreatedAt).Take(5).Select(r => new { r.ReportId, r.Document.Title, ReporterName = r.Reporter.Username, r.ReasonCode, r.Status, r.CreatedAt }).ToListAsync();
+
+        int totalTransactions = await txsQuery.CountAsync();
+        int pendingTransactions = await txsQuery.CountAsync(t => t.Status == "PENDING");
+        
+        // Phân tách Doanh thu (Income) và Chi tiêu/Rút mua gói (Outcome)
+        decimal successfulDeposits = await txsQuery
+            .Where(t => t.Status == "SUCCESS" && t.Type == "DEPOSIT")
+            .SumAsync(t => (decimal?)t.Amount) ?? 0;
+            
+        decimal successfulWithdrawals = await txsQuery
+            .Where(t => t.Status == "SUCCESS" && t.Type == "WITHDRAW")
+            .SumAsync(t => (decimal?)t.Amount) ?? 0;
+
+        int totalDocuments = await docsQuery.CountAsync();
+        int publicDocuments = await docsQuery.CountAsync(d => d.SharingPermission == "PUBLIC");
+        int privateDocuments = await docsQuery.CountAsync(d => d.SharingPermission == "PRIVATE");
+        int flaggedDocuments = await docsQuery.CountAsync(d => d.IsFlagged == true);
+
+        int totalReports = await reportsQuery.CountAsync();
+        int pendingReports = await reportsQuery.CountAsync(r => r.Status == "PENDING");
+
+        var recentTransactions = await _dbContext.Transactions
+            .Include(t => t.User)
+            .OrderByDescending(t => t.StartedAt)
+            .Take(5)
+            .Select(t => new { t.TransactionId, t.User.Username, t.Amount, t.Type, t.Status, t.StartedAt })
+            .ToListAsync();
+
+        var recentReports = await _dbContext.DocumentReports
+            .Include(r => r.Reporter)
+            .Include(r => r.Document)
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(5)
+            .Select(r => new { r.ReportId, r.Document.Title, ReporterName = r.Reporter.Username, r.ReasonCode, r.Status, r.CreatedAt })
+            .ToListAsync();
 
         return Ok(new
         {
             totalUsers,
+            newUsersInPeriod,
             activeUsers,
             suspendedUsers,
             premiumUsers,
@@ -64,7 +113,8 @@ public class AdminController : ControllerBase
             freeUsers,
             totalTransactions,
             pendingTransactions,
-            successfulDeposits,
+            successfulDeposits,      // Income
+            successfulWithdrawals,   // Outcome
             totalDocuments,
             publicDocuments,
             privateDocuments,
@@ -77,11 +127,34 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("users")]
-    public async Task<IActionResult> GetAllUsers()
+    public async Task<IActionResult> GetUsersPaginated(
+        [FromQuery] int pageNumber = 1, 
+        [FromQuery] int pageSize = 8, 
+        [FromQuery] string? search = null, 
+        [FromQuery] string? status = null)
     {
-        var users = await _dbContext.Users
+        var query = _dbContext.Users
             .Include(u => u.Tier)
+            .AsQueryable();
+
+        // Filters
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var searchClean = search.Trim().ToLower();
+            query = query.Where(u => u.Username.ToLower().Contains(searchClean) || 
+                                     (u.Email != null && u.Email.ToLower().Contains(searchClean)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(status) && status != "ALL")
+        {
+            query = query.Where(u => u.Status == status);
+        }
+
+        var totalCount = await query.CountAsync();
+        var items = await query
             .OrderByDescending(u => u.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
             .Select(u => new
             {
                 u.UserId,
@@ -92,12 +165,14 @@ public class AdminController : ControllerBase
                 TierName = u.Tier != null ? u.Tier.TierName : "Free",
                 u.Balance,
                 u.Status,
+                u.IsAutoRenew,
+                u.GracePeriodEndsAt,
                 u.ExpiresAt,
                 u.CreatedAt
             })
             .ToListAsync();
 
-        return Ok(users);
+        return Ok(new PagedResult<object>(items.Cast<object>().ToList(), totalCount, pageNumber, pageSize));
     }
 
     [HttpPost("users")]
@@ -105,18 +180,11 @@ public class AdminController : ControllerBase
     {
         var normalizedRole = role.Trim().ToUpperInvariant();
         if (normalizedRole is not ("STUDENT" or "MODERATOR" or "ADMIN"))
-            return BadRequest(new
-            {
-                message = "Vai trò không hợp lệ."
-            });
+            return BadRequest(new { message = "Vai trò không hợp lệ." });
+            
         var existingUser = await _dbContext.Users.AnyAsync(u => u.Email == dto.Email);
         if (existingUser)
-        {
-            return BadRequest(new
-            {
-                message = "Email này đã được sử dụng."
-            });
-        }
+            return BadRequest(new { message = "Email này đã được sử dụng." });
 
         int tierId = 2; // Default Free
         if ("Premium".Equals(tierType, StringComparison.OrdinalIgnoreCase))
@@ -137,6 +205,7 @@ public class AdminController : ControllerBase
             TierId = tierId,
             Balance = 0,
             Status = "ACTIVE",
+            IsAutoRenew = true,
             CreatedAt = DateTime.Now,
             UpdatedAt = DateTime.Now
         };
@@ -144,10 +213,7 @@ public class AdminController : ControllerBase
         _dbContext.Users.Add(user);
         await _dbContext.SaveChangesAsync();
         _logger.LogInformation("Admin {AdminId} created user {UserId} with role {Role}", User.FindFirstValue(ClaimTypes.NameIdentifier), user.UserId, user.Role);
-        return Ok(new
-        {
-            message = "Đã tạo tài khoản thành công."
-        });
+        return Ok(new { message = "Đã tạo tài khoản thành công." });
     }
 
     [HttpPut("users/{userId}")]
@@ -155,25 +221,15 @@ public class AdminController : ControllerBase
     {
         var user = await _dbContext.Users.FindAsync(userId);
         if (user == null)
-        {
-            return NotFound(new
-            {
-                message = "Không tìm thấy người dùng."
-            });
-        }
+            return NotFound(new { message = "Không tìm thấy người dùng." });
 
         var normalizedRole = dto.Role.Trim().ToUpperInvariant();
         var normalizedStatus = dto.Status.Trim().ToUpperInvariant();
         if (normalizedRole is not ("STUDENT" or "MODERATOR" or "ADMIN") || normalizedStatus is not ("ACTIVE" or "SUSPENDED"))
-            return BadRequest(new
-            {
-                message = "Vai trò hoặc trạng thái không hợp lệ."
-            });
+            return BadRequest(new { message = "Vai trò hoặc trạng thái không hợp lệ." });
+            
         if (User.FindFirstValue(ClaimTypes.NameIdentifier) == userId.ToString() && normalizedStatus == "SUSPENDED")
-            return BadRequest(new
-            {
-                message = "Bạn không thể tự khóa tài khoản đang đăng nhập."
-            });
+            return BadRequest(new { message = "Bạn không thể tự khóa tài khoản đang đăng nhập." });
 
         user.Username = dto.Username;
         user.Email = dto.Email;
@@ -197,51 +253,128 @@ public class AdminController : ControllerBase
 
         await _dbContext.SaveChangesAsync();
         _logger.LogInformation("Admin {AdminId} updated user {UserId}; role={Role}; status={Status}; tier={TierId}", User.FindFirstValue(ClaimTypes.NameIdentifier), userId, user.Role, user.Status, user.TierId);
-        return Ok(new
-        {
-            message = "Cập nhật thông tin người dùng thành công."
-        });
+        return Ok(new { message = "Cập nhật thông tin người dùng thành công." });
     }
 
     [HttpDelete("users/{userId}")]
     public IActionResult DeleteUser(int userId)
     {
-        return Conflict(new
-        {
-            message = "Không hỗ trợ xóa vĩnh viễn tài khoản. Hãy khóa tài khoản để bảo toàn dữ liệu và lịch sử đối soát."
-        });
+        return Conflict(new { message = "Không hỗ trợ xóa vĩnh viễn tài khoản. Hãy khóa tài khoản để bảo toàn dữ liệu và lịch sử đối soát." });
     }
 
     [HttpGet("transactions")]
-    public async Task<IActionResult> GetAllTransactions()
+    public async Task<IActionResult> GetTransactionsPaginated(
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 8,
+        [FromQuery] string? search = null,
+        [FromQuery] string? status = null,
+        [FromQuery] string? type = null)
     {
-        var txs = await _transactionService.GetAllTransactionsAsync();
-        return Ok(txs);
+        var result = await _transactionService.GetTransactionsPaginatedAsync(pageNumber, pageSize, search, status, type);
+        return Ok(result);
     }
 
     [HttpPut("transactions/{transactionId}")]
     public async Task<IActionResult> UpdateTransactionStatus(int transactionId, [FromBody] UpdateTransactionStatusDto dto)
     {
-        bool success = await _transactionService.UpdateTransactionStatusAsync(transactionId, dto.Status);
+        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
+        if (claim == null || !int.TryParse(claim.Value, out int adminId))
+        {
+            return Unauthorized();
+        }
+
+        bool success = await _transactionService.UpdateTransactionStatusAsync(transactionId, dto.Status, adminId, dto.FailureReason);
         if (success)
         {
-            _logger.LogInformation("Admin {AdminId} changed transaction {TransactionId} to {Status}", User.FindFirstValue(ClaimTypes.NameIdentifier), transactionId, dto.Status);
-            return Ok(new
-            {
-                message = "Đã cập nhật trạng thái giao dịch thành công."
-            });
+            _logger.LogInformation("Admin {AdminId} changed transaction {TransactionId} to {Status}", adminId, transactionId, dto.Status);
+            return Ok(new { message = "Đã cập nhật trạng thái giao dịch thành công." });
         }
-        return BadRequest(new
+        return BadRequest(new { message = "Không thể cập nhật giao dịch (có thể giao dịch đã được xử lý hoặc có lỗi tài chính)." });
+    }
+
+    [HttpPost("transactions/{transactionId}/refund")]
+    public async Task<IActionResult> RefundTransaction(int transactionId, [FromBody] RefundRequestDto dto)
+    {
+        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
+        if (claim == null || !int.TryParse(claim.Value, out int adminId))
         {
-            message = "Không thể cập nhật giao dịch (có thể giao dịch đã được xử lý trước đó)."
-        });
+            return Unauthorized();
+        }
+
+        bool success = await _transactionService.RefundTransactionAsync(transactionId, adminId, dto.Reason);
+        if (success)
+        {
+            _logger.LogInformation("Admin {AdminId} refunded transaction {TransactionId}. Reason: {Reason}", adminId, transactionId, dto.Reason);
+            return Ok(new { message = "Đã thực hiện hoàn tiền giao dịch thành công." });
+        }
+        return BadRequest(new { message = "Không thể hoàn tiền giao dịch (giao dịch chưa thành công, đã được hoàn trước đó hoặc không hợp lệ)." });
     }
 
     [HttpGet("reports")]
-    public async Task<IActionResult> GetReports()
+    public async Task<IActionResult> GetReports(
+        [FromQuery] int pageNumber = 1, 
+        [FromQuery] int pageSize = 8, 
+        [FromQuery] string? search = null, 
+        [FromQuery] string? status = null)
     {
-        var reports = await _documentService.GetReportsAsync();
-        return Ok(reports);
+        var query = _dbContext.DocumentReports
+            .Include(r => r.Document)
+            .Include(r => r.Reporter)
+            .Include(r => r.ResolvedByAdmin)
+            .AsQueryable();
+
+        // Filters
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var searchClean = search.Trim().ToLower();
+            query = query.Where(r => r.Document.Title.ToLower().Contains(searchClean) || 
+                                     r.Reporter.Username.ToLower().Contains(searchClean));
+        }
+
+        if (!string.IsNullOrWhiteSpace(status) && status != "ALL")
+        {
+            if (status == "RESOLVED")
+            {
+                query = query.Where(r => r.Status != "PENDING");
+            }
+            else
+            {
+                query = query.Where(r => r.Status == status);
+            }
+        }
+
+        var totalCount = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(r => r.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        var dtos = items.Select(r => new DocumentReportResponseDto
+        {
+            ReportId = r.ReportId,
+            DocumentId = r.DocumentId,
+            DocumentTitle = r.Document.Title,
+            ReporterId = r.ReporterId,
+            ReporterName = r.Reporter.Username,
+            ReasonCode = r.ReasonCode,
+            AdditionalDetails = r.AdditionalDetails,
+            Status = r.Status ?? "PENDING",
+            CreatedAt = r.CreatedAt,
+            ResolvedAt = r.ResolvedAt,
+            ResolvedByAdminName = r.ResolvedByAdmin?.Username,
+            ReportType = r.ReportType,
+            ClaimantName = r.ClaimantName,
+            ClaimantEmail = r.ClaimantEmail,
+            OriginalWorkUrl = r.OriginalWorkUrl,
+            EvidenceDescription = r.EvidenceDescription,
+            ModeratorNote = r.ModeratorNote,
+            AssignedModeratorId = r.AssignedModeratorId,
+            PreviousSharingPermission = r.PreviousSharingPermission,
+            RestrictedAt = r.RestrictedAt
+        }).ToList();
+
+        return Ok(new PagedResult<DocumentReportResponseDto>(dtos, totalCount, pageNumber, pageSize));
     }
 
     [HttpPost("reports/{reportId}/resolve")]
@@ -257,15 +390,9 @@ public class AdminController : ControllerBase
         if (success)
         {
             _logger.LogInformation("Admin {AdminId} resolved report {ReportId} with action {Action}", adminId, reportId, action);
-            return Ok(new
-            {
-                message = "Xử lý báo cáo thành công."
-            });
+            return Ok(new { message = "Xử lý báo cáo thành công." });
         }
-        return BadRequest(new
-        {
-            message = "Không thể xử lý báo cáo."
-        });
+        return BadRequest(new { message = "Không thể xử lý báo cáo." });
     }
 }
 
@@ -275,12 +402,11 @@ public class UpdateUserDto
     public string Email { get; set; } = null!;
     public string Role { get; set; } = null!;
     public string Status { get; set; } = null!;
-    public int Balance
-    {
-        get; set;
-    }
-    public int TierId
-    {
-        get; set;
-    }
+    public int Balance { get; set; }
+    public int TierId { get; set; }
+}
+
+public class RefundRequestDto
+{
+    public string? Reason { get; set; }
 }

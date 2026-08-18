@@ -82,6 +82,8 @@ public interface IStudyHubDbContext
     DbSet<FolderShare> FolderShares { get; set; }
     DbSet<DocumentVersion> DocumentVersions { get; set; }
     DbSet<AuditLog> AuditLogs { get; set; }
+    DbSet<BalanceLedger> BalanceLedgers { get; set; }
+    DbSet<SubscriptionHistory> SubscriptionHistories { get; set; }
 
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

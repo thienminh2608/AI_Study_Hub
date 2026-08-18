@@ -67,6 +67,15 @@ public partial class User
         get; set;
     }
 
+    public bool IsAutoRenew { get; set; } = true;
+
+    public DateTime? GracePeriodEndsAt
+    {
+        get; set;
+    }
+
+    public int BalanceVersion { get; set; } = 0;
+
     public DateTime? CreatedAt
     {
         get; set;

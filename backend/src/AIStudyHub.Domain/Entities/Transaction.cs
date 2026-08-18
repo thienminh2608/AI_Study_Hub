@@ -37,5 +37,11 @@ public partial class Transaction
         get; set;
     }
 
+    public string? ReferenceCode { get; set; }
+    public string? BankId { get; set; }
+    public int? ApproverId { get; set; }
+    public string? FailureReason { get; set; }
+
     public virtual User User { get; set; } = null!;
+    public virtual User? Approver { get; set; }
 }

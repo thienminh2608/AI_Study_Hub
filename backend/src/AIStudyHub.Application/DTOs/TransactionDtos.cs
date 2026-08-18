@@ -27,6 +27,11 @@ public class TransactionDto
     {
         get; set;
     }
+    public string? ReferenceCode { get; set; }
+    public string? BankId { get; set; }
+    public int? ApproverId { get; set; }
+    public string? ApproverName { get; set; }
+    public string? FailureReason { get; set; }
 }
 
 public class CreateTransactionDto
@@ -36,11 +41,14 @@ public class CreateTransactionDto
         get; set;
     }
     public string Type { get; set; } = null!; // DEPOSIT or WITHDRAW
+    public string? ReferenceCode { get; set; }
+    public string? BankId { get; set; }
 }
 
 public class UpdateTransactionStatusDto
 {
     public string Status { get; set; } = null!; // SUCCESS, CANCELLED
+    public string? FailureReason { get; set; }
 }
 
 public class SubscriptionDto

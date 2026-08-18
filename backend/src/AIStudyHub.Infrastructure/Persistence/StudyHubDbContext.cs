@@ -106,7 +106,8 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
     public virtual DbSet<FolderShare> FolderShares { get; set; }
     public virtual DbSet<DocumentVersion> DocumentVersions { get; set; }
     public virtual DbSet<AuditLog> AuditLogs { get; set; }
-
+    public virtual DbSet<BalanceLedger> BalanceLedgers { get; set; }
+    public virtual DbSet<SubscriptionHistory> SubscriptionHistories { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -650,10 +651,19 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasColumnName("type");
             entity.Property(e => e.UserId).HasColumnName("user_id");
 
+            entity.Property(e => e.ReferenceCode).HasMaxLength(100).HasColumnName("reference_code");
+            entity.Property(e => e.BankId).HasMaxLength(50).HasColumnName("bank_id");
+            entity.Property(e => e.ApproverId).HasColumnName("approver_id");
+            entity.Property(e => e.FailureReason).HasMaxLength(500).HasColumnName("failure_reason");
+
             entity.HasOne(d => d.User).WithMany(p => p.Transactions)
                 .HasForeignKey(d => d.UserId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK__transacti__user___0B91BA14");
+
+            entity.HasOne(d => d.Approver).WithMany()
+                .HasForeignKey(d => d.ApproverId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<User>(entity =>
@@ -705,9 +715,52 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasMaxLength(50)
                 .HasColumnName("username");
 
+            entity.Property(e => e.IsAutoRenew)
+                .HasDefaultValue(true)
+                .HasColumnName("is_auto_renew");
+            entity.Property(e => e.GracePeriodEndsAt)
+                .HasColumnName("grace_period_ends_at");
+            entity.Property(e => e.BalanceVersion)
+                .HasDefaultValue(0)
+                .HasColumnName("balance_version")
+                .IsConcurrencyToken();
+
             entity.HasOne(d => d.Tier).WithMany(p => p.Users)
                 .HasForeignKey(d => d.TierId)
                 .HasConstraintName("FK__users__tier_id__5BE2A6F2");
+        });
+
+        modelBuilder.Entity<BalanceLedger>(entity =>
+        {
+            entity.HasKey(e => e.LedgerId);
+            entity.ToTable("balance_ledgers");
+            entity.Property(e => e.LedgerId).HasColumnName("ledger_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.TransactionId).HasColumnName("transaction_id");
+            entity.Property(e => e.Amount).HasColumnType("decimal(10, 2)").HasColumnName("amount");
+            entity.Property(e => e.PreviousBalance).HasColumnType("decimal(10, 2)").HasColumnName("previous_balance");
+            entity.Property(e => e.CurrentBalance).HasColumnType("decimal(10, 2)").HasColumnName("current_balance");
+            entity.Property(e => e.ActionType).HasMaxLength(20).HasColumnName("action_type");
+            entity.Property(e => e.Description).HasMaxLength(500).HasColumnName("description");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.Property(e => e.Signature).HasMaxLength(256).HasColumnName("signature");
+
+            entity.HasOne(d => d.User).WithMany().HasForeignKey(d => d.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(d => d.Transaction).WithMany().HasForeignKey(d => d.TransactionId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<SubscriptionHistory>(entity =>
+        {
+            entity.HasKey(e => e.HistoryId);
+            entity.ToTable("subscription_histories");
+            entity.Property(e => e.HistoryId).HasColumnName("history_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.OldTierId).HasColumnName("old_tier_id");
+            entity.Property(e => e.NewTierId).HasColumnName("new_tier_id");
+            entity.Property(e => e.ChangeReason).HasMaxLength(100).HasColumnName("change_reason");
+            entity.Property(e => e.ChangedAt).HasDefaultValueSql("(getdate())").HasColumnName("changed_at");
+
+            entity.HasOne(d => d.User).WithMany().HasForeignKey(d => d.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         OnModelCreatingPartial(modelBuilder);

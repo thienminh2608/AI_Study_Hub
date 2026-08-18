@@ -14,10 +14,12 @@ namespace AIStudyHub.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly IStudyHubDbContext _db;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, IStudyHubDbContext db)
     {
         _authService = authService;
+        _db = db;
     }
 
     [HttpPost("register")]
@@ -209,5 +211,27 @@ public class AuthController : ControllerBase
                 message = ex.Message
             });
         }
+    }
+
+    [Authorize]
+    [HttpPost("subscription/toggle-autorenew")]
+    public async Task<IActionResult> ToggleAutoRenew()
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+        if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+            return Unauthorized();
+
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null)
+            return NotFound(new { message = "Không tìm thấy người dùng." });
+
+        user.IsAutoRenew = !user.IsAutoRenew;
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            isAutoRenew = user.IsAutoRenew,
+            message = user.IsAutoRenew ? "Đã bật tự động gia hạn thành công." : "Đã tắt tự động gia hạn thành công."
+        });
     }
 }
