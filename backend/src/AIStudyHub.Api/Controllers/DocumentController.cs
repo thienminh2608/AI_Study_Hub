@@ -304,6 +304,51 @@ public class DocumentController : ControllerBase
         return PhysicalFile(_fileStorage.GetPhysicalPath(relativePath), contentType, fileName, enableRangeProcessing: true);
     }
 
+    [HttpGet("{id}/preview")]
+    public async Task<IActionResult> PreviewDocument(int id)
+    {
+        var doc = await _documentService.GetDocumentByIdAsync(id);
+        if (doc == null)
+            return NotFound(new
+            {
+                message = "Không tìm thấy tài liệu."
+            });
+
+        int userId = GetCurrentUserId();
+        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "Bạn không có quyền xem trước tài liệu này."
+            });
+
+        var relativePath = doc.CloudStorageUrl.TrimStart('/');
+        if (!_fileStorage.FileExists(relativePath))
+            return NotFound(new
+            {
+                message = "Không tìm thấy file gốc."
+            });
+
+        var extension = doc.FileExtension.TrimStart('.').ToLowerInvariant();
+        if (extension is not ("pdf" or "docx" or "pptx" or "xlsx"))
+            return BadRequest(new
+            {
+                message = "Loại tài liệu này chưa hỗ trợ preview nguyên bản."
+            });
+
+        var contentType = extension switch
+        {
+            "pdf" => "application/pdf",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            _ => "application/octet-stream"
+        };
+
+        var fileName = $"{doc.Title}.{extension}";
+        Response.Headers["Content-Disposition"] = $"inline; filename=\"{fileName}\"";
+        return PhysicalFile(_fileStorage.GetPhysicalPath(relativePath), contentType, fileName, enableRangeProcessing: true);
+    }
+
     [HttpGet("analytics")]
     public async Task<IActionResult> GetAnalytics() => Ok(await _documentService.GetUserAnalyticsAsync(GetCurrentUserId()));
 

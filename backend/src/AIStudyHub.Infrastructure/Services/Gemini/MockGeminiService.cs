@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
@@ -9,7 +10,7 @@ namespace AIStudyHub.Infrastructure.Services.Gemini;
 
 public class MockGeminiService : IGeminiService
 {
-    public Task<string> GetGeminiResponseAsync(List<ChatMessageDto> messageHistory)
+    public Task<string> GetGeminiResponseAsync(List<ChatMessageDto> messageHistory, GeminiRequestOptions? options = null, CancellationToken cancellationToken = default)
     {
         var lastUserMessage = messageHistory
             .LastOrDefault(m => m.Sender.Equals("USER", StringComparison.OrdinalIgnoreCase))?

@@ -257,6 +257,7 @@ export const api = {
     getById: (id: number) => request<any>(`/document/${id}`, { method: 'GET' }),
     delete: (id: number) => request<any>(`/document/${id}`, { method: 'DELETE' }),
     getText: (id: number) => request<any>(`/document/${id}/text`, { method: 'GET' }),
+    preview: (id: number) => `${API_BASE_URL}/document/${id}/preview`,
     download: (id: number) => download(`/document/${id}/download`),
     report: (dto: any) =>
       request<any>('/document/report', { method: 'POST', body: JSON.stringify(dto) }),

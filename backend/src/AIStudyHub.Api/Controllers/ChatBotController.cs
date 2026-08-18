@@ -1,5 +1,6 @@
 using System;
 using System.Security.Claims;
+using System.Threading;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
@@ -156,12 +157,12 @@ public class ChatBotController : ControllerBase
     }
 
     [HttpPost("sessions/{sessionId}/ask")]
-    public async Task<IActionResult> AskQuestion(int sessionId, [FromBody] AskQuestionDto dto)
+    public async Task<IActionResult> AskQuestion(int sessionId, [FromBody] AskQuestionDto dto, CancellationToken cancellationToken)
     {
         try
         {
             int userId = GetCurrentUserId();
-            string aiResponse = await _chatService.ProcessUserMessageAsync(userId, sessionId, dto);
+            string aiResponse = await _chatService.ProcessUserMessageAsync(userId, sessionId, dto, cancellationToken);
             return Ok(new
             {
                 response = aiResponse

@@ -4,10 +4,12 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
+using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
 
 namespace AIStudyHub.Application.Services;
@@ -16,12 +18,14 @@ public class ChatService : IChatService
 {
     private readonly IStudyHubDbContext _dbContext;
     private readonly IGeminiService _geminiService;
+    private readonly IConfiguration _configuration;
     private const int MaxAiLoop = 5;
 
-    public ChatService(IStudyHubDbContext dbContext, IGeminiService geminiService)
+    public ChatService(IStudyHubDbContext dbContext, IGeminiService geminiService, IConfiguration? configuration = null)
     {
         _dbContext = dbContext;
         _geminiService = geminiService;
+        _configuration = configuration ?? new ConfigurationBuilder().Build();
     }
 
     public async Task<List<ChatSessionDto>> GetUserSessionsAsync(int userId)
@@ -145,7 +149,7 @@ public class ChatService : IChatService
         }).ToList();
     }
 
-    public async Task<string> ProcessUserMessageAsync(int userId, int sessionId, AskQuestionDto dto)
+    public async Task<string> ProcessUserMessageAsync(int userId, int sessionId, AskQuestionDto dto, CancellationToken cancellationToken = default)
     {
         var session = await _dbContext.ChatSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.UserId == userId);
         if (session == null)
@@ -265,9 +269,20 @@ public class ChatService : IChatService
                     Sender = m.Sender,
                     MessageContent = m.MessageContent
                 })
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
-            string aiResponse = await _geminiService.GetGeminiResponseAsync(history);
+            history = await BuildBudgetedHistoryAsync(history, cancellationToken);
+
+            string aiResponse;
+            try
+            {
+                aiResponse = await _geminiService.GetGeminiResponseAsync(history, BuildGeminiRequestOptions(), cancellationToken);
+            }
+            catch
+            {
+                await RefundAiPromptAsync(userId, cancellationToken);
+                throw;
+            }
             string trimmedResponse = aiResponse.Trim();
 
             if (TryParseGroundedResponse(trimmedResponse, allowedCitationChunkIds, out var groundedResponse))
@@ -411,12 +426,12 @@ public class ChatService : IChatService
                                 if (IsWholeDocumentRequest(question))
                                 {
                                     var allChunks = await _dbContext.DocumentChunks.AsNoTracking()
-                                        .Where(c => c.DocumentId == docId).OrderBy(c => c.ChunkIndex).ToListAsync();
-                                    selected = await SummarizeWholeDocumentAsync(allChunks, question);
+                                        .Where(c => c.DocumentId == docId).OrderBy(c => c.ChunkIndex).ToListAsync(cancellationToken);
+                                    selected = await SummarizeWholeDocumentAsync(allChunks, question, cancellationToken);
                                 }
                                 else
                                 {
-                                    selected = await RetrieveContextAsync(docId, question);
+                                    selected = await RetrieveContextAsync(docId, question, cancellationToken);
                                 }
                                 allowedCitationChunkIds = selected.ChunkIds.ToHashSet();
                                 if (!selected.HasRelevantMatch)
@@ -551,7 +566,7 @@ public class ChatService : IChatService
         return finalResponse;
     }
 
-    private async Task<RetrievedContext> RetrieveContextAsync(int documentId, string question)
+    private async Task<RetrievedContext> RetrieveContextAsync(int documentId, string question, CancellationToken cancellationToken = default)
     {
         var queryTerms = Tokenize(question).Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToList();
         var query = _dbContext.DocumentChunks.AsNoTracking().Where(c => c.DocumentId == documentId);
@@ -560,7 +575,11 @@ public class ChatService : IChatService
             var term0 = queryTerms[0];
             query = query.Where(c => c.Text.Contains(term0) || (c.HeadingPath != null && c.HeadingPath.Contains(term0)));
         }
-        var candidates = await query.OrderBy(c => c.ChunkIndex).Take(24).ToListAsync();
+        int candidateLimit = GetSetting("Gemini:RetrievalCandidateChunkLimit", 24);
+        int maxContextChunks = GetSetting("Gemini:RetrievalMaxChunks", 6);
+        int maxContextTokens = GetSetting("Gemini:RetrievalMaxContextTokens", 2400);
+
+        var candidates = await query.OrderBy(c => c.ChunkIndex).Take(candidateLimit).ToListAsync(cancellationToken);
         if (candidates.Count == 0)
             return new RetrievedContext(string.Empty, [], false);
         var termSet = queryTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -585,25 +604,46 @@ public class ChatService : IChatService
         }
         var selected = await _dbContext.DocumentChunks.AsNoTracking()
             .Where(c => c.DocumentId == documentId && indexes.Contains(c.ChunkIndex))
-            .OrderBy(c => c.ChunkIndex).Take(8).ToListAsync();
+            .OrderBy(c => c.ChunkIndex).ToListAsync(cancellationToken);
+
+        selected = TakeChunksWithinBudget(selected, maxContextTokens, maxContextChunks);
         return new RetrievedContext(FormatChunks(selected), selected.Select(c => c.ChunkId).ToList(), true);
     }
 
-    private async Task<RetrievedContext> SummarizeWholeDocumentAsync(List<DocumentChunk> chunks, string question)
+    private async Task<RetrievedContext> SummarizeWholeDocumentAsync(List<DocumentChunk> chunks, string question, CancellationToken cancellationToken = default)
     {
         var summaries = new List<string>();
-        foreach (var group in chunks.Chunk(5))
+        int maxChunks = GetSetting("Gemini:WholeDocumentMaxChunks", 30);
+        int budgetTokens = GetSetting("Gemini:WholeDocumentBudgetTokens", 8000);
+        int groupSize = Math.Max(1, GetSetting("Gemini:WholeDocumentGroupSize", 5));
+        int summaryMaxOutputTokens = GetSetting("Gemini:WholeDocumentSummaryMaxOutputTokens", 256);
+        var limitedChunks = chunks.OrderBy(c => c.ChunkIndex).Take(maxChunks).ToList();
+        int usedTokens = 0;
+
+        foreach (var group in limitedChunks.Chunk(groupSize))
         {
+            var groupText = FormatChunks(group);
+            int groupTokens = EstimateTokens(groupText);
+            if (usedTokens + groupTokens > budgetTokens)
+                break;
+
             summaries.Add(await _geminiService.GetGeminiResponseAsync([
                 new ChatMessageDto
                 {
                     Sender = "USER",
-                    MessageContent = "Summarize this document section faithfully for a later whole-document answer. Preserve key facts and cite chunk IDs in square brackets.\n\n" + FormatChunks(group)
+                    MessageContent = "Summarize this document section faithfully for a later whole-document answer. Preserve key facts and cite chunk IDs in square brackets.\n\n" + groupText
                 }
-            ]));
+            ], new GeminiRequestOptions
+            {
+                MaxOutputTokens = summaryMaxOutputTokens,
+                TimeoutSeconds = GetSetting("Gemini:RequestTimeoutSeconds", 60),
+                MaxRetries = GetSetting("Gemini:RetryCount", 2),
+                RetryBaseDelayMilliseconds = GetSetting("Gemini:RetryBaseDelayMilliseconds", 500)
+            }, cancellationToken));
+            usedTokens += groupTokens;
         }
         return new RetrievedContext("Map summaries for the whole-document request: " + question + "\n\n" + string.Join("\n\n", summaries),
-            chunks.Select(c => c.ChunkId).ToList(), chunks.Count > 0);
+            limitedChunks.Select(c => c.ChunkId).ToList(), limitedChunks.Count > 0);
     }
 
     private static string FormatChunks(IEnumerable<DocumentChunk> chunks) => string.Join("\n\n", chunks.Select(c =>
@@ -640,6 +680,133 @@ public class ChatService : IChatService
             return true;
         }
         catch (JsonException) { return false; }
+    }
+
+    private async Task<List<ChatMessageDto>> BuildBudgetedHistoryAsync(List<ChatMessageDto> history, CancellationToken cancellationToken)
+    {
+        int historyLimit = GetSetting("Gemini:HistoryTokenLimit", 6000);
+        int summaryTrigger = GetSetting("Gemini:HistorySummaryTriggerTokens", 4500);
+        int summaryReserve = GetSetting("Gemini:HistorySummaryReserveTokens", 1200);
+
+        if (EstimateTokens(history) <= historyLimit)
+            return history;
+
+        var recentMessages = new List<ChatMessageDto>();
+        int recentTokens = 0;
+        for (int i = history.Count - 1; i >= 0; i--)
+        {
+            int tokens = EstimateTokens(history[i]);
+            if (recentMessages.Count > 0 && recentTokens + tokens > historyLimit - summaryReserve)
+                break;
+
+            recentMessages.Insert(0, history[i]);
+            recentTokens += tokens;
+        }
+
+        var omittedMessages = history.Take(history.Count - recentMessages.Count).ToList();
+        if (omittedMessages.Count == 0 || EstimateTokens(omittedMessages) < summaryTrigger)
+            return recentMessages;
+
+        var summaryInput = TrimHistoryToTokenBudget(omittedMessages, GetSetting("Gemini:HistorySummaryMaxInputTokens", 2500));
+        string summary = await _geminiService.GetGeminiResponseAsync([
+            new ChatMessageDto
+            {
+                Sender = "USER",
+                MessageContent = "Summarize the conversation below for future AI context. Keep durable facts, unresolved questions, user preferences, constraints, citations, and document ids. Omit small talk. Return a compact summary in the same language as the chat when possible.\n\n" + FormatHistory(summaryInput)
+            }
+        ], new GeminiRequestOptions
+        {
+            MaxOutputTokens = GetSetting("Gemini:HistorySummaryMaxOutputTokens", 256),
+            TimeoutSeconds = GetSetting("Gemini:RequestTimeoutSeconds", 60),
+            MaxRetries = GetSetting("Gemini:RetryCount", 2),
+            RetryBaseDelayMilliseconds = GetSetting("Gemini:RetryBaseDelayMilliseconds", 500)
+        }, cancellationToken);
+
+        return new List<ChatMessageDto>
+        {
+            new ChatMessageDto
+            {
+                Sender = "USER",
+                MessageContent = "[HISTORY SUMMARY]\n" + summary.Trim()
+            }
+        }.Concat(recentMessages).ToList();
+    }
+
+    private static List<ChatMessageDto> TrimHistoryToTokenBudget(List<ChatMessageDto> messages, int tokenBudget)
+    {
+        var result = new List<ChatMessageDto>();
+        int usedTokens = 0;
+        foreach (var message in messages)
+        {
+            int messageTokens = EstimateTokens(message);
+            if (result.Count > 0 && usedTokens + messageTokens > tokenBudget)
+                break;
+
+            result.Add(message);
+            usedTokens += messageTokens;
+        }
+
+        return result;
+    }
+
+    private static List<DocumentChunk> TakeChunksWithinBudget(List<DocumentChunk> chunks, int tokenBudget, int maxChunks)
+    {
+        var result = new List<DocumentChunk>();
+        int usedTokens = 0;
+        foreach (var chunk in chunks.OrderBy(c => c.ChunkIndex))
+        {
+            if (result.Count >= maxChunks)
+                break;
+
+            int chunkTokens = EstimateTokens(chunk.Text) + EstimateTokens(chunk.HeadingPath) + 16;
+            if (result.Count > 0 && usedTokens + chunkTokens > tokenBudget)
+                break;
+
+            result.Add(chunk);
+            usedTokens += chunkTokens;
+        }
+
+        return result;
+    }
+
+    private async Task RefundAiPromptAsync(int userId, CancellationToken cancellationToken)
+    {
+        var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.UserId == userId, cancellationToken);
+        if (user == null)
+            return;
+
+        user.AiPromptsToday = Math.Max(0, (user.AiPromptsToday ?? 0) - 1);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private GeminiRequestOptions BuildGeminiRequestOptions()
+    {
+        return new GeminiRequestOptions
+        {
+            MaxOutputTokens = GetSetting("Gemini:MaxOutputTokens", 1024),
+            TimeoutSeconds = GetSetting("Gemini:RequestTimeoutSeconds", 60),
+            MaxRetries = GetSetting("Gemini:RetryCount", 2),
+            RetryBaseDelayMilliseconds = GetSetting("Gemini:RetryBaseDelayMilliseconds", 500)
+        };
+    }
+
+    private int GetSetting(string key, int defaultValue)
+    {
+        return _configuration.GetValue<int?>(key) ?? defaultValue;
+    }
+
+    private static string FormatHistory(IEnumerable<ChatMessageDto> messages) => string.Join("\n\n", messages.Select(m => $"[{m.Sender}] {m.MessageContent}"));
+
+    private static int EstimateTokens(IEnumerable<ChatMessageDto> messages) => messages.Sum(EstimateTokens);
+
+    private static int EstimateTokens(ChatMessageDto message) => EstimateTokens(message.MessageContent) + EstimateTokens(message.Sender);
+
+    private static int EstimateTokens(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+
+        return (int)Math.Ceiling(text.Length / 4.0);
     }
 
     private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
