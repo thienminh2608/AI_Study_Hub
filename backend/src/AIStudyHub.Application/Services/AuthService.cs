@@ -245,7 +245,10 @@ public class AuthService : IAuthService
             Balance = user.Balance ?? 0,
             TierId = user.TierId ?? 2,
             TierName = user.Tier?.TierName ?? "Free",
-            Status = user.Status ?? "ACTIVE"
+            Status = user.Status ?? "ACTIVE",
+            ExpiresAt = user.ExpiresAt,
+            IsAutoRenew = user.IsAutoRenew,
+            GracePeriodEndsAt = user.GracePeriodEndsAt
         };
     }
 

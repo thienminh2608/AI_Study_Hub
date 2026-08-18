@@ -40,6 +40,12 @@ interface TransactionItem {
   type: string; // "DEPOSIT" | "WITHDRAW"
   status: string; // "PENDING" | "SUCCESS" | "CANCELLED"
   startedAt?: string;
+  completedAt?: string;
+  referenceCode?: string;
+  bankId?: string;
+  approverId?: number;
+  approverName?: string;
+  failureReason?: string;
 }
 
 interface ReportItem {

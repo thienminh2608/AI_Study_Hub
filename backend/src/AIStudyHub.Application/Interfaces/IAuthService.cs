@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 
@@ -39,4 +40,16 @@ public class UserBalanceDto
     }
     public string TierName { get; set; } = null!;
     public string Status { get; set; } = null!;
+    public DateTime? ExpiresAt
+    {
+        get; set;
+    }
+    public bool IsAutoRenew
+    {
+        get; set;
+    }
+    public DateTime? GracePeriodEndsAt
+    {
+        get; set;
+    }
 }

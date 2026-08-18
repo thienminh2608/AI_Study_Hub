@@ -107,10 +107,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
             JSON.stringify(item)
               .toLocaleLowerCase('vi')
               .includes(query.trim().toLocaleLowerCase('vi'));
-          return (
-            matchesQuery &&
-            (tab !== 'documents' || status === 'ALL' || item.sharingPermission === status)
-          );
+          return matchesQuery;
         })
         .sort((a, b) => {
           const av = a[sortKey] ?? '',

@@ -11,6 +11,8 @@ interface User {
   balance: number;
   status: string;
   expiresAt?: string;
+  isAutoRenew?: boolean;
+  gracePeriodEndsAt?: string;
 }
 
 interface AuthContextType {
