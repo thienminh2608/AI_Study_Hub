@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { api } from '../services/api';
 import { ModerationNoticePopup } from './ModerationNoticePopup';
 import { NotificationBell } from './NotificationBell';
 import {
@@ -17,6 +18,9 @@ import {
   ReceiptText,
   ShieldAlert,
   SlidersHorizontal,
+  Trash2,
+  HardDrive,
+  Sparkles,
 } from 'lucide-react';
 
 export const SidebarLayout: React.FC = () => {
@@ -26,6 +30,23 @@ export const SidebarLayout: React.FC = () => {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const adminTab = searchParams.get('tab') || 'overview';
+
+  const [quota, setQuota] = useState<{
+    usedStorageMb: number;
+    maxStorageMb: number;
+    tierName: string;
+    aiPromptsToday: number;
+    aiPromptLimitPerDay: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (user && !isAdmin && !isModerator) {
+      api.documentExtra
+        .getStorageQuota()
+        .then((res) => setQuota(res))
+        .catch((err) => console.error('Failed to fetch storage quota:', err));
+    }
+  }, [user, location.pathname, isAdmin, isModerator]);
 
   return (
     <div className="layout-container">
@@ -84,6 +105,47 @@ export const SidebarLayout: React.FC = () => {
                 </NavLink>
               </div>
             )}
+            {!isAdmin && !isModerator && (
+              <div className="storage-widget">
+                <div className="storage-widget-header">
+                  <div className="storage-label">
+                    <HardDrive size={14} className="storage-icon" />
+                    <span>Dung lượng lưu trữ</span>
+                  </div>
+                  <span className="storage-percent-badge">
+                    {quota
+                      ? `${Math.min(100, Math.round(((quota.usedStorageMb || 0) / (quota.maxStorageMb || 50)) * 100))}%`
+                      : '0%'}
+                  </span>
+                </div>
+
+                <div className="storage-bar-bg">
+                  <div
+                    className="storage-bar-fill"
+                    style={{
+                      width: `${quota ? Math.min(100, ((quota.usedStorageMb || 0) / (quota.maxStorageMb || 50)) * 100) : 0}%`,
+                      backgroundColor:
+                        quota && ((quota.usedStorageMb || 0) / (quota.maxStorageMb || 50)) > 0.9
+                          ? '#ef4444'
+                          : quota && ((quota.usedStorageMb || 0) / (quota.maxStorageMb || 50)) > 0.7
+                          ? '#f59e0b'
+                          : '#10b981',
+                    }}
+                  />
+                </div>
+
+                <div className="storage-widget-footer">
+                  <span className="storage-used-text">
+                    {quota ? quota.usedStorageMb.toFixed(2) : '0.00'} MB / {quota ? quota.maxStorageMb : 50} MB
+                  </span>
+                  {quota && quota.maxStorageMb < 500 && (
+                    <NavLink to="/premium" className="storage-upgrade-link">
+                      <Sparkles size={11} /> Nâng cấp
+                    </NavLink>
+                  )}
+                </div>
+              </div>
+            )}
             {isAdmin && (
               <NavLink to="/profile" className="admin-profile-link">
                 Hồ sơ & bảo mật
@@ -129,6 +191,13 @@ export const SidebarLayout: React.FC = () => {
                 <SlidersHorizontal size={20} />
                 <span>Cấu hình hệ thống</span>
               </NavLink>
+              <NavLink
+                to="/admin?tab=audit-log"
+                className={`nav-item ${adminTab === 'audit-log' ? 'active' : ''}`}
+              >
+                <Trash2 size={20} />
+                <span>Nhật ký hệ thống (Audit Log)</span>
+              </NavLink>
             </>
           ) : isModerator ? (
             <NavLink
@@ -168,6 +237,13 @@ export const SidebarLayout: React.FC = () => {
               >
                 <Users size={20} />
                 <span>Bạn bè</span>
+              </NavLink>
+              <NavLink
+                to="/trash"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <Trash2 size={20} />
+                <span>Thùng rác</span>
               </NavLink>
             </>
           )}
@@ -302,6 +378,80 @@ export const SidebarLayout: React.FC = () => {
         .account-widget-links { display:grid; grid-template-columns:1fr 1fr; gap:.4rem; margin-top:.7rem; padding-top:.65rem; border-top:1px solid rgba(255,255,255,.07); }
         .account-widget-links a { display:flex; align-items:center; justify-content:center; gap:.35rem; padding:.42rem .3rem; border-radius:7px; color:var(--text-secondary); font-size:.72rem; text-align:center; }
         .account-widget-links a:hover,.account-widget-links a.active { background:rgba(157,78,221,.12); color:var(--accent-purple); }
+
+        .storage-widget {
+          margin-top: 0.65rem;
+          padding-top: 0.65rem;
+          border-top: 1px solid rgba(255, 255, 255, 0.07);
+          display: flex;
+          flex-direction: column;
+          gap: 0.4rem;
+        }
+
+        .storage-widget-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 0.75rem;
+        }
+
+        .storage-label {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          color: var(--text-secondary);
+          font-weight: 500;
+        }
+
+        .storage-icon {
+          color: var(--accent-purple);
+        }
+
+        .storage-percent-badge {
+          font-weight: 700;
+          font-size: 0.72rem;
+          color: var(--accent-purple);
+        }
+
+        .storage-bar-bg {
+          width: 100%;
+          height: 6px;
+          background: rgba(255, 255, 255, 0.08);
+          border-radius: 999px;
+          overflow: hidden;
+        }
+
+        .storage-bar-fill {
+          height: 100%;
+          border-radius: 999px;
+          transition: width 0.4s ease, background-color 0.3s ease;
+        }
+
+        .storage-widget-footer {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 0.7rem;
+        }
+
+        .storage-used-text {
+          color: var(--text-muted);
+        }
+
+        .storage-upgrade-link {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.2rem;
+          color: var(--accent-purple);
+          font-weight: 600;
+          text-decoration: none;
+          transition: var(--transition-fast);
+        }
+
+        .storage-upgrade-link:hover {
+          color: #a5b4fc;
+          text-decoration: underline;
+        }
 
         .admin-profile-link { display:inline-block; margin-top:.55rem; font-size:.78rem; color:var(--accent-blue); }
 

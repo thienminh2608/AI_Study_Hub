@@ -92,7 +92,8 @@ export const AdminDashboard: React.FC = () => {
     requestedTab === 'documents' ||
     requestedTab === 'report-config' ||
     requestedTab === 'system-config' ||
-    requestedTab === 'transfer-config'
+    requestedTab === 'transfer-config' ||
+    requestedTab === 'audit-log'
       ? requestedTab
       : 'overview';
 
@@ -108,6 +109,9 @@ export const AdminDashboard: React.FC = () => {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
   const [reports, setReports] = useState<ReportItem[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [auditTotalPages, setAuditTotalPages] = useState(1);
+  const [auditTotalCount, setAuditTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -183,6 +187,11 @@ export const AdminDashboard: React.FC = () => {
       } else if (adminTab === 'reports') {
         const data = await api.admin.getReports();
         setReports(data as ReportItem[]);
+      } else if (adminTab === 'audit-log') {
+        const res = await api.admin.getAuditLogs(page, pageSize);
+        setAuditLogs(res.items || res.data || (Array.isArray(res) ? res : []));
+        setAuditTotalPages(res.totalPages || 1);
+        setAuditTotalCount(res.totalCount || (Array.isArray(res) ? res.length : 0));
       }
     } catch (err: any) {
       console.error('Error loading admin page data:', err);
@@ -949,6 +958,65 @@ export const AdminDashboard: React.FC = () => {
                 totalPages={totalPages}
                 setPage={setPage}
                 total={filteredReports.length}
+              />
+            </div>
+          )}
+
+          {adminTab === 'audit-log' && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div className="admin-section-heading">
+                <h3>Nhật ký hoạt động hệ thống (Audit Logs)</h3>
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginBottom: '1rem' }}>
+                Theo dõi nhật ký các thay đổi quyền truy cập, chia sẻ tài liệu/thư mục và tác vụ hệ thống.
+              </p>
+
+              <div className="table-scroll">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Mã Log</th>
+                      <th>Người thực hiện</th>
+                      <th>Hành động</th>
+                      <th>Đối tượng</th>
+                      <th>Chi tiết</th>
+                      <th>Thời gian</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditLogs.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                          Chưa có nhật ký hoạt động nào.
+                        </td>
+                      </tr>
+                    ) : (
+                      auditLogs.map((log: any) => (
+                        <tr key={log.logId || log.id}>
+                          <td className="monospace-text">#{log.logId || log.id}</td>
+                          <td>
+                            <strong>{log.actorName || log.username || `User #${log.actorUserId}`}</strong>
+                          </td>
+                          <td>
+                            <span className="role-badge ADMIN">{log.action}</span>
+                          </td>
+                          <td>
+                            <span className="bold-text">{log.targetType} #{log.targetId}</span>
+                          </td>
+                          <td>{log.details || 'N/A'}</td>
+                          <td>{formatDateTime(log.createdAt || log.timestamp)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <Pagination
+                page={page}
+                totalPages={auditTotalPages}
+                setPage={setPage}
+                total={auditTotalCount}
               />
             </div>
           )}

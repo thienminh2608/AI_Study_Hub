@@ -16,11 +16,20 @@ import {
   Share2,
   Star,
   ArrowUpDown,
+  History,
+  Shield,
+  LayoutGrid,
+  List,
+  CheckSquare,
+  Square,
+  Download,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { FileTypeIcon } from '../components/FileTypeIcon';
 import { useUiFeedback } from '../context/UiFeedbackContext';
 import { formatDateTime } from '../utils/dateTime';
+import { ManageAccessModal } from '../components/ManageAccessModal';
+import { DocumentVersionHistoryModal } from '../components/DocumentVersionHistoryModal';
 
 interface FolderItem {
   folderId: number;
@@ -47,6 +56,22 @@ interface DocumentItem {
   publicReviewBlocked?: boolean;
   appealStatus?: string;
 }
+
+const getCleanTitle = (title: string, ext?: string) => {
+  if (!title) return '';
+  let clean = title;
+  const lastSlash = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+  if (lastSlash >= 0) {
+    clean = clean.substring(lastSlash + 1);
+  }
+  if (ext) {
+    const lowerExt = `.${ext.toLowerCase()}`;
+    if (clean.toLowerCase().endsWith(lowerExt)) {
+      clean = clean.substring(0, clean.length - lowerExt.length);
+    }
+  }
+  return clean;
+};
 
 export const Dashboard: React.FC = () => {
   const { confirm, notify } = useUiFeedback();
@@ -107,6 +132,78 @@ export const Dashboard: React.FC = () => {
   const [showCollisionModal, setShowCollisionModal] = useState(false);
   const [pendingDoc, setPendingDoc] = useState<any>(null);
   const [duplicateDocId, setDuplicateDocId] = useState<number | null>(null);
+
+  // Modals for Access & Versioning
+  const [accessModalItem, setAccessModalItem] = useState<{ type: 'document' | 'folder'; id: number } | null>(null);
+  const [versionModalDocId, setVersionModalDocId] = useState<number | null>(null);
+
+  // Task 16: List/Grid View & Bulk Actions
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
+    return (localStorage.getItem('dashboard-view-mode') as 'grid' | 'list') || 'grid';
+  });
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<number>>(new Set());
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+
+  const toggleViewMode = (mode: 'grid' | 'list') => {
+    setViewMode(mode);
+    localStorage.setItem('dashboard-view-mode', mode);
+  };
+
+  const toggleSelectDoc = (docId: number) => {
+    setSelectedDocIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(docId)) next.delete(docId);
+      else next.add(docId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllDocs = () => {
+    if (selectedDocIds.size === documents.length && documents.length > 0) {
+      setSelectedDocIds(new Set());
+    } else {
+      setSelectedDocIds(new Set(documents.map((d) => d.documentId)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedDocIds.size === 0) return;
+    if (
+      !(await confirm({
+        title: 'Xóa hàng loạt tài liệu',
+        message: `Bạn có chắc chắn muốn xóa ${selectedDocIds.size} tài liệu đã chọn không?`,
+        confirmLabel: `Xóa ${selectedDocIds.size} tài liệu`,
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+
+    setBulkProcessing(true);
+    try {
+      for (const docId of Array.from(selectedDocIds)) {
+        await api.document.delete(docId);
+      }
+      notify(`Đã xóa ${selectedDocIds.size} tài liệu thành công.`, 'success');
+      setSelectedDocIds(new Set());
+      loadFolderContent();
+    } catch (err: any) {
+      notify(err.message || 'Lỗi khi xóa hàng loạt.', 'error');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  const handleBulkDownload = () => {
+    if (selectedDocIds.size === 0) return;
+    Array.from(selectedDocIds).forEach((id) => {
+      const link = document.createElement('a');
+      link.href = `http://localhost:5065/api/document/${id}/download`;
+      link.target = '_blank';
+      link.click();
+    });
+    notify(`Đã bắt đầu tải về ${selectedDocIds.size} tài liệu.`, 'success');
+  };
 
   // Loading
   const [loading, setLoading] = useState(true);
@@ -491,8 +588,27 @@ export const Dashboard: React.FC = () => {
               ))}
             </div>
 
-            {/* Operations */}
-            <div className="actions">
+            {/* Operations & View Toggle */}
+            <div className="actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div className="glass-card flex items-center p-1 rounded-lg" style={{ display: 'flex', gap: '0.2rem', padding: '0.25rem' }}>
+                <button
+                  onClick={() => toggleViewMode('grid')}
+                  className={`action-btn ${viewMode === 'grid' ? 'active' : ''}`}
+                  style={{ opacity: viewMode === 'grid' ? 1 : 0.5 }}
+                  title="Chế độ Lưới (Grid View)"
+                >
+                  <LayoutGrid size={16} />
+                </button>
+                <button
+                  onClick={() => toggleViewMode('list')}
+                  className={`action-btn ${viewMode === 'list' ? 'active' : ''}`}
+                  style={{ opacity: viewMode === 'list' ? 1 : 0.5 }}
+                  title="Chế độ Danh sách (List View)"
+                >
+                  <List size={16} />
+                </button>
+              </div>
+
               <button onClick={() => setShowCreateFolder(true)} className="btn-secondary">
                 <FolderPlus size={16} />
                 <span>Thư mục mới</span>
@@ -511,6 +627,54 @@ export const Dashboard: React.FC = () => {
               </label>
             </div>
           </div>
+
+          {/* Bulk Operations Bar */}
+          {selectedDocIds.size > 0 && (
+            <div className="glass-card p-3 my-3 flex items-center justify-between rounded-xl" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', margin: '0.75rem 0', background: 'rgba(30, 41, 59, 0.9)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                  onClick={toggleSelectAllDocs}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'none', border: 'none', color: '#e2e8f0', cursor: 'pointer' }}
+                >
+                  {selectedDocIds.size === documents.length ? (
+                    <CheckSquare size={18} style={{ color: '#60a5fa' }} />
+                  ) : (
+                    <Square size={18} />
+                  )}
+                  <span>
+                    Đã chọn {selectedDocIds.size} / {documents.length} tài liệu
+                  </span>
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button
+                  onClick={handleBulkDownload}
+                  disabled={bulkProcessing}
+                  className="btn-secondary"
+                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                >
+                  <Download size={15} />
+                  <span>Tải về ({selectedDocIds.size})</span>
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkProcessing}
+                  className="btn-danger"
+                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                >
+                  <Trash2 size={15} />
+                  <span>Xóa ({selectedDocIds.size})</span>
+                </button>
+                <button
+                  onClick={() => setSelectedDocIds(new Set())}
+                  className="action-btn"
+                  title="Hủy chọn"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Loader bar for uploads */}
           {uploading && (
@@ -543,82 +707,24 @@ export const Dashboard: React.FC = () => {
                           <Folder size={28} className="folder-icon" />
                           <span className="item-title">{folder.folderName}</span>
                         </div>
-                        <button
-                          onClick={() => handleDeleteFolder(folder.folderId)}
-                          className="delete-item-btn"
-                          title="Xóa thư mục"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Files Header & Grid */}
-              {documents.length > 0 && (
-                <div className="section-block" style={{ marginTop: '1.5rem' }}>
-                  <h4>Tài liệu ({documents.length})</h4>
-                  <div className="grid-layout">
-                    {documents.map((doc) => (
-                      <div key={doc.documentId} className="item-card doc-card glass-card">
-                        <div
-                          onClick={() => navigate(`/document/${doc.documentId}`)}
-                          className="item-info"
-                        >
-                          <FileTypeIcon
-                            extension={doc.fileExtension}
-                            size={28}
-                            className="doc-icon"
-                          />
-                          <div className="doc-metadata">
-                            <span className="item-title">
-                              {doc.title}.{doc.fileExtension}
-                            </span>
-                            <span className="doc-size">
-                              {doc.subject || 'Khác'} • {doc.fileSizeMb.toFixed(2)} MB •{' '}
-                              {doc.aiParsingStatus}
-                            </span>
-                            {doc.requiresAppeal && (
-                              <span className="appeal-required-badge">Cần gửi giải trình</span>
-                            )}
-                            {!doc.requiresAppeal && doc.appealStatus === 'PENDING' && (
-                              <span className="appeal-required-badge">
-                                Giải trình đang chờ xử lý
-                              </span>
-                            )}
-                            {doc.publicReviewBlocked && doc.appealStatus === 'UPHELD' && (
-                              <span className="appeal-required-badge">
-                                Vi phạm vẫn còn hiệu lực
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="card-actions">
+                        <div className="flex items-center space-x-1">
                           <button
-                            onClick={() => openShare(doc)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAccessModalItem({ type: 'folder', id: folder.folderId });
+                            }}
                             className="action-btn"
-                            title="Chia sẻ cho bạn bè"
+                            title="Quản lý quyền truy cập thư mục (Manage Access)"
                           >
-                            <Share2 size={16} />
+                            <Shield size={16} />
                           </button>
                           <button
-                            onClick={() => handleAskAi(doc)}
-                            className="action-btn ask-ai-btn"
-                            title="Hỏi AI về tài liệu"
-                            disabled={askingDocumentId === doc.documentId}
-                          >
-                            {askingDocumentId === doc.documentId ? (
-                              <Loader className="spin" size={16} />
-                            ) : (
-                              <Bot size={16} />
-                            )}
-                          </button>
-                          <button
-                            onClick={() => setDeleteDocumentTarget(doc)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFolder(folder.folderId);
+                            }}
                             className="delete-item-btn"
-                            title="Xóa tài liệu"
+                            title="Xóa thư mục"
                           >
                             <Trash2 size={16} />
                           </button>
@@ -626,6 +732,172 @@ export const Dashboard: React.FC = () => {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Files Header & List/Grid View */}
+              {documents.length > 0 && (
+                <div className="section-block" style={{ marginTop: '1.5rem' }}>
+                  <h4>Tài liệu ({documents.length})</h4>
+
+                  {viewMode === 'list' ? (
+                    <div className="glass-card overflow-hidden my-3" style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                        <thead>
+                          <tr style={{ background: 'rgba(15, 23, 42, 0.7)', color: '#94a3b8', borderBottom: '1px solid rgba(255,255,255,0.1)', fontSize: '0.8rem', textTransform: 'uppercase' }}>
+                            <th style={{ padding: '0.75rem', width: '2.5rem', textAlign: 'center' }}>
+                              <button onClick={toggleSelectAllDocs} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>
+                                {selectedDocIds.size > 0 && selectedDocIds.size === documents.length ? (
+                                  <CheckSquare size={16} style={{ color: '#60a5fa' }} />
+                                ) : (
+                                  <Square size={16} />
+                                )}
+                              </button>
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>Tài liệu</th>
+                            <th style={{ padding: '0.75rem' }}>Môn học</th>
+                            <th style={{ padding: '0.75rem' }}>Dung lượng</th>
+                            <th style={{ padding: '0.75rem' }}>Trạng thái AI</th>
+                            <th style={{ padding: '0.75rem' }}>Ngày tạo</th>
+                            <th style={{ padding: '0.75rem', textAlign: 'right' }}>Thao tác</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {documents.map((doc) => {
+                            const isSelected = selectedDocIds.has(doc.documentId);
+                            return (
+                              <tr key={doc.documentId} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent' }}>
+                                <td style={{ padding: '0.75rem', textAlign: 'center' }}>
+                                  <button onClick={() => toggleSelectDoc(doc.documentId)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}>
+                                    {isSelected ? <CheckSquare size={16} style={{ color: '#60a5fa' }} /> : <Square size={16} style={{ color: '#64748b' }} />}
+                                  </button>
+                                </td>
+                                <td style={{ padding: '0.75rem', fontWeight: 500 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => navigate(`/document/${doc.documentId}`)}>
+                                    <FileTypeIcon extension={doc.fileExtension} size={22} />
+                                    <span style={{ textDecoration: 'underline' }}>{getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}</span>
+                                  </div>
+                                </td>
+                                <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.subject || 'Khác'}</td>
+                                <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.fileSizeMb.toFixed(2)} MB</td>
+                                <td style={{ padding: '0.75rem' }}><span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', background: 'rgba(51, 65, 85, 0.6)', color: '#cbd5e1' }}>{doc.aiParsingStatus}</span></td>
+                                <td style={{ padding: '0.75rem', color: '#94a3b8', fontSize: '0.8rem' }}>{doc.createdAt ? formatDateTime(doc.createdAt) : '-'}</td>
+                                <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem' }}>
+                                    <button onClick={(e) => { e.stopPropagation(); setAccessModalItem({ type: 'document', id: doc.documentId }); }} className="action-btn" title="Quản lý quyền truy cập"><Shield size={15} /></button>
+                                    <button onClick={(e) => { e.stopPropagation(); setVersionModalDocId(doc.documentId); }} className="action-btn" title="Lịch sử phiên bản"><History size={15} /></button>
+                                    <button onClick={() => openShare(doc)} className="action-btn" title="Chia sẻ cho bạn bè"><Share2 size={15} /></button>
+                                    <button onClick={() => handleAskAi(doc)} className="action-btn ask-ai-btn" title="Hỏi AI" disabled={askingDocumentId === doc.documentId}>{askingDocumentId === doc.documentId ? <Loader className="spin" size={15} /> : <Bot size={15} />}</button>
+                                    <button onClick={() => setDeleteDocumentTarget(doc)} className="delete-item-btn" title="Xóa tài liệu"><Trash2 size={15} /></button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="grid-layout">
+                      {documents.map((doc) => {
+                        const isSelected = selectedDocIds.has(doc.documentId);
+                        return (
+                          <div key={doc.documentId} className={`item-card doc-card glass-card ${isSelected ? 'selected-card' : ''}`} style={isSelected ? { border: '1px solid #60a5fa', background: 'rgba(59, 130, 246, 0.08)' } : {}}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSelectDoc(doc.documentId);
+                              }}
+                              style={{ position: 'absolute', top: '0.6rem', right: '0.6rem', background: 'none', border: 'none', cursor: 'pointer', zIndex: 2 }}
+                              title="Chọn tài liệu"
+                            >
+                              {isSelected ? <CheckSquare size={18} style={{ color: '#60a5fa' }} /> : <Square size={18} style={{ color: '#64748b' }} />}
+                            </button>
+                            <div
+                              onClick={() => navigate(`/document/${doc.documentId}`)}
+                              className="item-info"
+                            >
+                              <FileTypeIcon
+                                extension={doc.fileExtension}
+                                size={28}
+                                className="doc-icon"
+                              />
+                              <div className="doc-metadata">
+                                <span className="item-title" title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}>
+                                  {getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}
+                                </span>
+                                <span className="doc-size">
+                                  {doc.subject || 'Khác'} • {doc.fileSizeMb.toFixed(2)} MB •{' '}
+                                  {doc.aiParsingStatus}
+                                </span>
+                                {doc.requiresAppeal && (
+                                  <span className="appeal-required-badge">Cần gửi giải trình</span>
+                                )}
+                                {!doc.requiresAppeal && doc.appealStatus === 'PENDING' && (
+                                  <span className="appeal-required-badge">
+                                    Giải trình đang chờ xử lý
+                                  </span>
+                                )}
+                                {doc.publicReviewBlocked && doc.appealStatus === 'UPHELD' && (
+                                  <span className="appeal-required-badge">
+                                    Vi phạm vẫn còn hiệu lực
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="card-actions">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAccessModalItem({ type: 'document', id: doc.documentId });
+                                }}
+                                className="action-btn"
+                                title="Quản lý quyền truy cập (Manage Access)"
+                              >
+                                <Shield size={16} />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setVersionModalDocId(doc.documentId);
+                                }}
+                                className="action-btn"
+                                title="Lịch sử phiên bản (Versioning)"
+                              >
+                                <History size={16} />
+                              </button>
+                              <button
+                                onClick={() => openShare(doc)}
+                                className="action-btn"
+                                title="Chia sẻ cho bạn bè"
+                              >
+                                <Share2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleAskAi(doc)}
+                                className="action-btn ask-ai-btn"
+                                title="Hỏi AI về tài liệu"
+                                disabled={askingDocumentId === doc.documentId}
+                              >
+                                {askingDocumentId === doc.documentId ? (
+                                  <Loader className="spin" size={16} />
+                                ) : (
+                                  <Bot size={16} />
+                                )}
+                              </button>
+                              <button
+                                onClick={() => setDeleteDocumentTarget(doc)}
+                                className="delete-item-btn"
+                                title="Xóa tài liệu"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -648,8 +920,8 @@ export const Dashboard: React.FC = () => {
                             className="doc-icon"
                           />
                           <div className="doc-metadata">
-                            <span className="item-title">
-                              {doc.title}.{doc.fileExtension}
+                            <span className="item-title" title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}>
+                              {getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}
                             </span>
                             <span className="doc-size">Tài liệu được chia sẻ</span>
                           </div>
@@ -1044,6 +1316,27 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Access Management Modal */}
+      {accessModalItem && (
+        <ManageAccessModal
+          itemType={accessModalItem.type}
+          itemId={accessModalItem.id}
+          isOpen={!!accessModalItem}
+          onClose={() => setAccessModalItem(null)}
+        />
+      )}
+
+      {/* Version History Modal */}
+      {versionModalDocId !== null && (
+        <DocumentVersionHistoryModal
+          documentId={versionModalDocId}
+          isOpen={versionModalDocId !== null}
+          onClose={() => setVersionModalDocId(null)}
+          onVersionChanged={() => loadFolderContent()}
+        />
+      )}
+
       <style>{`
         .dashboard-container {
           min-height: 80vh;
@@ -1206,7 +1499,7 @@ export const Dashboard: React.FC = () => {
 
         .grid-layout {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
           gap: 1rem;
         }
 
@@ -1218,12 +1511,20 @@ export const Dashboard: React.FC = () => {
           cursor: pointer;
         }
 
+        .doc-card {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 0.6rem;
+          padding: 0.9rem 1rem;
+        }
+
         .item-info {
           display: flex;
           align-items: center;
           gap: 0.75rem;
           flex: 1;
           overflow: hidden;
+          width: 100%;
         }
 
         .item-title {
@@ -1253,6 +1554,8 @@ export const Dashboard: React.FC = () => {
           display: flex;
           flex-direction: column;
           overflow: hidden;
+          flex: 1;
+          min-width: 0;
         }
 
         .doc-size {
@@ -1262,6 +1565,17 @@ export const Dashboard: React.FC = () => {
         }
 
         .appeal-required-badge{display:inline-flex;align-self:flex-start;margin-top:.4rem;padding:.25rem .5rem;border:1px solid rgba(245,158,11,.35);border-radius:999px;background:rgba(245,158,11,.12);color:#fbbf24;font-size:.68rem;font-weight:800}
+
+        .doc-card .card-actions {
+          display: flex;
+          justify-content: flex-end;
+          align-items: center;
+          gap: 0.35rem;
+          border-top: 1px solid rgba(255, 255, 255, 0.07);
+          padding-top: 0.5rem;
+          margin-top: 0.2rem;
+          width: 100%;
+        }
 
         .delete-item-btn {
           background: transparent;

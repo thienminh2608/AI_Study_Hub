@@ -14,6 +14,9 @@ public static class DependencyInjection
         services.AddScoped<IFolderService, FolderService>();
         services.AddScoped<IFriendshipService, FriendshipService>();
         services.AddScoped<ITransactionService, TransactionService>();
+        services.AddScoped<IPermissionService, PermissionService>();
+        services.AddScoped<ITrashService, TrashService>();
+        services.AddScoped<IVersionService, VersionService>();
 
         return services;
     }

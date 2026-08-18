@@ -13,6 +13,8 @@ import {
   Users,
 } from 'lucide-react';
 
+import { Pagination } from '../components/Pagination';
+
 interface Friend {
   userId: number;
   username: string;
@@ -36,10 +38,21 @@ export const Friends: React.FC = () => {
   const { confirm, notify } = useUiFeedback();
   const [activeTab, setActiveTab] = useState<'friends' | 'pending' | 'blocked'>('friends');
 
-  // Lists
+  // Lists & Pagination
   const [friendsList, setFriendsList] = useState<Friend[]>([]);
+  const [friendsPage, setFriendsPage] = useState(1);
+  const [friendsTotalPages, setFriendsTotalPages] = useState(1);
+  const [friendsTotalCount, setFriendsTotalCount] = useState(0);
+
   const [pendingList, setPendingRequestList] = useState<PendingRequest[]>([]);
+  const [pendingPage, setPendingPage] = useState(1);
+  const [pendingTotalPages, setPendingTotalPages] = useState(1);
+  const [pendingTotalCount, setPendingTotalCount] = useState(0);
+
   const [blockedList, setBlockedList] = useState<Friend[]>([]);
+  const [blockedPage, setBlockedPage] = useState(1);
+  const [blockedTotalPages, setBlockedTotalPages] = useState(1);
+  const [blockedTotalCount, setBlockedTotalCount] = useState(0);
 
   // Search
   const [searchEmail, setSearchEmail] = useState('');
@@ -50,16 +63,26 @@ export const Friends: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
 
-  const loadAllData = async () => {
+  const loadAllData = async (fPage = 1, pPage = 1, bPage = 1) => {
     setLoading(true);
     try {
-      const friends = await api.friendship.getFriends();
-      const pending = await api.friendship.getPending();
-      const blocked = await api.friendship.getBlocked();
+      const friendsRes = await api.friendshipExtra.getFriendsPaged(fPage, 10);
+      setFriendsList(friendsRes.items);
+      setFriendsPage(friendsRes.pageNumber);
+      setFriendsTotalPages(friendsRes.totalPages);
+      setFriendsTotalCount(friendsRes.totalCount);
 
-      setFriendsList(friends as any[]);
-      setPendingRequestList(pending as any[]);
-      setBlockedList(blocked as any[]);
+      const pendingRes = await api.friendshipExtra.getPendingRequestsPaged(pPage, 10);
+      setPendingRequestList(pendingRes.items);
+      setPendingPage(pendingRes.pageNumber);
+      setPendingTotalPages(pendingRes.totalPages);
+      setPendingTotalCount(pendingRes.totalCount);
+
+      const blockedRes = await api.friendshipExtra.getBlockedUsersPaged(bPage, 10);
+      setBlockedList(blockedRes.items);
+      setBlockedPage(blockedRes.pageNumber);
+      setBlockedTotalPages(blockedRes.totalPages);
+      setBlockedTotalCount(blockedRes.totalCount);
     } catch (err: any) {
       console.error('Error loading social data:', err);
     } finally {
@@ -178,33 +201,41 @@ export const Friends: React.FC = () => {
                   <p>Bạn chưa kết bạn với ai. Sử dụng thanh tìm kiếm để kết nối nhé!</p>
                 </div>
               ) : (
-                <div className="social-list">
-                  {friendsList.map((f) => (
-                    <div key={f.userId} className="social-card glass-card">
-                      <div className="user-details">
-                        <span className="username">{f.username}</span>
-                        <span className="email">{f.email}</span>
+                <div>
+                  <div className="social-list">
+                    {friendsList.map((f) => (
+                      <div key={f.userId} className="social-card glass-card">
+                        <div className="user-details">
+                          <span className="username">{f.username}</span>
+                          <span className="email">{f.email}</span>
+                        </div>
+                        <div className="card-actions">
+                          <button
+                            onClick={() => handleRespondRequest(f.userId, 'BLOCKED')}
+                            className="btn-secondary block-btn"
+                            title="Chặn người này"
+                          >
+                            <UserX size={16} />
+                            <span>Chặn</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteFriendship(f.userId)}
+                            className="btn-secondary delete-btn"
+                            title="Hủy kết bạn"
+                          >
+                            <UserMinus size={16} />
+                            <span>Xóa bạn</span>
+                          </button>
+                        </div>
                       </div>
-                      <div className="card-actions">
-                        <button
-                          onClick={() => handleRespondRequest(f.userId, 'BLOCKED')}
-                          className="btn-secondary block-btn"
-                          title="Chặn người này"
-                        >
-                          <UserX size={16} />
-                          <span>Chặn</span>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteFriendship(f.userId)}
-                          className="btn-secondary delete-btn"
-                          title="Hủy kết bạn"
-                        >
-                          <UserMinus size={16} />
-                          <span>Xóa bạn</span>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                  <Pagination
+                    currentPage={friendsPage}
+                    totalPages={friendsTotalPages}
+                    totalCount={friendsTotalCount}
+                    onPageChange={(p) => loadAllData(p, pendingPage, blockedPage)}
+                  />
                 </div>
               )
             ) : activeTab === 'pending' ? (
@@ -214,44 +245,52 @@ export const Friends: React.FC = () => {
                   <p>Không có lời mời kết bạn nào đang chờ duyệt.</p>
                 </div>
               ) : (
-                <div className="social-list">
-                  {pendingList.map((p) => (
-                    <div key={p.userId} className="social-card glass-card">
-                      <div className="user-details">
-                        <span className="username">{p.username}</span>
-                        <span className="email">{p.email}</span>
-                        <span className="pending-badge">
-                          {p.isRequester ? 'Lời mời đã gửi' : 'Yêu cầu đang chờ bạn duyệt'}
-                        </span>
-                      </div>
-                      <div className="card-actions">
-                        {p.isRequester ? (
-                          <button
-                            onClick={() => handleDeleteFriendship(p.userId)}
-                            className="btn-secondary delete-btn"
-                          >
-                            Hủy lời mời
-                          </button>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => handleRespondRequest(p.userId, 'ACCEPTED')}
-                              className="btn-primary"
-                            >
-                              <UserCheck size={16} />
-                              <span>Đồng ý</span>
-                            </button>
+                <div>
+                  <div className="social-list">
+                    {pendingList.map((p) => (
+                      <div key={p.userId} className="social-card glass-card">
+                        <div className="user-details">
+                          <span className="username">{p.username}</span>
+                          <span className="email">{p.email}</span>
+                          <span className="pending-badge">
+                            {p.isRequester ? 'Lời mời đã gửi' : 'Yêu cầu đang chờ bạn duyệt'}
+                          </span>
+                        </div>
+                        <div className="card-actions">
+                          {p.isRequester ? (
                             <button
                               onClick={() => handleDeleteFriendship(p.userId)}
                               className="btn-secondary delete-btn"
                             >
-                              Từ chối
+                              Hủy lời mời
                             </button>
-                          </>
-                        )}
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleRespondRequest(p.userId, 'ACCEPTED')}
+                                className="btn-primary"
+                              >
+                                <UserCheck size={16} />
+                                <span>Đồng ý</span>
+                              </button>
+                              <button
+                                onClick={() => handleDeleteFriendship(p.userId)}
+                                className="btn-secondary delete-btn"
+                              >
+                                Từ chối
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                  <Pagination
+                    currentPage={pendingPage}
+                    totalPages={pendingTotalPages}
+                    totalCount={pendingTotalCount}
+                    onPageChange={(p) => loadAllData(friendsPage, p, blockedPage)}
+                  />
                 </div>
               )
             ) : blockedList.length === 0 ? (
@@ -260,23 +299,31 @@ export const Friends: React.FC = () => {
                 <p>Không có người dùng nào bị chặn.</p>
               </div>
             ) : (
-              <div className="social-list">
-                {blockedList.map((b) => (
-                  <div key={b.userId} className="social-card glass-card">
-                    <div className="user-details">
-                      <span className="username">{b.username}</span>
-                      <span className="email">{b.email}</span>
+              <div>
+                <div className="social-list">
+                  {blockedList.map((b) => (
+                    <div key={b.userId} className="social-card glass-card">
+                      <div className="user-details">
+                        <span className="username">{b.username}</span>
+                        <span className="email">{b.email}</span>
+                      </div>
+                      <div className="card-actions">
+                        <button
+                          onClick={() => handleDeleteFriendship(b.userId)}
+                          className="btn-primary"
+                        >
+                          Hủy chặn
+                        </button>
+                      </div>
                     </div>
-                    <div className="card-actions">
-                      <button
-                        onClick={() => handleDeleteFriendship(b.userId)}
-                        className="btn-primary"
-                      >
-                        Hủy chặn
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <Pagination
+                  currentPage={blockedPage}
+                  totalPages={blockedTotalPages}
+                  totalCount={blockedTotalCount}
+                  onPageChange={(p) => loadAllData(friendsPage, pendingPage, p)}
+                />
               </div>
             )}
           </div>

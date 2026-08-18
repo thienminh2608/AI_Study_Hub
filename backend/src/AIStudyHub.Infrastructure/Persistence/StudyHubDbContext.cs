@@ -103,6 +103,10 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
     {
         get; set;
     }
+    public virtual DbSet<FolderShare> FolderShares { get; set; }
+    public virtual DbSet<DocumentVersion> DocumentVersions { get; set; }
+    public virtual DbSet<AuditLog> AuditLogs { get; set; }
+
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -226,6 +230,14 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.ShareLinkToken)
                 .HasMaxLength(100)
                 .HasColumnName("share_link_token");
+            entity.Property(e => e.GeneralAccess).HasMaxLength(20).HasDefaultValue("RESTRICTED").HasColumnName("general_access");
+            entity.Property(e => e.LifeCycleStatus).HasMaxLength(30).HasDefaultValue("PRIVATE").HasColumnName("lifecycle_status");
+            entity.Property(e => e.IsDeleted).HasDefaultValue(false).HasColumnName("is_deleted");
+            entity.Property(e => e.DeletedAt).HasColumnName("deleted_at");
+            entity.Property(e => e.DeletedByUserId).HasColumnName("deleted_by_user_id");
+            entity.Property(e => e.CurrentVersionId).HasColumnName("current_version_id");
+            entity.Property(e => e.ShareLinkExpiresAt).HasColumnName("share_link_expires_at");
+            entity.Property(e => e.IsShareLinkRevoked).HasDefaultValue(false).HasColumnName("is_share_link_revoked");
             entity.Property(e => e.SharingPermission)
                 .HasMaxLength(20)
                 .HasDefaultValue("PRIVATE")
@@ -285,9 +297,57 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.DocumentId).HasColumnName("document_id");
             entity.Property(e => e.OwnerUserId).HasColumnName("owner_user_id");
             entity.Property(e => e.SharedWithUserId).HasColumnName("shared_with_user_id");
+            entity.Property(e => e.Role).HasMaxLength(20).HasDefaultValue("VIEWER").HasColumnName("role");
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
-            entity.HasOne(e => e.Document).WithMany().HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Document).WithMany(p => p.DocumentShares).HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.SharedWithUser).WithMany().HasForeignKey(e => e.SharedWithUserId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<FolderShare>(entity =>
+        {
+            entity.HasKey(e => e.ShareId);
+            entity.ToTable("folder_shares");
+            entity.HasIndex(e => new { e.FolderId, e.SharedWithUserId }).IsUnique();
+            entity.Property(e => e.ShareId).HasColumnName("share_id");
+            entity.Property(e => e.FolderId).HasColumnName("folder_id");
+            entity.Property(e => e.OwnerUserId).HasColumnName("owner_user_id");
+            entity.Property(e => e.SharedWithUserId).HasColumnName("shared_with_user_id");
+            entity.Property(e => e.Role).HasMaxLength(20).HasDefaultValue("VIEWER").HasColumnName("role");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.HasOne(e => e.Folder).WithMany(p => p.FolderShares).HasForeignKey(e => e.FolderId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.SharedWithUser).WithMany(p => p.FolderShares).HasForeignKey(e => e.SharedWithUserId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<DocumentVersion>(entity =>
+        {
+            entity.HasKey(e => e.VersionId);
+            entity.ToTable("document_versions");
+            entity.HasIndex(e => new { e.DocumentId, e.VersionNumber }).IsUnique();
+            entity.Property(e => e.VersionId).HasColumnName("version_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.VersionNumber).HasColumnName("version_number");
+            entity.Property(e => e.CloudStorageUrl).HasMaxLength(500).HasColumnName("cloud_storage_url");
+            entity.Property(e => e.FileExtension).HasMaxLength(10).HasColumnName("file_extension");
+            entity.Property(e => e.FileSizeMb).HasColumnType("decimal(5, 2)").HasColumnName("file_size_mb");
+            entity.Property(e => e.ChangeSummary).HasMaxLength(500).HasColumnName("change_summary");
+            entity.Property(e => e.CreatedByUserId).HasColumnName("created_by_user_id");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.HasOne(e => e.Document).WithMany(p => p.DocumentVersions).HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.CreatedByUser).WithMany(p => p.DocumentVersions).HasForeignKey(e => e.CreatedByUserId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.HasKey(e => e.AuditId);
+            entity.ToTable("audit_logs");
+            entity.Property(e => e.AuditId).HasColumnName("audit_id");
+            entity.Property(e => e.ActorUserId).HasColumnName("actor_user_id");
+            entity.Property(e => e.Action).HasMaxLength(50).HasColumnName("action");
+            entity.Property(e => e.TargetType).HasMaxLength(20).HasColumnName("target_type");
+            entity.Property(e => e.TargetId).HasColumnName("target_id");
+            entity.Property(e => e.Details).HasMaxLength(2000).HasColumnName("details");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.HasOne(e => e.ActorUser).WithMany(p => p.AuditLogs).HasForeignKey(e => e.ActorUserId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<DocumentExtractedText>(entity =>
@@ -381,6 +441,9 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.ParentFolderId)
                 .HasDefaultValueSql("(NULL)")
                 .HasColumnName("parent_folder_id");
+            entity.Property(e => e.GeneralAccess).HasMaxLength(20).HasDefaultValue("RESTRICTED").HasColumnName("general_access");
+            entity.Property(e => e.IsDeleted).HasDefaultValue(false).HasColumnName("is_deleted");
+            entity.Property(e => e.DeletedAt).HasColumnName("deleted_at");
             entity.Property(e => e.SharingPermission)
                 .HasMaxLength(20)
                 .HasDefaultValue("PRIVATE")

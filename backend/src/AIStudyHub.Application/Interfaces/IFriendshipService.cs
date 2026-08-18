@@ -14,4 +14,9 @@ public interface IFriendshipService
     Task<List<FriendDto>> GetPendingRequestsAsync(int userId);
     Task<List<FriendDto>> GetBlockedUsersAsync(int userId);
     Task<FriendDto?> FindUserByEmailAsync(int myUserId, string email);
+
+    // Paginated Methods
+    Task<PagedResult<FriendDto>> GetAcceptedFriendsPagedAsync(int userId, int pageNumber, int pageSize);
+    Task<PagedResult<FriendDto>> GetPendingRequestsPagedAsync(int userId, int pageNumber, int pageSize);
+    Task<PagedResult<FriendDto>> GetBlockedUsersPagedAsync(int userId, int pageNumber, int pageSize);
 }

@@ -116,6 +116,30 @@ public class FriendshipController : ControllerBase
         return Ok(blocked);
     }
 
+    [HttpGet("friends/paged")]
+    public async Task<IActionResult> GetFriendsPaged([FromQuery] int page = 1, [FromQuery] int pageSize = 10)
+    {
+        int userId = GetCurrentUserId();
+        var paged = await _friendshipService.GetAcceptedFriendsPagedAsync(userId, page, pageSize);
+        return Ok(paged);
+    }
+
+    [HttpGet("pending/paged")]
+    public async Task<IActionResult> GetPendingRequestsPaged([FromQuery] int page = 1, [FromQuery] int pageSize = 10)
+    {
+        int userId = GetCurrentUserId();
+        var paged = await _friendshipService.GetPendingRequestsPagedAsync(userId, page, pageSize);
+        return Ok(paged);
+    }
+
+    [HttpGet("blocked/paged")]
+    public async Task<IActionResult> GetBlockedUsersPaged([FromQuery] int page = 1, [FromQuery] int pageSize = 10)
+    {
+        int userId = GetCurrentUserId();
+        var paged = await _friendshipService.GetBlockedUsersPagedAsync(userId, page, pageSize);
+        return Ok(paged);
+    }
+
     [HttpGet("find")]
     public async Task<IActionResult> FindFriendByEmail([FromQuery] string email)
     {

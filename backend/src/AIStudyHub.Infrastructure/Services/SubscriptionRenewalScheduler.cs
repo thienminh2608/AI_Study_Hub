@@ -29,27 +29,34 @@ public class SubscriptionRenewalScheduler : BackgroundService
     {
         _logger.LogInformation("Subscription Renewal Scheduler is starting.");
 
-        // Wait 5 seconds before first run
-        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                using var scope = _serviceProvider.CreateScope();
-                var dbContext = scope.ServiceProvider.GetRequiredService<IStudyHubDbContext>();
-                var mailService = scope.ServiceProvider.GetRequiredService<IMailService>();
+            // Wait 5 seconds before first run
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
 
-                await ProcessExpiryWarningsAsync(dbContext, mailService);
-                await ProcessExpiredSubscriptionsAsync(dbContext, mailService);
-            }
-            catch (Exception ex)
+            while (!stoppingToken.IsCancellationRequested)
             {
-                _logger.LogError(ex, "Error occurred in Subscription Renewal Scheduler.");
-            }
+                try
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var dbContext = scope.ServiceProvider.GetRequiredService<IStudyHubDbContext>();
+                    var mailService = scope.ServiceProvider.GetRequiredService<IMailService>();
 
-            // Run every 60 seconds
-            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+                    await ProcessExpiryWarningsAsync(dbContext, mailService);
+                    await ProcessExpiredSubscriptionsAsync(dbContext, mailService);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error occurred in Subscription Renewal Scheduler.");
+                }
+
+                // Run every 60 seconds
+                await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Graceful shutdown
         }
 
         _logger.LogInformation("Subscription Renewal Scheduler is stopping.");
