@@ -198,6 +198,13 @@ export const SidebarLayout: React.FC = () => {
                 <Trash2 size={20} />
                 <span>Nhật ký hệ thống (Audit Log)</span>
               </NavLink>
+              <NavLink
+                to="/chat"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <Bot size={20} />
+                <span>Trợ lý AI</span>
+              </NavLink>
             </>
           ) : isModerator ? (
             <>
@@ -337,7 +344,12 @@ export const SidebarLayout: React.FC = () => {
           gap:.4rem;
           font-weight: 600;
           font-size: 0.95rem;
-          max-width: 120px;
+          min-width: 0;
+          flex: 1 1 auto;
+          overflow: hidden;
+        }
+
+        .username span {
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -348,6 +360,8 @@ export const SidebarLayout: React.FC = () => {
           padding: 0.2rem 0.5rem;
           border-radius: 4px;
           font-weight: 700;
+          flex-shrink: 0;
+          white-space: nowrap;
         }
 
         .badge.free {
