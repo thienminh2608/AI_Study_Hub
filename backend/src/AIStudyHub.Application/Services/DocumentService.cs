@@ -21,16 +21,18 @@ public class DocumentService : IDocumentService
     private readonly IStudyHubDbContext _dbContext;
     private readonly IFileStorage _fileStorage;
     private readonly IClock _clock;
+    private readonly IOcrService _ocrService;
     private const string UploadFolder = "uploads";
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
         { "pdf", "docx", "txt", "xlsx", "pptx", "md" };
     private const long MaxFileSizeBytes = 50L * 1024 * 1024;
 
-    public DocumentService(IStudyHubDbContext dbContext, IFileStorage fileStorage, IClock clock)
+    public DocumentService(IStudyHubDbContext dbContext, IFileStorage fileStorage, IClock clock, IOcrService? ocrService = null)
     {
         _dbContext = dbContext;
         _fileStorage = fileStorage;
         _clock = clock;
+        _ocrService = ocrService ?? new UnconfiguredOcrService();
     }
 
     public async Task<DocumentResponseDto> UploadDocumentAsync(int userId, int? folderId, string originalFileName, string fileExtension, long fileSizeInBytes, Stream fileStream)
@@ -120,19 +122,12 @@ public class DocumentService : IDocumentService
         try
         {
             string savedPhysicalPath = _fileStorage.GetPhysicalPath(relativeFilePath);
-            string extractedText = ExtractTextFromFile(savedPhysicalPath, fileExtension);
+            var extraction = await ExtractAndPersistAsync(document, savedPhysicalPath, fileExtension);
+            string extractedText = extraction.Text;
             if (!string.IsNullOrWhiteSpace(extractedText))
             {
                 document.AiParsingStatus = "CHUNKING";
-                var textEntity = new DocumentExtractedText
-                {
-                    DocumentId = document.DocumentId,
-                    ExtractedText = extractedText,
-                    CreatedAt = _clock.Now
-                };
-                _dbContext.DocumentExtractedTexts.Add(textEntity);
                 _dbContext.DocumentChunks.AddRange(DocumentChunker.Chunk(document.DocumentId, extractedText, _clock.Now));
-                document.AiParsingStatus = "READY";
                 _dbContext.ModerationNotices.Add(new ModerationNotice
                 {
                     UserId = userId,
@@ -144,8 +139,9 @@ public class DocumentService : IDocumentService
                     IsRead = false,
                     CreatedAt = _clock.Now
                 });
-                await _dbContext.SaveChangesAsync();
             }
+            document.AiParsingStatus = "READY";
+            await _dbContext.SaveChangesAsync();
         }
         catch (Exception ex)
         {
@@ -373,14 +369,52 @@ public class DocumentService : IDocumentService
         }).ToList();
     }
 
-    public async Task<List<DocumentResponseDto>> GetPublicDocumentsAsync()
+    public async Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsAsync(int pageNumber, int pageSize, string? search, string? fileType, string? sortBy, string? sortDirection)
     {
-        var docs = await _dbContext.Documents
+        pageNumber = Math.Max(1, pageNumber);
+        pageSize = Math.Clamp(pageSize, 1, 50);
+        var query = _dbContext.Documents
             .Include(d => d.User)
+            .Include(d => d.DocumentExtractedText)
             .Where(d => d.SharingPermission == "PUBLIC" && d.IsFlagged == false && !d.IsDeleted)
-            .ToListAsync();
+            .AsQueryable();
 
-        return docs.Select(d => MapToDto(d, d.User.Username)).ToList();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim().ToLower();
+            query = query.Where(d => d.Title.ToLower().Contains(keyword)
+                || d.User.Username.ToLower().Contains(keyword)
+                || d.FileExtension.ToLower().Contains(keyword));
+        }
+
+        if (!string.IsNullOrWhiteSpace(fileType) && !fileType.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var extensions = fileType.ToUpperInvariant() switch
+            {
+                "PDF" => new[] { "pdf" },
+                "WORD" => new[] { "doc", "docx" },
+                "SHEET" => new[] { "xls", "xlsx", "csv" },
+                "SLIDE" => new[] { "ppt", "pptx" },
+                "TEXT" => new[] { "txt", "md" },
+                _ => Array.Empty<string>()
+            };
+            if (extensions.Length > 0)
+                query = query.Where(d => extensions.Contains(d.FileExtension.ToLower()));
+        }
+
+        var totalCount = await query.CountAsync();
+        bool ascending = string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
+        query = sortBy?.ToLowerInvariant() switch
+        {
+            "title" => ascending ? query.OrderBy(d => d.Title) : query.OrderByDescending(d => d.Title),
+            "bookmarks" => ascending ? query.OrderBy(d => d.BookmarkCount) : query.OrderByDescending(d => d.BookmarkCount),
+            "downloads" => ascending ? query.OrderBy(d => d.DownloadCount) : query.OrderByDescending(d => d.DownloadCount),
+            "views" => ascending ? query.OrderBy(d => d.ViewCount) : query.OrderByDescending(d => d.ViewCount),
+            _ => ascending ? query.OrderBy(d => d.CreatedAt) : query.OrderByDescending(d => d.CreatedAt)
+        };
+        var docs = await query.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToListAsync();
+
+        return new PagedResult<DocumentResponseDto>(docs.Select(d => MapToDto(d, d.User.Username)).ToList(), totalCount, pageNumber, pageSize);
     }
 
     public async Task<DocumentResponseDto?> GetDocumentByIdAsync(int documentId)
@@ -837,6 +871,161 @@ public class DocumentService : IDocumentService
     // TEXT EXTRACTION LOGIC
     // ─────────────────────────────────────────────────────────────────────────
 
+    private async Task<ExtractionResult> ExtractAndPersistAsync(Document document, string filePath, string fileExtension)
+    {
+        string text = ExtractTextFromFile(filePath, fileExtension);
+        int totalPages = CountPages(filePath, fileExtension);
+        int readablePages = CountReadablePages(text, totalPages);
+        bool imageContentDetected = HasImageContent(filePath, fileExtension, text);
+        var ocrRegions = new List<OcrRegionDto>();
+
+        if (imageContentDetected)
+        {
+            try
+            {
+                var ocrResult = await _ocrService.ExtractAsync(filePath, Path.GetFileName(filePath), CancellationToken.None);
+                ocrRegions = ocrResult.Regions ?? [];
+                foreach (var region in ocrRegions)
+                {
+                    var recognizedText = region.Text?.Trim();
+                    if (string.IsNullOrWhiteSpace(recognizedText))
+                        continue;
+                    text += $"\n[OCR PAGE {region.PageNumber}]\n{recognizedText}\n";
+                    if (region.PageNumber > 0 && region.PageNumber <= totalPages)
+                        readablePages++;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[OCR] Failed to extract image content: {ex.Message}");
+            }
+        }
+
+        readablePages = Math.Min(totalPages, readablePages);
+        var extraction = new DocumentExtractedText
+        {
+            DocumentId = document.DocumentId,
+            ExtractedText = text.Trim(),
+            TotalPages = totalPages,
+            ReadablePages = readablePages,
+            ExtractionCoverage = totalPages == 0 ? 0 : Math.Round((decimal)readablePages / totalPages, 4),
+            ImageContentDetected = imageContentDetected,
+            UnreadImageContentWarning = imageContentDetected && ocrRegions.All(region => string.IsNullOrWhiteSpace(region.Text)),
+            OcrRegionCount = ocrRegions.Count,
+            CreatedAt = _clock.Now
+        };
+
+        var existingText = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(item => item.DocumentId == document.DocumentId);
+        if (existingText == null)
+        {
+            _dbContext.DocumentExtractedTexts.Add(extraction);
+            document.DocumentExtractedText = extraction;
+        }
+        else
+        {
+            existingText.ExtractedText = extraction.ExtractedText;
+            existingText.TotalPages = extraction.TotalPages;
+            existingText.ReadablePages = extraction.ReadablePages;
+            existingText.ExtractionCoverage = extraction.ExtractionCoverage;
+            existingText.ImageContentDetected = extraction.ImageContentDetected;
+            existingText.UnreadImageContentWarning = extraction.UnreadImageContentWarning;
+            existingText.OcrRegionCount = extraction.OcrRegionCount;
+            existingText.CreatedAt = extraction.CreatedAt;
+            document.DocumentExtractedText = existingText;
+        }
+
+        var oldRegions = await _dbContext.DocumentOcrRegions.Where(region => region.DocumentId == document.DocumentId).ToListAsync();
+        _dbContext.DocumentOcrRegions.RemoveRange(oldRegions);
+        _dbContext.DocumentOcrRegions.AddRange(ocrRegions.Select(region => new DocumentOcrRegion
+        {
+            DocumentId = document.DocumentId,
+            PageNumber = region.PageNumber,
+            RegionType = region.RegionType,
+            BoundingBoxLeft = region.Left,
+            BoundingBoxTop = region.Top,
+            BoundingBoxWidth = region.Width,
+            BoundingBoxHeight = region.Height,
+            Confidence = region.Confidence,
+            RecognizedText = region.Text,
+            Source = "OCR",
+            CreatedAt = _clock.Now
+        }));
+
+        return new ExtractionResult(extraction.ExtractedText, extraction.UnreadImageContentWarning);
+    }
+
+    private static int CountPages(string filePath, string fileExtension)
+    {
+        string ext = fileExtension.TrimStart('.').ToLowerInvariant();
+        try
+        {
+            if (ext == "pdf")
+            {
+                using var document = PdfDocument.Open(filePath);
+                return document.NumberOfPages;
+            }
+
+            if (ext == "pptx")
+            {
+                using var archive = ZipFile.OpenRead(filePath);
+                return archive.Entries.Count(entry => Regex.IsMatch(entry.FullName, @"^ppt/slides/slide\d+\.xml$", RegexOptions.IgnoreCase));
+            }
+
+            return 1;
+        }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    private static int CountReadablePages(string text, int totalPages)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+        int taggedPages = Regex.Matches(text, @"\[PAGE \d+\]", RegexOptions.IgnoreCase).Count;
+        return Math.Min(totalPages, Math.Max(1, taggedPages));
+    }
+
+    private static bool HasImageContent(string filePath, string fileExtension, string text)
+    {
+        string ext = fileExtension.TrimStart('.').ToLowerInvariant();
+        if (ext == "pdf")
+        {
+            try
+            {
+                using var document = PdfDocument.Open(filePath);
+                return document.GetPages().Any(page => page.GetImages().Any())
+                    || CountReadablePages(text, document.NumberOfPages) < document.NumberOfPages;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        if (ext is not ("docx" or "pptx"))
+            return false;
+
+        try
+        {
+            using var archive = ZipFile.OpenRead(filePath);
+            return archive.Entries.Any(entry => entry.FullName.StartsWith("word/media/", StringComparison.OrdinalIgnoreCase)
+                || entry.FullName.StartsWith("ppt/media/", StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private sealed record ExtractionResult(string Text, bool HasUnreadImageContent);
+
+    private sealed class UnconfiguredOcrService : IOcrService
+    {
+        public Task<OcrResultDto> ExtractAsync(string filePath, string fileName, CancellationToken cancellationToken = default)
+            => Task.FromResult(new OcrResultDto { IsConfigured = false });
+    }
+
     private string ExtractTextFromFile(string filePath, string fileExtension)
     {
         string ext = fileExtension.ToLower().TrimStart('.');
@@ -1018,6 +1207,10 @@ public class DocumentService : IDocumentService
             FileExtension = doc.FileExtension,
             CloudStorageUrl = doc.CloudStorageUrl,
             FileAvailable = IsFileAvailable(doc.CloudStorageUrl),
+            ExtractionCoverage = doc.DocumentExtractedText?.ExtractionCoverage ?? 0,
+            ImageContentDetected = doc.DocumentExtractedText?.ImageContentDetected ?? false,
+            UnreadImageContentWarning = doc.DocumentExtractedText?.UnreadImageContentWarning ?? false,
+            OcrRegionCount = doc.DocumentExtractedText?.OcrRegionCount ?? 0,
             FileSizeMb = doc.FileSizeMb,
             AiParsingStatus = doc.AiParsingStatus ?? "PENDING",
             SharingPermission = doc.SharingPermission ?? "PRIVATE",
@@ -1058,20 +1251,15 @@ public class DocumentService : IDocumentService
             doc.AiParsingStatus = "PROCESSING";
             await _dbContext.SaveChangesAsync();
 
-            // Perform extraction logic if file exists
             if (IsFileAvailable(doc.CloudStorageUrl))
             {
-                // Simple extraction or text simulation
-                var existingText = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(e => e.DocumentId == documentId);
-                if (existingText == null)
-                {
-                    _dbContext.DocumentExtractedTexts.Add(new DocumentExtractedText
-                    {
-                        DocumentId = documentId,
-                        ExtractedText = $"Trích xuất văn bản tự động cho tài liệu {doc.Title}",
-                        CreatedAt = _clock.Now
-                    });
-                }
+                var extraction = await ExtractAndPersistAsync(doc,
+                    _fileStorage.GetPhysicalPath(doc.CloudStorageUrl.TrimStart('/')),
+                    doc.FileExtension);
+                var oldChunks = await _dbContext.DocumentChunks.Where(chunk => chunk.DocumentId == documentId).ToListAsync();
+                _dbContext.DocumentChunks.RemoveRange(oldChunks);
+                if (!string.IsNullOrWhiteSpace(extraction.Text))
+                    _dbContext.DocumentChunks.AddRange(DocumentChunker.Chunk(documentId, extraction.Text, _clock.Now));
             }
 
             doc.AiParsingStatus = "READY";

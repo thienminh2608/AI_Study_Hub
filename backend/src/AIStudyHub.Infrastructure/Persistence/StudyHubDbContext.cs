@@ -48,6 +48,11 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
         get; set;
     }
 
+    public virtual DbSet<DocumentOcrRegion> DocumentOcrRegions
+    {
+        get; set;
+    }
+
     public virtual DbSet<DocumentChunk> DocumentChunks
     {
         get; set;
@@ -365,11 +370,38 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasColumnName("created_at");
             entity.Property(e => e.DocumentId).HasColumnName("document_id");
             entity.Property(e => e.ExtractedText).HasColumnName("extracted_text");
+            entity.Property(e => e.TotalPages).HasColumnName("total_pages");
+            entity.Property(e => e.ReadablePages).HasColumnName("readable_pages");
+            entity.Property(e => e.ExtractionCoverage).HasColumnType("decimal(5, 4)").HasColumnName("extraction_coverage");
+            entity.Property(e => e.ImageContentDetected).HasColumnName("image_content_detected");
+            entity.Property(e => e.UnreadImageContentWarning).HasColumnName("unread_image_content_warning");
+            entity.Property(e => e.OcrRegionCount).HasColumnName("ocr_region_count");
 
             entity.HasOne(d => d.Document).WithOne(p => p.DocumentExtractedText)
                 .HasForeignKey<DocumentExtractedText>(d => d.DocumentId)
                 .HasConstraintName("FK__document___docum__10566F31");
         });
+
+            modelBuilder.Entity<DocumentOcrRegion>(entity =>
+            {
+                entity.HasKey(e => e.OcrRegionId);
+                entity.ToTable("document_ocr_regions");
+                entity.Property(e => e.OcrRegionId).HasColumnName("ocr_region_id");
+                entity.Property(e => e.DocumentId).HasColumnName("document_id");
+                entity.Property(e => e.PageNumber).HasColumnName("page_number");
+                entity.Property(e => e.RegionType).HasMaxLength(30).HasColumnName("region_type");
+                entity.Property(e => e.BoundingBoxLeft).HasColumnName("bounding_box_left");
+                entity.Property(e => e.BoundingBoxTop).HasColumnName("bounding_box_top");
+                entity.Property(e => e.BoundingBoxWidth).HasColumnName("bounding_box_width");
+                entity.Property(e => e.BoundingBoxHeight).HasColumnName("bounding_box_height");
+                entity.Property(e => e.Confidence).HasColumnType("decimal(5, 4)").HasColumnName("confidence");
+                entity.Property(e => e.RecognizedText).HasColumnName("recognized_text");
+                entity.Property(e => e.Source).HasMaxLength(30).HasColumnName("source");
+                entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+                entity.HasIndex(e => new { e.DocumentId, e.PageNumber });
+                entity.HasOne(e => e.Document).WithMany(d => d.DocumentOcrRegions)
+                .HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            });
 
         modelBuilder.Entity<DocumentReport>(entity =>
         {

@@ -31,6 +31,10 @@ public interface IStudyHubDbContext
     {
         get; set;
     }
+    DbSet<DocumentOcrRegion> DocumentOcrRegions
+    {
+        get; set;
+    }
     DbSet<DocumentChunk> DocumentChunks
     {
         get; set;

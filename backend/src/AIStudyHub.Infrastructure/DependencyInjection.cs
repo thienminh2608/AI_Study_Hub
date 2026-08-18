@@ -25,6 +25,10 @@ public static class DependencyInjection
         // 2. Register File Storage, System Clock
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<IFileStorage, LocalFileStorage>();
+        services.AddHttpClient<IOcrService, HttpOcrService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(configuration.GetValue("Ocr:TimeoutSeconds", 120));
+        });
 
         // 3. Conditional registration for Mail Service
         bool useMockMail = configuration.GetValue<bool>("MailSettings:UseMock");

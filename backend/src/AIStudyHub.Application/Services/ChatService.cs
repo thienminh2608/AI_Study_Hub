@@ -252,6 +252,7 @@ public class ChatService : IChatService
         // 4. Agent Loop
         int loopCount = 0;
         string? finalResponse = null;
+        bool promptRefunded = false;
         HashSet<int> allowedCitationChunkIds = [];
         bool searchedDocuments = false;
         bool utilityCommandHandled = false;
@@ -280,7 +281,11 @@ public class ChatService : IChatService
             }
             catch
             {
-                await RefundAiPromptAsync(userId, cancellationToken);
+                if (!promptRefunded)
+                {
+                    await RefundAiPromptAsync(userId, cancellationToken);
+                    promptRefunded = true;
+                }
                 throw;
             }
             string trimmedResponse = aiResponse.Trim();
@@ -548,6 +553,11 @@ public class ChatService : IChatService
 
         if (finalResponse == null)
         {
+            if (!promptRefunded)
+            {
+                await RefundAiPromptAsync(userId, cancellationToken);
+                promptRefunded = true;
+            }
             finalResponse = "Xin lỗi, hệ thống AI đang gặp sự cố xử lý. Vui lòng thử lại sau.";
         }
 

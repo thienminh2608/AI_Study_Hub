@@ -175,11 +175,13 @@ public class DocumentController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("public")]
-    public async Task<IActionResult> GetPublicDocuments()
+    public async Task<IActionResult> GetPublicDocuments([FromQuery] int page = 1, [FromQuery] int pageSize = 12,
+        [FromQuery] string? search = null, [FromQuery] string? fileType = null,
+        [FromQuery] string? sortBy = null, [FromQuery] string? sortDirection = null)
     {
         try
         {
-            var docs = await _documentService.GetPublicDocumentsAsync();
+            var docs = await _documentService.GetPublicDocumentsAsync(page, pageSize, search, fileType, sortBy, sortDirection);
             return Ok(docs);
         }
         catch (Exception ex)
@@ -261,6 +263,50 @@ public class DocumentController : ControllerBase
         {
             documentId = id,
             extractedText = text ?? ""
+        });
+    }
+
+    [HttpGet("{id}/ocr")]
+    public async Task<IActionResult> GetOcrExtraction(int id)
+    {
+        var doc = await _documentService.GetDocumentByIdAsync(id);
+        if (doc == null)
+            return NotFound(new { message = "Không tìm thấy tài liệu." });
+
+        int userId = GetCurrentUserId();
+        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId)
+            && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Bạn không có quyền xem dữ liệu OCR." });
+
+        var regions = await _db.DocumentOcrRegions.AsNoTracking()
+            .Where(region => region.DocumentId == id)
+            .OrderBy(region => region.PageNumber)
+            .ThenBy(region => region.BoundingBoxTop)
+            .ThenBy(region => region.BoundingBoxLeft)
+            .Select(region => new
+            {
+                region.PageNumber,
+                region.RegionType,
+                BoundingBox = new
+                {
+                    region.BoundingBoxLeft,
+                    region.BoundingBoxTop,
+                    region.BoundingBoxWidth,
+                    region.BoundingBoxHeight
+                },
+                region.Confidence,
+                region.RecognizedText,
+                region.Source
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            documentId = id,
+            coverage = doc.ExtractionCoverage,
+            imageContentDetected = doc.ImageContentDetected,
+            unreadImageContentWarning = doc.UnreadImageContentWarning,
+            regions
         });
     }
 

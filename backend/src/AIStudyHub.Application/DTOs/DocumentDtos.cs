@@ -80,6 +80,10 @@ public class DocumentResponseDto
     public bool RequiresAppeal { get; set; }
     public bool PublicReviewBlocked { get; set; }
     public string? AppealStatus { get; set; }
+    public decimal ExtractionCoverage { get; set; }
+    public bool ImageContentDetected { get; set; }
+    public bool UnreadImageContentWarning { get; set; }
+    public int OcrRegionCount { get; set; }
 }
 
 public class DocumentAudienceDto
