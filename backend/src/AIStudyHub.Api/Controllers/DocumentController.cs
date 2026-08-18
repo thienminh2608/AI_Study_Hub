@@ -261,7 +261,7 @@ public class DocumentController : ControllerBase
         }
 
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId))
+        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {

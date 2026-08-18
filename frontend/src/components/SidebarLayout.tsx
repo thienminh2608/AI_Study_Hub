@@ -200,13 +200,22 @@ export const SidebarLayout: React.FC = () => {
               </NavLink>
             </>
           ) : isModerator ? (
-            <NavLink
-              to="/moderator"
-              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            >
-              <ShieldAlert size={20} />
-              <span>Kiểm duyệt nội dung</span>
-            </NavLink>
+            <>
+              <NavLink
+                to="/moderator"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <ShieldAlert size={20} />
+                <span>Kiểm duyệt nội dung</span>
+              </NavLink>
+              <NavLink
+                to="/public-documents"
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <Globe2 size={20} />
+                <span>Tài liệu công khai</span>
+              </NavLink>
+            </>
           ) : (
             <>
               <NavLink
