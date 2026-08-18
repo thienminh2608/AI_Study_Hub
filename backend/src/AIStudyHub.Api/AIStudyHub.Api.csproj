@@ -25,4 +25,8 @@
     <ProjectReference Include="..\AIStudyHub.Infrastructure\AIStudyHub.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="tessdata\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

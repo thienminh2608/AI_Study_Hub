@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
@@ -191,6 +192,18 @@ public class DocumentController : ControllerBase
         }
     }
 
+    [AllowAnonymous]
+    [HttpGet("public/paged")]
+    public async Task<IActionResult> GetPublicDocumentsPaged([FromQuery] int page = 1, [FromQuery] int pageSize = 12, [FromQuery] string? search = null,
+        [FromQuery] string? extensions = null, [FromQuery] string? sortBy = null, [FromQuery] string? sortDirection = null)
+    {
+        var extensionList = string.IsNullOrWhiteSpace(extensions)
+            ? null
+            : extensions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        var paged = await _documentService.GetPublicDocumentsPagedAsync(page, pageSize, search, extensionList, sortBy, sortDirection);
+        return Ok(paged);
+    }
+
     [HttpGet("{id}")]
     public async Task<IActionResult> GetDocumentById(int id)
     {
@@ -302,6 +315,44 @@ public class DocumentController : ControllerBase
             _ => "application/octet-stream"
         };
         return PhysicalFile(_fileStorage.GetPhysicalPath(relativePath), contentType, fileName, enableRangeProcessing: true);
+    }
+
+    [HttpGet("{id}/raw")]
+    public async Task<IActionResult> GetRawFile(int id)
+    {
+        var doc = await _documentService.GetDocumentByIdAsync(id);
+        if (doc == null)
+            return NotFound(new
+            {
+                message = "Không tìm thấy tài liệu."
+            });
+
+        int userId = GetCurrentUserId();
+        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "Bạn không có quyền xem tài liệu này."
+            });
+
+        var relativePath = doc.CloudStorageUrl.TrimStart('/');
+        if (!_fileStorage.FileExists(relativePath))
+            return NotFound(new
+            {
+                message = "Không tìm thấy file gốc."
+            });
+
+        var extension = doc.FileExtension.TrimStart('.').ToLowerInvariant();
+        var contentType = extension switch
+        {
+            "pdf" => "application/pdf",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "txt" => "text/plain; charset=utf-8",
+            "md" => "text/markdown; charset=utf-8",
+            _ => "application/octet-stream"
+        };
+        return PhysicalFile(_fileStorage.GetPhysicalPath(relativePath), contentType, enableRangeProcessing: true);
     }
 
     [HttpGet("analytics")]

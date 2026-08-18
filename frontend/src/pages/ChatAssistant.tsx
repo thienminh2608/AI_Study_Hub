@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
 import {
@@ -40,9 +40,19 @@ interface ChatDocument {
   fileExtension: string;
 }
 
+interface ChatCitation {
+  chunkId: number;
+  documentId: number;
+  page?: number | null;
+  startOffset: number;
+  endOffset: number;
+}
+
 export const ChatAssistant: React.FC = () => {
   const { confirm, notify } = useUiFeedback();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [citationsByMessageId, setCitationsByMessageId] = useState<Record<number, ChatCitation[]>>({});
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -82,8 +92,10 @@ export const ChatAssistant: React.FC = () => {
     try {
       const data = await api.chat.getMessages(sessionId);
       setMessages(data);
+      return data as ChatMessage[];
     } catch (err: any) {
       console.error('Error loading messages:', err);
+      return [];
     } finally {
       setLoadingMessages(false);
     }
@@ -210,7 +222,7 @@ export const ChatAssistant: React.FC = () => {
 
     try {
       // Send question and get final response
-      await api.chat.askQuestion(currentSessionId, {
+      const result = await api.chat.askQuestion(currentSessionId, {
         messageContent: userMsgText,
         documentId: selectedDocumentId ?? undefined,
       });
@@ -218,7 +230,16 @@ export const ChatAssistant: React.FC = () => {
 
       // Clear action and refresh message list
       setAgentAction(null);
-      await loadMessages(currentSessionId);
+      const refreshed = await loadMessages(currentSessionId);
+      if (result?.citations?.length) {
+        const lastBotMessage = [...refreshed].reverse().find((m) => m.sender === 'BOT');
+        if (lastBotMessage) {
+          setCitationsByMessageId((prev) => ({
+            ...prev,
+            [lastBotMessage.messageId]: result.citations,
+          }));
+        }
+      }
     } catch (err: any) {
       setAgentAction(null);
       notify(err.message || 'Gặp lỗi trong quá trình giao tiếp với AI.', 'error');
@@ -228,6 +249,8 @@ export const ChatAssistant: React.FC = () => {
       setSending(false);
     }
   };
+
+  const stripSourceSuffix = (text: string) => text.replace(/\n\nNguồn:.*$/s, '');
 
   // Simple clean markdown paragraph converter
   const renderMessageContent = (text: string) => {
@@ -408,7 +431,31 @@ export const ChatAssistant: React.FC = () => {
                         >
                           {isBot && <Bot size={28} className="chat-avatar bot" />}
                           <div className={`message-bubble glass-card ${isBot ? 'bot' : 'user'}`}>
-                            {renderMessageContent(m.messageContent)}
+                            {renderMessageContent(
+                              citationsByMessageId[m.messageId]?.length
+                                ? stripSourceSuffix(m.messageContent)
+                                : m.messageContent,
+                            )}
+                            {citationsByMessageId[m.messageId]?.length ? (
+                              <div className="message-citations">
+                                {citationsByMessageId[m.messageId].map((citation) => (
+                                  <button
+                                    key={citation.chunkId}
+                                    type="button"
+                                    className="citation-chip"
+                                    onClick={() =>
+                                      navigate(
+                                        `/document/${citation.documentId}?chunk=${citation.chunkId}&start=${citation.startOffset}&end=${citation.endOffset}` +
+                                          (citation.page ? `&page=${citation.page}` : ''),
+                                      )
+                                    }
+                                  >
+                                    <LinkIcon size={12} />
+                                    {citation.page ? `Trang ${citation.page}` : `Chunk ${citation.chunkId}`}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -788,6 +835,32 @@ export const ChatAssistant: React.FC = () => {
           color: var(--text-secondary);
           font-style: italic;
           padding: 0.75rem 1.25rem;
+        }
+
+        .message-citations {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.4rem;
+          margin-top: 0.6rem;
+          padding-top: 0.6rem;
+          border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .citation-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3rem;
+          padding: 0.25rem 0.6rem;
+          border-radius: 999px;
+          border: 1px solid rgba(0, 180, 216, 0.25);
+          background: rgba(0, 180, 216, 0.08);
+          color: var(--accent-blue);
+          font-size: 0.75rem;
+          cursor: pointer;
+        }
+
+        .citation-chip:hover {
+          background: rgba(0, 180, 216, 0.16);
         }
 
         .agent-status-card {

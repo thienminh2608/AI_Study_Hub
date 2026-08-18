@@ -3,6 +3,7 @@ using AIStudyHub.Application.Services;
 using AIStudyHub.Domain.Entities;
 using AIStudyHub.Infrastructure.Services.Gemini;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace AIStudyHub.UnitTests;
 
@@ -18,7 +19,7 @@ public class SecurityRegressionTests
         db.ChatSessions.Add(new ChatSession { SessionId = 10, UserId = 2, SessionName = "private" });
         await db.SaveChangesAsync();
 
-        var service = new ChatService(db, new MockGeminiService());
+        var service = new ChatService(db, new MockGeminiService(), new ConfigurationBuilder().Build());
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             service.ProcessUserMessageAsync(1, 10, new AskQuestionDto { MessageContent = "hello" }));

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace AIStudyHub.Application.DTOs;
 
@@ -64,4 +65,19 @@ public class AskQuestionDto
 public class SetChatDocumentDto
 {
     public int? DocumentId { get; set; }
+}
+
+public class ChatCitationDto
+{
+    public int ChunkId { get; set; }
+    public int DocumentId { get; set; }
+    public int? Page { get; set; }
+    public int StartOffset { get; set; }
+    public int EndOffset { get; set; }
+}
+
+public class ChatAnswerDto
+{
+    public string Response { get; set; } = null!;
+    public List<ChatCitationDto> Citations { get; set; } = [];
 }

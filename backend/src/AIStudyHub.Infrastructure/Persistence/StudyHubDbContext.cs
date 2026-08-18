@@ -216,6 +216,7 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.ViewCount)
                 .HasDefaultValue(0)
                 .HasColumnName("view_count");
+            entity.Property(e => e.ExtractionCoveragePercent).HasColumnName("extraction_coverage_percent");
             entity.Property(e => e.FileExtension)
                 .HasMaxLength(10)
                 .HasColumnName("file_extension");
@@ -623,6 +624,11 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.Text).HasColumnName("text");
             entity.Property(e => e.StartOffset).HasColumnName("start_offset");
             entity.Property(e => e.EndOffset).HasColumnName("end_offset");
+            entity.Property(e => e.BoundingBoxX).HasColumnName("bounding_box_x");
+            entity.Property(e => e.BoundingBoxY).HasColumnName("bounding_box_y");
+            entity.Property(e => e.BoundingBoxWidth).HasColumnName("bounding_box_width");
+            entity.Property(e => e.BoundingBoxHeight).HasColumnName("bounding_box_height");
+            entity.Property(e => e.OcrConfidence).HasColumnName("ocr_confidence");
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
             entity.HasOne(e => e.Document).WithMany(d => d.DocumentChunks)
                 .HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);

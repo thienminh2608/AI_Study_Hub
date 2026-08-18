@@ -120,7 +120,8 @@ public class DocumentService : IDocumentService
         try
         {
             string savedPhysicalPath = _fileStorage.GetPhysicalPath(relativeFilePath);
-            string extractedText = ExtractTextFromFile(savedPhysicalPath, fileExtension);
+            var extraction = ExtractTextFromFile(savedPhysicalPath, fileExtension);
+            string extractedText = extraction.Text;
             if (!string.IsNullOrWhiteSpace(extractedText))
             {
                 document.AiParsingStatus = "CHUNKING";
@@ -131,7 +132,8 @@ public class DocumentService : IDocumentService
                     CreatedAt = _clock.Now
                 };
                 _dbContext.DocumentExtractedTexts.Add(textEntity);
-                _dbContext.DocumentChunks.AddRange(DocumentChunker.Chunk(document.DocumentId, extractedText, _clock.Now));
+                _dbContext.DocumentChunks.AddRange(DocumentChunker.Chunk(document.DocumentId, extractedText, _clock.Now, extraction.PageOcrConfidence));
+                document.ExtractionCoveragePercent = extraction.CoveragePercent;
                 document.AiParsingStatus = "READY";
                 _dbContext.ModerationNotices.Add(new ModerationNotice
                 {
@@ -837,20 +839,22 @@ public class DocumentService : IDocumentService
     // TEXT EXTRACTION LOGIC
     // ─────────────────────────────────────────────────────────────────────────
 
-    private string ExtractTextFromFile(string filePath, string fileExtension)
+    private sealed record ExtractionResult(string Text, double? CoveragePercent, IReadOnlyDictionary<int, double>? PageOcrConfidence = null);
+
+    private ExtractionResult ExtractTextFromFile(string filePath, string fileExtension)
     {
         string ext = fileExtension.ToLower().TrimStart('.');
         switch (ext)
         {
             case "txt":
             case "md":
-                return File.ReadAllText(filePath, Encoding.UTF8);
+                return new ExtractionResult(File.ReadAllText(filePath, Encoding.UTF8), 1.0);
 
             case "docx":
-                return ExtractTextFromDocx(filePath);
+                return new ExtractionResult(ExtractTextFromDocx(filePath), null);
 
             case "xlsx":
-                return ExtractTextFromXlsx(filePath);
+                return new ExtractionResult(ExtractTextFromXlsx(filePath), null);
 
             case "pdf":
                 return ExtractTextFromPdf(filePath);
@@ -860,7 +864,7 @@ public class DocumentService : IDocumentService
 
             default:
                 Console.WriteLine($"Unsupported file type for text extraction: {fileExtension}");
-                return "";
+                return new ExtractionResult("", null);
         }
     }
 
@@ -940,38 +944,146 @@ public class DocumentService : IDocumentService
         }
     }
 
-    private string ExtractTextFromPdf(string filePath)
+    private const string OcrLanguages = "vie+eng";
+    private static readonly string TessDataPath = Path.Combine(AppContext.BaseDirectory, "tessdata");
+
+    private ExtractionResult ExtractTextFromPdf(string filePath)
     {
         try
         {
+            byte[] pdfBytes = File.ReadAllBytes(filePath);
             using (var document = PdfDocument.Open(filePath))
             {
                 var sb = new StringBuilder();
-                foreach (var page in document.GetPages())
+                int totalPages = 0;
+                int coveredPages = 0;
+                var pageOcrConfidence = new Dictionary<int, double>();
+                Tesseract.TesseractEngine? ocrEngine = null;
+                try
                 {
-                    sb.AppendLine($"[PAGE {page.Number}]");
-                    var words = page.GetWords().OrderByDescending(w => w.BoundingBox.Bottom)
-                        .ThenBy(w => w.BoundingBox.Left).ToList();
-                    if (words.Count == 0)
-                        continue;
-                    var lines = words.GroupBy(w => Math.Round(w.BoundingBox.Bottom / 4.0) * 4)
-                        .OrderByDescending(group => group.Key)
-                        .Select(group => string.Join(" ", group.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)));
-                    foreach (var line in lines)
-                        sb.AppendLine(line);
-                    sb.AppendLine();
+                    foreach (var page in document.GetPages())
+                    {
+                        totalPages++;
+                        sb.AppendLine($"[PAGE {page.Number}]");
+                        var words = page.GetWords().OrderByDescending(w => w.BoundingBox.Bottom)
+                            .ThenBy(w => w.BoundingBox.Left).ToList();
+                        if (words.Count == 0)
+                        {
+                            var (ocrText, confidence) = TryOcrPdfPage(pdfBytes, page.Number - 1, page.Width, page.Height, ref ocrEngine);
+                            if (!string.IsNullOrWhiteSpace(ocrText))
+                            {
+                                coveredPages++;
+                                sb.AppendLine(ocrText.Trim());
+                                sb.AppendLine();
+                                pageOcrConfidence[page.Number] = confidence;
+                            }
+                            continue;
+                        }
+                        coveredPages++;
+                        var lines = words.GroupBy(w => Math.Round(w.BoundingBox.Bottom / 4.0) * 4)
+                            .OrderByDescending(group => group.Key)
+                            .Select(group => string.Join(" ", group.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)));
+                        foreach (var line in lines)
+                            sb.AppendLine(line);
+                        sb.AppendLine();
+                    }
                 }
-                return sb.ToString();
+                finally
+                {
+                    ocrEngine?.Dispose();
+                }
+                double? coverage = totalPages > 0 ? (double)coveredPages / totalPages : null;
+                return new ExtractionResult(sb.ToString(), coverage, pageOcrConfidence.Count > 0 ? pageOcrConfidence : null);
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error extracting PDF: {ex.Message}");
-            return "";
+            return new ExtractionResult("", null);
         }
     }
 
-    private string ExtractTextFromPptx(string filePath)
+    private (string Text, double Confidence) TryOcrPdfPage(byte[] pdfBytes, int pageIndex, double pageWidthPoints, double pageHeightPoints, ref Tesseract.TesseractEngine? engine)
+    {
+        try
+        {
+            if (!Directory.Exists(TessDataPath))
+                return ("", 0);
+
+            int targetWidth = Math.Max(1, (int)(pageWidthPoints / 72.0 * 200));
+            int targetHeight = Math.Max(1, (int)(pageHeightPoints / 72.0 * 200));
+
+            using var docReader = Docnet.Core.DocLib.Instance.GetDocReader(pdfBytes, new Docnet.Core.Models.PageDimensions(targetWidth, targetHeight));
+            using var pageReader = docReader.GetPageReader(pageIndex);
+            var raw = pageReader.GetImage();
+            int width = pageReader.GetPageWidth();
+            int height = pageReader.GetPageHeight();
+            var bmp = EncodeBgr24Bmp(raw, width, height);
+
+            engine ??= new Tesseract.TesseractEngine(TessDataPath, OcrLanguages, Tesseract.EngineMode.Default);
+
+            using var pix = Tesseract.Pix.LoadFromMemory(bmp);
+            using var ocrPage = engine.Process(pix);
+            string text = ocrPage.GetText();
+            float confidence = ocrPage.GetMeanConfidence();
+            return (text, confidence);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error OCR-ing PDF page: {ex.Message}");
+            return ("", 0);
+        }
+    }
+
+    private static byte[] EncodeBgr24Bmp(byte[] bgraPixels, int width, int height)
+    {
+        int rowSizeUnpadded = width * 3;
+        int rowSize = (rowSizeUnpadded + 3) / 4 * 4;
+        int pixelDataSize = rowSize * height;
+        int fileSize = 54 + pixelDataSize;
+        var buffer = new byte[fileSize];
+
+        buffer[0] = (byte)'B';
+        buffer[1] = (byte)'M';
+        WriteLeInt32(buffer, 2, fileSize);
+        WriteLeInt32(buffer, 10, 54);
+        WriteLeInt32(buffer, 14, 40);
+        WriteLeInt32(buffer, 18, width);
+        WriteLeInt32(buffer, 22, height);
+        WriteLeInt16(buffer, 26, 1);
+        WriteLeInt16(buffer, 28, 24);
+        WriteLeInt32(buffer, 34, pixelDataSize);
+
+        for (int y = 0; y < height; y++)
+        {
+            int srcRow = height - 1 - y;
+            int destOffset = 54 + y * rowSize;
+            int srcOffset = srcRow * width * 4;
+            for (int x = 0; x < width; x++)
+            {
+                buffer[destOffset + x * 3 + 0] = bgraPixels[srcOffset + x * 4 + 0];
+                buffer[destOffset + x * 3 + 1] = bgraPixels[srcOffset + x * 4 + 1];
+                buffer[destOffset + x * 3 + 2] = bgraPixels[srcOffset + x * 4 + 2];
+            }
+        }
+        return buffer;
+    }
+
+    private static void WriteLeInt32(byte[] buffer, int offset, int value)
+    {
+        buffer[offset] = (byte)(value & 0xFF);
+        buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
+        buffer[offset + 2] = (byte)((value >> 16) & 0xFF);
+        buffer[offset + 3] = (byte)((value >> 24) & 0xFF);
+    }
+
+    private static void WriteLeInt16(byte[] buffer, int offset, short value)
+    {
+        buffer[offset] = (byte)(value & 0xFF);
+        buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
+    }
+
+    private ExtractionResult ExtractTextFromPptx(string filePath)
     {
         try
         {
@@ -979,8 +1091,10 @@ public class DocumentService : IDocumentService
             XNamespace drawing = "http://schemas.openxmlformats.org/drawingml/2006/main";
             var slides = archive.Entries
                 .Where(entry => Regex.IsMatch(entry.FullName, @"^ppt/slides/slide\d+\.xml$", RegexOptions.IgnoreCase))
-                .OrderBy(entry => int.Parse(Regex.Match(entry.Name, @"\d+").Value));
+                .OrderBy(entry => int.Parse(Regex.Match(entry.Name, @"\d+").Value))
+                .ToList();
             var sb = new StringBuilder();
+            int coveredSlides = 0;
             foreach (var slide in slides)
             {
                 using var stream = slide.Open();
@@ -988,16 +1102,18 @@ public class DocumentService : IDocumentService
                 var text = string.Join(" ", xml.Descendants(drawing + "t").Select(node => node.Value).Where(value => !string.IsNullOrWhiteSpace(value)));
                 if (!string.IsNullOrWhiteSpace(text))
                 {
+                    coveredSlides++;
                     var slideNumber = int.Parse(Regex.Match(slide.Name, @"\d+").Value);
                     sb.AppendLine($"[PAGE {slideNumber}]").AppendLine(text).AppendLine();
                 }
             }
-            return sb.ToString().Trim();
+            double? coverage = slides.Count > 0 ? (double)coveredSlides / slides.Count : null;
+            return new ExtractionResult(sb.ToString().Trim(), coverage);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error extracting PPTX: {ex.Message}");
-            return "";
+            return new ExtractionResult("", null);
         }
     }
 
@@ -1032,6 +1148,7 @@ public class DocumentService : IDocumentService
             BookmarkCount = doc.BookmarkCount,
             DownloadCount = doc.DownloadCount,
             ViewCount = doc.ViewCount,
+            ExtractionCoveragePercent = doc.ExtractionCoveragePercent,
             CreatedAt = doc.CreatedAt,
             UpdatedAt = doc.UpdatedAt
         };
@@ -1193,6 +1310,44 @@ public class DocumentService : IDocumentService
             .ToListAsync();
 
         var dtos = bookmarks.Select(b => MapToDto(b.Document, b.Document.User.Username)).ToList();
+        return new PagedResult<DocumentResponseDto>(dtos, totalCount, pageNumber, pageSize);
+    }
+
+    public async Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, List<string>? extensions, string? sortBy, string? sortDirection)
+    {
+        var query = _dbContext.Documents
+            .AsNoTracking()
+            .Include(d => d.User)
+            .Where(d => d.SharingPermission == "PUBLIC" && d.IsFlagged == false && !d.IsDeleted);
+
+        if (extensions is { Count: > 0 })
+        {
+            var lowered = extensions.Select(e => e.ToLower()).ToList();
+            query = query.Where(d => lowered.Contains(d.FileExtension.ToLower()));
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            query = query.Where(d => d.Title.Contains(search) || d.User.Username.Contains(search) || d.FileExtension.Contains(search));
+        }
+
+        bool ascending = string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
+        query = (sortBy?.ToLowerInvariant()) switch
+        {
+            "title" => ascending ? query.OrderBy(d => d.Title) : query.OrderByDescending(d => d.Title),
+            "downloads" => ascending ? query.OrderBy(d => d.DownloadCount) : query.OrderByDescending(d => d.DownloadCount),
+            "views" => ascending ? query.OrderBy(d => d.ViewCount) : query.OrderByDescending(d => d.ViewCount),
+            "bookmarks" => ascending ? query.OrderBy(d => d.BookmarkCount) : query.OrderByDescending(d => d.BookmarkCount),
+            _ => ascending ? query.OrderBy(d => d.CreatedAt) : query.OrderByDescending(d => d.CreatedAt),
+        };
+
+        int totalCount = await query.CountAsync();
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        var dtos = items.Select(d => MapToDto(d, d.User.Username)).ToList();
         return new PagedResult<DocumentResponseDto>(dtos, totalCount, pageNumber, pageSize);
     }
 

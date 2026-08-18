@@ -42,6 +42,7 @@ public partial class Document
     public int? BookmarkCount { get; set; }
     public int? DownloadCount { get; set; }
     public int? ViewCount { get; set; }
+    public double? ExtractionCoveragePercent { get; set; }
 
     public DateTime? CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }

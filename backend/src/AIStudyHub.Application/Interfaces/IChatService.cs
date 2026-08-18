@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 
@@ -12,5 +13,5 @@ public interface IChatService
     Task<bool> DeleteSessionAsync(int userId, int sessionId);
     Task<ChatSessionDto?> SetAttachedDocumentAsync(int userId, int sessionId, int? documentId);
     Task<List<ChatMessageDto>> GetSessionMessagesAsync(int userId, int sessionId);
-    Task<string> ProcessUserMessageAsync(int userId, int sessionId, AskQuestionDto dto);
+    Task<ChatAnswerDto> ProcessUserMessageAsync(int userId, int sessionId, AskQuestionDto dto, CancellationToken cancellationToken = default);
 }

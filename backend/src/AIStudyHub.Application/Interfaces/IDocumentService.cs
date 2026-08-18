@@ -37,6 +37,7 @@ public interface IDocumentService
     Task<PagedResult<DocumentResponseDto>> GetMyDocumentsPagedAsync(int userId, int? folderId, int pageNumber, int pageSize, string? search, string? subject);
     Task<PagedResult<DocumentResponseDto>> GetSharedWithMePagedAsync(int userId, int pageNumber, int pageSize);
     Task<PagedResult<DocumentResponseDto>> GetBookmarksPagedAsync(int userId, int pageNumber, int pageSize);
+    Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, List<string>? extensions, string? sortBy, string? sortDirection);
     Task BulkDeleteDocumentsAsync(List<int> documentIds, int userId);
     Task BulkMoveDocumentsAsync(List<int> documentIds, int? targetFolderId, int userId);
 }

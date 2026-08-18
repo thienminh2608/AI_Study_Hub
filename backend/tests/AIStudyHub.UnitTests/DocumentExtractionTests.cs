@@ -41,7 +41,43 @@ public class DocumentExtractionTests
     {
         var service = new DocumentService(null!, null!, null!);
         var method = typeof(DocumentService).GetMethod("ExtractTextFromFile", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        return (string)method.Invoke(service, [path, extension])!;
+        var result = method.Invoke(service, [path, extension])!;
+        var textProperty = result.GetType().GetProperty("Text")!;
+        return (string)textProperty.GetValue(result)!;
+    }
+
+    [Fact]
+    public void EncodeBgr24Bmp_ProducesBottomUpBitmapWithCorrectHeaderAndPixels()
+    {
+        // 2x2 BGRA source (top-down, row-major): row0 = [Blue, Green], row1 = [Red, White]
+        byte[] bgra =
+        [
+            255, 0, 0, 255, // (0,0) Blue: B,G,R,A
+            0, 255, 0, 255, // (1,0) Green
+            0, 0, 255, 255, // (0,1) Red
+            255, 255, 255, 255, // (1,1) White
+        ];
+
+        var method = typeof(DocumentService).GetMethod("EncodeBgr24Bmp", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var bmp = (byte[])method.Invoke(null, [bgra, 2, 2])!;
+
+        Assert.Equal((byte)'B', bmp[0]);
+        Assert.Equal((byte)'M', bmp[1]);
+        Assert.Equal(70, BitConverter.ToInt32(bmp, 2)); // file size: 54 header + 2 rows * 8 bytes
+        Assert.Equal(54, BitConverter.ToInt32(bmp, 10)); // pixel data offset
+        Assert.Equal(40, BitConverter.ToInt32(bmp, 14)); // DIB header size
+        Assert.Equal(2, BitConverter.ToInt32(bmp, 18)); // width
+        Assert.Equal(2, BitConverter.ToInt32(bmp, 22)); // height
+        Assert.Equal(24, BitConverter.ToInt16(bmp, 28)); // bit depth
+        Assert.Equal(16, BitConverter.ToInt32(bmp, 34)); // pixel data size
+
+        // Bottom-up storage: first pixel row in the file is the source's bottom row (Red, White).
+        Assert.Equal([0, 0, 255], bmp[54..57]); // Red in BGR
+        Assert.Equal([255, 255, 255], bmp[57..60]); // White in BGR
+
+        // Second pixel row in the file is the source's top row (Blue, Green).
+        Assert.Equal([255, 0, 0], bmp[62..65]); // Blue in BGR
+        Assert.Equal([0, 255, 0], bmp[65..68]); // Green in BGR
     }
 
     private static byte[] BuildSimplePdf(string text)

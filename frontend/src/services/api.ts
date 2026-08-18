@@ -258,6 +258,7 @@ export const api = {
     delete: (id: number) => request<any>(`/document/${id}`, { method: 'DELETE' }),
     getText: (id: number) => request<any>(`/document/${id}/text`, { method: 'GET' }),
     download: (id: number) => download(`/document/${id}/download`),
+    getRawFile: (id: number) => download(`/document/${id}/raw`),
     report: (dto: any) =>
       request<any>('/document/report', { method: 'POST', body: JSON.stringify(dto) }),
     appeal: (reportId: number, dto: any) =>
@@ -537,6 +538,19 @@ export const api = {
       request<any>(`/document/shared-with-me/paged?page=${page}&pageSize=${pageSize}`, {
         method: 'GET',
       }),
+    getPublicDocumentsPaged: (
+      page = 1,
+      pageSize = 12,
+      search = '',
+      extensions: string[] = [],
+      sortBy = 'createdAt',
+      sortDirection = 'desc'
+    ) => {
+      let url = `/document/public/paged?page=${page}&pageSize=${pageSize}&sortBy=${sortBy}&sortDirection=${sortDirection}`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
+      if (extensions.length) url += `&extensions=${encodeURIComponent(extensions.join(','))}`;
+      return request<any>(url, { method: 'GET' });
+    },
     getBookmarksPaged: (page = 1, pageSize = 12) =>
       request<any>(`/document/bookmarks/paged?page=${page}&pageSize=${pageSize}`, {
         method: 'GET',

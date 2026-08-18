@@ -4,11 +4,13 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace AIStudyHub.Application.Services;
 
@@ -16,13 +18,37 @@ public class ChatService : IChatService
 {
     private readonly IStudyHubDbContext _dbContext;
     private readonly IGeminiService _geminiService;
+    private readonly IConfiguration _configuration;
     private const int MaxAiLoop = 5;
 
-    public ChatService(IStudyHubDbContext dbContext, IGeminiService geminiService)
+    private const int DefaultMaxInputTokensPerRequest = 30_000;
+    private const int DefaultMaxSingleMessageTokens = 8_000;
+    private const int DefaultMaxHistoryTokens = 20_000;
+    private const int HistoryKeepRecentCount = 10;
+    private const int DefaultMaxContextTokens = 8_000;
+    private const int DefaultMaxMapReduceGroups = 20;
+
+    private const string HistorySummaryMarker = "[TÓM TẮT LỊCH SỬ CŨ]";
+
+    public ChatService(IStudyHubDbContext dbContext, IGeminiService geminiService, IConfiguration configuration)
     {
         _dbContext = dbContext;
         _geminiService = geminiService;
+        _configuration = configuration;
     }
+
+    private int GetConfigInt(string key, int defaultValue) =>
+        int.TryParse(_configuration[key], out var value) && value > 0 ? value : defaultValue;
+
+    private int MaxInputTokensPerRequest => GetConfigInt("Gemini:MaxInputTokensPerRequest", DefaultMaxInputTokensPerRequest);
+    private int MaxHistoryTokens => GetConfigInt("Gemini:MaxHistoryTokens", DefaultMaxHistoryTokens);
+    private int MaxContextTokens => GetConfigInt("Gemini:MaxContextTokens", DefaultMaxContextTokens);
+    private int MaxMapReduceGroups => GetConfigInt("Gemini:MaxMapReduceGroups", DefaultMaxMapReduceGroups);
+
+    private static int EstimateTokens(string? text) => string.IsNullOrEmpty(text) ? 0 : (text.Length + 3) / 4;
+
+    private static int EstimateTokens(IEnumerable<ChatMessageDto> messages) =>
+        messages.Sum(m => EstimateTokens(m.MessageContent));
 
     public async Task<List<ChatSessionDto>> GetUserSessionsAsync(int userId)
     {
@@ -60,7 +86,6 @@ public class ChatService : IChatService
         _dbContext.ChatSessions.Add(session);
         await _dbContext.SaveChangesAsync();
 
-        // Create initial system prompt message for the AI
         string initPrompt = await CreateInitPromptAsync(userId);
         var initMsg = new ChatMessage
         {
@@ -145,12 +170,17 @@ public class ChatService : IChatService
         }).ToList();
     }
 
-    public async Task<string> ProcessUserMessageAsync(int userId, int sessionId, AskQuestionDto dto)
+    public async Task<ChatAnswerDto> ProcessUserMessageAsync(int userId, int sessionId, AskQuestionDto dto, CancellationToken cancellationToken = default)
     {
-        var session = await _dbContext.ChatSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.UserId == userId);
+        var session = await _dbContext.ChatSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.UserId == userId, cancellationToken);
         if (session == null)
         {
             throw new UnauthorizedAccessException("Bạn không có quyền truy cập phiên chat này.");
+        }
+
+        if (EstimateTokens(dto.MessageContent) > DefaultMaxSingleMessageTokens)
+        {
+            throw new ArgumentException($"Câu hỏi quá dài (ước tính > {DefaultMaxSingleMessageTokens} token). Vui lòng rút gọn nội dung.");
         }
 
         // 1. Rate Limit Verification
@@ -175,6 +205,9 @@ public class ChatService : IChatService
             var cooldown = nextReset - now;
             throw new InvalidOperationException($"Hết lượt câu hỏi! Gói của bạn tối đa {limitPerDay} câu/ngày. Thời gian hồi lượt tiếp theo còn: {cooldown.Hours} giờ {cooldown.Minutes} phút.");
         }
+
+        int promptCountBeforeThisRequest = currentPrompts;
+        DateTime lastResetBeforeThisRequest = lastReset;
 
         // Increment prompt count
         user.AiPromptsToday = currentPrompts + 1;
@@ -248,31 +281,27 @@ public class ChatService : IChatService
         // 4. Agent Loop
         int loopCount = 0;
         string? finalResponse = null;
+        List<int> citedChunkIds = [];
         HashSet<int> allowedCitationChunkIds = [];
         bool searchedDocuments = false;
         bool utilityCommandHandled = false;
 
+        try
+        {
         while (loopCount < MaxAiLoop)
         {
             loopCount++;
 
-            // Load full history for Gemini API
-            var history = await _dbContext.ChatMessages
-                .Where(m => m.SessionId == sessionId)
-                .OrderBy(m => m.CreatedAt)
-                .Select(m => new ChatMessageDto
-                {
-                    Sender = m.Sender,
-                    MessageContent = m.MessageContent
-                })
-                .ToListAsync();
+            var history = await GetBoundedHistoryAsync(sessionId, cancellationToken);
+            history = TrimToTokenBudget(history, MaxInputTokensPerRequest);
 
-            string aiResponse = await _geminiService.GetGeminiResponseAsync(history);
+            string aiResponse = await _geminiService.GetGeminiResponseAsync(history, cancellationToken);
             string trimmedResponse = aiResponse.Trim();
 
-            if (TryParseGroundedResponse(trimmedResponse, allowedCitationChunkIds, out var groundedResponse))
+            if (TryParseGroundedResponse(trimmedResponse, allowedCitationChunkIds, out var groundedResponse, out var groundedCitedChunkIds))
             {
                 finalResponse = groundedResponse;
+                citedChunkIds = groundedCitedChunkIds;
                 break;
             }
 
@@ -315,7 +344,6 @@ public class ChatService : IChatService
             else if (trimmedResponse.StartsWith("SEARCH", StringComparison.OrdinalIgnoreCase))
             {
                 searchedDocuments = true;
-                // Save AI Command
                 var botCmdMsg = new ChatMessage
                 {
                     SessionId = sessionId,
@@ -326,7 +354,6 @@ public class ChatService : IChatService
                 };
                 _dbContext.ChatMessages.Add(botCmdMsg);
 
-                // Build Folder Tree
                 string treeMsg;
                 if (attachedDocumentId.HasValue)
                     treeMsg = $"Phiên chat đang khóa vào tài liệu ID {attachedDocumentId.Value}. Không được tìm kiếm hay đọc tài liệu khác. Hãy dùng VIEW/{attachedDocumentId.Value}.";
@@ -350,7 +377,6 @@ public class ChatService : IChatService
             else if (trimmedResponse.StartsWith("VIEW/", StringComparison.OrdinalIgnoreCase) ||
                      trimmedResponse.StartsWith("VIEW /", StringComparison.OrdinalIgnoreCase))
             {
-                // Save AI Command
                 var botCmdMsg = new ChatMessage
                 {
                     SessionId = sessionId,
@@ -412,7 +438,7 @@ public class ChatService : IChatService
                                 {
                                     var allChunks = await _dbContext.DocumentChunks.AsNoTracking()
                                         .Where(c => c.DocumentId == docId).OrderBy(c => c.ChunkIndex).ToListAsync();
-                                    selected = await SummarizeWholeDocumentAsync(allChunks, question);
+                                    selected = await SummarizeWholeDocumentAsync(allChunks, question, cancellationToken);
                                 }
                                 else
                                 {
@@ -499,7 +525,6 @@ public class ChatService : IChatService
                         folder.FolderId == fId && folder.UserId == userId);
                     if (f != null)
                     {
-                        // In clean decoupled React app, we point to /explore?folderId=...
                         systemResponseText = $"Thư mục có id \"{fId}\" đã được tìm thấy. Gửi đường link này cho sinh viên: /explore?folderId={fId}";
                     }
                     else
@@ -525,10 +550,17 @@ public class ChatService : IChatService
             }
             else
             {
-                // Fallback if formatting was violated
                 finalResponse = aiResponse;
                 break;
             }
+        }
+        }
+        catch (Exception) when (finalResponse == null)
+        {
+            user.AiPromptsToday = promptCountBeforeThisRequest;
+            user.LastPromptReset = lastResetBeforeThisRequest;
+            await _dbContext.SaveChangesAsync();
+            throw;
         }
 
         if (finalResponse == null)
@@ -536,7 +568,6 @@ public class ChatService : IChatService
             finalResponse = "Xin lỗi, hệ thống AI đang gặp sự cố xử lý. Vui lòng thử lại sau.";
         }
 
-        // Save Bot Response
         var finalBotMsg = new ChatMessage
         {
             SessionId = sessionId,
@@ -548,7 +579,110 @@ public class ChatService : IChatService
         _dbContext.ChatMessages.Add(finalBotMsg);
         await _dbContext.SaveChangesAsync();
 
-        return finalResponse;
+        var citations = await BuildCitationsAsync(citedChunkIds);
+        return new ChatAnswerDto { Response = finalResponse, Citations = citations };
+    }
+
+    private async Task<List<ChatCitationDto>> BuildCitationsAsync(List<int> citedChunkIds)
+    {
+        if (citedChunkIds.Count == 0)
+            return [];
+
+        var chunkInfos = await _dbContext.DocumentChunks.AsNoTracking()
+            .Where(c => citedChunkIds.Contains(c.ChunkId))
+            .Select(c => new { c.ChunkId, c.DocumentId, c.PageNumber, c.StartOffset, c.EndOffset })
+            .ToListAsync();
+
+        return citedChunkIds
+            .Select(id => chunkInfos.FirstOrDefault(c => c.ChunkId == id))
+            .Where(c => c != null)
+            .Select(c => new ChatCitationDto
+            {
+                ChunkId = c!.ChunkId,
+                DocumentId = c.DocumentId,
+                Page = c.PageNumber,
+                StartOffset = c.StartOffset,
+                EndOffset = c.EndOffset
+            }).ToList();
+    }
+
+    private async Task<List<ChatMessageDto>> GetBoundedHistoryAsync(int sessionId, CancellationToken cancellationToken)
+    {
+        var all = await _dbContext.ChatMessages
+            .Where(m => m.SessionId == sessionId)
+            .OrderBy(m => m.CreatedAt)
+            .Select(m => new ChatMessageDto
+            {
+                Sender = m.Sender,
+                MessageContent = m.MessageContent
+            })
+            .ToListAsync(cancellationToken);
+
+        if (all.Count <= HistoryKeepRecentCount + 1 || EstimateTokens(all) <= MaxHistoryTokens)
+            return all;
+
+        var summaryIndex = all.FindLastIndex(m => m.MessageContent.StartsWith(HistorySummaryMarker, StringComparison.Ordinal));
+        var systemMessage = all[0];
+        var afterSummary = (summaryIndex >= 0 ? all.Skip(summaryIndex + 1) : all.Skip(1)).ToList();
+
+        if (summaryIndex < 0 && afterSummary.Count > HistoryKeepRecentCount)
+        {
+            var toSummarize = afterSummary.Take(afterSummary.Count - HistoryKeepRecentCount).ToList();
+            if (toSummarize.Count > 0)
+            {
+                string summaryText = await _geminiService.GetGeminiResponseAsync([
+                    new ChatMessageDto
+                    {
+                        Sender = "USER",
+                        MessageContent = "Summarize the following conversation history concisely, preserving key facts, decisions and open questions.\n\n" +
+                            string.Join("\n", toSummarize.Select(m => $"{m.Sender}: {m.MessageContent}"))
+                    }
+                ], cancellationToken);
+
+                var summaryContent = HistorySummaryMarker + "\n" + summaryText;
+                _dbContext.ChatMessages.Add(new ChatMessage
+                {
+                    SessionId = sessionId,
+                    Sender = "USER",
+                    MessageContent = summaryContent,
+                    Display = false,
+                    CreatedAt = DateTime.Now
+                });
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
+                var remaining = afterSummary.Skip(toSummarize.Count).ToList();
+                var rebuilt = new List<ChatMessageDto> { systemMessage, new ChatMessageDto { Sender = "USER", MessageContent = summaryContent } };
+                rebuilt.AddRange(remaining);
+                return TrimToTokenBudget(rebuilt, MaxHistoryTokens);
+            }
+        }
+
+        var bounded = new List<ChatMessageDto> { systemMessage };
+        if (summaryIndex >= 0)
+            bounded.Add(all[summaryIndex]);
+        bounded.AddRange(afterSummary);
+        return TrimToTokenBudget(bounded, MaxHistoryTokens);
+    }
+
+    private static List<ChatMessageDto> TrimToTokenBudget(List<ChatMessageDto> messages, int maxTokens)
+    {
+        if (messages.Count == 0 || EstimateTokens(messages) <= maxTokens)
+            return messages;
+
+        int tokens = EstimateTokens(messages[0].MessageContent);
+        var kept = new List<ChatMessageDto>();
+        for (int i = messages.Count - 1; i >= 1; i--)
+        {
+            int t = EstimateTokens(messages[i].MessageContent);
+            if (tokens + t > maxTokens)
+                break;
+            tokens += t;
+            kept.Insert(0, messages[i]);
+        }
+
+        var result = new List<ChatMessageDto> { messages[0] };
+        result.AddRange(kept);
+        return result;
     }
 
     private async Task<RetrievedContext> RetrieveContextAsync(int documentId, string question)
@@ -586,13 +720,36 @@ public class ChatService : IChatService
         var selected = await _dbContext.DocumentChunks.AsNoTracking()
             .Where(c => c.DocumentId == documentId && indexes.Contains(c.ChunkIndex))
             .OrderBy(c => c.ChunkIndex).Take(8).ToListAsync();
-        return new RetrievedContext(FormatChunks(selected), selected.Select(c => c.ChunkId).ToList(), true);
+        var bounded = BuildBoundedChunks(selected, scored.Select(c => c.ChunkId).ToHashSet(), MaxContextTokens);
+        return new RetrievedContext(FormatChunks(bounded), bounded.Select(c => c.ChunkId).ToList(), true);
     }
 
-    private async Task<RetrievedContext> SummarizeWholeDocumentAsync(List<DocumentChunk> chunks, string question)
+    private static List<DocumentChunk> BuildBoundedChunks(List<DocumentChunk> chunks, HashSet<int> priorityChunkIds, int maxTokens)
     {
+        var ordered = chunks.Where(c => priorityChunkIds.Contains(c.ChunkId))
+            .Concat(chunks.Where(c => !priorityChunkIds.Contains(c.ChunkId)))
+            .ToList();
+
+        var result = new List<DocumentChunk>();
+        int tokens = 0;
+        foreach (var chunk in ordered)
+        {
+            int t = EstimateTokens(FormatChunks([chunk]));
+            if (result.Count > 0 && tokens + t > maxTokens)
+                continue;
+            tokens += t;
+            result.Add(chunk);
+        }
+        return result.OrderBy(c => c.ChunkIndex).ToList();
+    }
+
+    private async Task<RetrievedContext> SummarizeWholeDocumentAsync(List<DocumentChunk> chunks, string question, CancellationToken cancellationToken)
+    {
+        var groups = chunks.Chunk(5).Take(MaxMapReduceGroups).ToList();
+        bool truncated = chunks.Count > groups.Count * 5;
+
         var summaries = new List<string>();
-        foreach (var group in chunks.Chunk(5))
+        foreach (var group in groups)
         {
             summaries.Add(await _geminiService.GetGeminiResponseAsync([
                 new ChatMessageDto
@@ -600,10 +757,29 @@ public class ChatService : IChatService
                     Sender = "USER",
                     MessageContent = "Summarize this document section faithfully for a later whole-document answer. Preserve key facts and cite chunk IDs in square brackets.\n\n" + FormatChunks(group)
                 }
-            ]));
+            ], cancellationToken));
         }
-        return new RetrievedContext("Map summaries for the whole-document request: " + question + "\n\n" + string.Join("\n\n", summaries),
-            chunks.Select(c => c.ChunkId).ToList(), chunks.Count > 0);
+
+        int contextBudget = MaxContextTokens * 2;
+        var keptSummaries = new List<string>();
+        int summaryTokens = 0;
+        foreach (var s in summaries)
+        {
+            int t = EstimateTokens(s);
+            if (keptSummaries.Count > 0 && summaryTokens + t > contextBudget)
+                break;
+            summaryTokens += t;
+            keptSummaries.Add(s);
+        }
+
+        var coveredChunkIds = groups.Take(keptSummaries.Count).SelectMany(g => g).Select(c => c.ChunkId).ToList();
+        var note = truncated || keptSummaries.Count < summaries.Count
+            ? $"\n\n[LƯU Ý: tài liệu có {chunks.Count} chunk, hệ thống chỉ tóm tắt được {coveredChunkIds.Count} chunk đầu do giới hạn ngân sách xử lý.]"
+            : "";
+
+        return new RetrievedContext(
+            "Map summaries for the whole-document request: " + question + "\n\n" + string.Join("\n\n", keptSummaries) + note,
+            coveredChunkIds, coveredChunkIds.Count > 0);
     }
 
     private static string FormatChunks(IEnumerable<DocumentChunk> chunks) => string.Join("\n\n", chunks.Select(c =>
@@ -615,9 +791,10 @@ public class ChatService : IChatService
     private static bool IsWholeDocumentRequest(string question) => Regex.IsMatch(question,
         @"(toàn bộ|toan bo|cả tài liệu|ca tai lieu|whole document|entire document|tóm tắt tài liệu|tom tat tai lieu)", RegexOptions.IgnoreCase);
 
-    private static bool TryParseGroundedResponse(string value, HashSet<int> allowedIds, out string response)
+    private static bool TryParseGroundedResponse(string value, HashSet<int> allowedIds, out string response, out List<int> citedChunkIds)
     {
         response = string.Empty;
+        citedChunkIds = [];
         if (allowedIds.Count == 0)
             return false;
         try
@@ -636,7 +813,10 @@ public class ChatService : IChatService
             }
             response = parsed.Answer.Trim();
             if (valid.Count > 0)
+            {
                 response += "\n\nNguồn: " + string.Join(", ", valid.Select(c => c.Page.HasValue ? $"chunk {c.ChunkId} (trang {c.Page})" : $"chunk {c.ChunkId}"));
+                citedChunkIds = valid.Select(c => c.ChunkId).ToList();
+            }
             return true;
         }
         catch (JsonException) { return false; }

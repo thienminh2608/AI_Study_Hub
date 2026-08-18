@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -16,9 +16,12 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, type PagedResult } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { FileTypeIcon } from '../components/FileTypeIcon';
+import { Pagination } from '../components/Pagination';
+
+const PAGE_SIZE = 12;
 
 interface PublicDocument {
   documentId: number;
@@ -62,11 +65,15 @@ export const PublicDocuments: React.FC = () => {
   const { user } = useAuth();
   const [documents, setDocuments] = useState<PublicDocument[]>([]);
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [sortBy, setSortBy] = useState<'createdAt' | 'bookmarks' | 'downloads' | 'views' | 'title'>(
     'createdAt',
   );
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [fileType, setFileType] = useState('ALL');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [bookmarkedIds, setBookmarkedIds] = useState<Set<number>>(new Set());
@@ -87,20 +94,37 @@ export const PublicDocuments: React.FC = () => {
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      api.document.getPublicDocuments(),
-      api.document.getBookmarks(),
-      api.document.getReportReasons(),
-    ])
-      .then(([data, bookmarkIds, reasons]) => {
-        setDocuments(data as PublicDocument[]);
+    Promise.all([api.document.getBookmarks(), api.document.getReportReasons()])
+      .then(([bookmarkIds, reasons]) => {
         setBookmarkedIds(new Set(bookmarkIds));
         setReportReasons(reasons);
         if (reasons.length) setReportReason(reasons[0].reasonCode);
       })
+      .catch((err: Error) => setError(err.message || 'Không thể tải dữ liệu.'));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQuery, fileType, sortBy, sortDirection]);
+
+  useEffect(() => {
+    const category = FILE_CATEGORIES.find((c) => c.id === fileType) ?? FILE_CATEGORIES[0];
+    setLoading(true);
+    api.documentExtra
+      .getPublicDocumentsPaged(page, PAGE_SIZE, debouncedQuery, category.extensions, sortBy, sortDirection)
+      .then((res: PagedResult<PublicDocument>) => {
+        setDocuments(res.items);
+        setTotalPages(res.totalPages);
+        setTotalCount(res.totalCount);
+      })
       .catch((err: Error) => setError(err.message || 'Không thể tải tài liệu công khai.'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [page, debouncedQuery, fileType, sortBy, sortDirection]);
 
   const toggleBookmark = async (document: PublicDocument) => {
     if (bookmarkingId !== null) return;
@@ -195,32 +219,6 @@ export const PublicDocuments: React.FC = () => {
     }
   };
 
-  const filteredDocuments = useMemo(() => {
-    const keyword = query.trim().toLocaleLowerCase('vi');
-    const selectedCategory =
-      FILE_CATEGORIES.find((category) => category.id === fileType) ?? FILE_CATEGORIES[0];
-    const filtered = documents.filter(
-      (document) =>
-        (fileType === 'ALL' ||
-          selectedCategory.extensions.includes(document.fileExtension.toLowerCase())) &&
-        (!keyword ||
-          document.title.toLocaleLowerCase('vi').includes(keyword) ||
-          document.uploaderName.toLocaleLowerCase('vi').includes(keyword) ||
-          document.fileExtension.toLocaleLowerCase('vi').includes(keyword)),
-    );
-    return [...filtered].sort((left, right) => {
-      let value = 0;
-      if (sortBy === 'bookmarks') value = (left.bookmarkCount ?? 0) - (right.bookmarkCount ?? 0);
-      else if (sortBy === 'downloads')
-        value = (left.downloadCount ?? 0) - (right.downloadCount ?? 0);
-      else if (sortBy === 'views') value = (left.viewCount ?? 0) - (right.viewCount ?? 0);
-      else if (sortBy === 'title') value = left.title.localeCompare(right.title, 'vi');
-      else
-        value = new Date(left.createdAt ?? 0).getTime() - new Date(right.createdAt ?? 0).getTime();
-      return sortDirection === 'asc' ? value : -value;
-    });
-  }, [documents, query, fileType, sortBy, sortDirection]);
-
   return (
     <div className="public-documents-page">
       <header className="public-documents-header">
@@ -267,12 +265,6 @@ export const PublicDocuments: React.FC = () => {
       <div className="file-category-bar" aria-label="Danh mục loại tài liệu">
         {FILE_CATEGORIES.map((category) => {
           const Icon = category.icon;
-          const count =
-            category.id === 'ALL'
-              ? documents.length
-              : documents.filter((document) =>
-                  category.extensions.includes(document.fileExtension.toLowerCase()),
-                ).length;
           return (
             <button
               key={category.id}
@@ -289,7 +281,6 @@ export const PublicDocuments: React.FC = () => {
               </span>
               <span>
                 <strong>{category.label}</strong>
-                <small>{count} tài liệu</small>
               </span>
             </button>
           );
@@ -304,7 +295,7 @@ export const PublicDocuments: React.FC = () => {
         </div>
       ) : error ? (
         <div className="public-state error-alert">{error}</div>
-      ) : filteredDocuments.length === 0 ? (
+      ) : documents.length === 0 ? (
         <div className="public-state glass-panel">
           <Globe2 size={40} />
           <strong>
@@ -313,9 +304,9 @@ export const PublicDocuments: React.FC = () => {
         </div>
       ) : (
         <>
-          <div className="public-result-count">{filteredDocuments.length} tài liệu</div>
+          <div className="public-result-count">{totalCount} tài liệu</div>
           <div className="public-document-grid">
-            {filteredDocuments.map((document) => (
+            {documents.map((document) => (
               <article
                 key={document.documentId}
                 className="public-document-card glass-card"
@@ -408,6 +399,12 @@ export const PublicDocuments: React.FC = () => {
               </article>
             ))}
           </div>
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            totalCount={totalCount}
+            onPageChange={setPage}
+          />
         </>
       )}
 

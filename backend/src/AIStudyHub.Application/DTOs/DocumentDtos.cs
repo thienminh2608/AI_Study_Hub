@@ -69,6 +69,10 @@ public class DocumentResponseDto
     {
         get; set;
     }
+    public double? ExtractionCoveragePercent
+    {
+        get; set;
+    }
     public DateTime? CreatedAt
     {
         get; set;

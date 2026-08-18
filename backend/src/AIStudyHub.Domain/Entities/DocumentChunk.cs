@@ -31,6 +31,11 @@ public class DocumentChunk
     {
         get; set;
     }
+    public double? BoundingBoxX { get; set; }
+    public double? BoundingBoxY { get; set; }
+    public double? BoundingBoxWidth { get; set; }
+    public double? BoundingBoxHeight { get; set; }
+    public double? OcrConfidence { get; set; }
     public DateTime CreatedAt
     {
         get; set;

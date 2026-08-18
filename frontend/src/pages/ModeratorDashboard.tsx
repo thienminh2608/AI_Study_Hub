@@ -640,6 +640,14 @@ export const ModeratorDashboard: React.FC = () => {
                 <small>Kích thước</small>
                 <strong>{Number(detail.document.fileSizeMb || 0).toFixed(2)} MB</strong>
               </div>
+              <div>
+                <small>Độ phủ trích xuất</small>
+                <strong>
+                  {typeof detail.document.extractionCoveragePercent === 'number'
+                    ? `${Math.round(detail.document.extractionCoveragePercent * 100)}%`
+                    : 'N/A'}
+                </strong>
+              </div>
             </div>
             {detail.report && (
               <section className="report-detail">

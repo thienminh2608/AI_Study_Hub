@@ -1,5 +1,6 @@
 using System;
 using System.Security.Claims;
+using System.Threading;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
@@ -156,20 +157,20 @@ public class ChatBotController : ControllerBase
     }
 
     [HttpPost("sessions/{sessionId}/ask")]
-    public async Task<IActionResult> AskQuestion(int sessionId, [FromBody] AskQuestionDto dto)
+    public async Task<IActionResult> AskQuestion(int sessionId, [FromBody] AskQuestionDto dto, CancellationToken cancellationToken)
     {
         try
         {
             int userId = GetCurrentUserId();
-            string aiResponse = await _chatService.ProcessUserMessageAsync(userId, sessionId, dto);
+            var result = await _chatService.ProcessUserMessageAsync(userId, sessionId, dto, cancellationToken);
             return Ok(new
             {
-                response = aiResponse
+                response = result.Response,
+                citations = result.Citations
             });
         }
         catch (InvalidOperationException ex)
         {
-            // Catch prompt rate limit exceeding
             return StatusCode(StatusCodes.Status429TooManyRequests, new
             {
                 message = ex.Message
@@ -178,6 +179,20 @@ public class ChatBotController : ControllerBase
         catch (ArgumentException ex)
         {
             return BadRequest(new
+            {
+                message = ex.Message
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return StatusCode(499, new
+            {
+                message = "Yêu cầu đã bị hủy."
+            });
+        }
+        catch (TimeoutException ex)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, new
             {
                 message = ex.Message
             });

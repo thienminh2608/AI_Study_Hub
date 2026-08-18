@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
@@ -15,6 +17,11 @@ public class GeminiService : IGeminiService
 {
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
+
+    private const int DefaultMaxOutputTokens = 2048;
+    private const int DefaultTimeoutSeconds = 30;
+    private const int MaxRetryAttempts = 3;
+    private const int BaseBackoffMilliseconds = 200;
 
     public GeminiService(HttpClient httpClient, IConfiguration configuration)
     {
@@ -32,7 +39,21 @@ public class GeminiService : IGeminiService
         return apiKey.Trim();
     }
 
-    public async Task<string> GetGeminiResponseAsync(List<ChatMessageDto> messageHistory)
+    private int GetMaxOutputTokens()
+    {
+        return int.TryParse(_configuration["Gemini:MaxOutputTokens"], out var value) && value > 0
+            ? value
+            : DefaultMaxOutputTokens;
+    }
+
+    private int GetTimeoutSeconds()
+    {
+        return int.TryParse(_configuration["Gemini:TimeoutSeconds"], out var value) && value > 0
+            ? value
+            : DefaultTimeoutSeconds;
+    }
+
+    public async Task<string> GetGeminiResponseAsync(List<ChatMessageDto> messageHistory, CancellationToken cancellationToken = default)
     {
         string apiKey = GetApiKey();
         if (string.IsNullOrEmpty(apiKey))
@@ -45,12 +66,10 @@ public class GeminiService : IGeminiService
             throw new InvalidOperationException("Gemini:Model chưa được cấu hình.");
         string apiUrl = $"https://generativelanguage.googleapis.com/v1beta/models/{Uri.EscapeDataString(model)}:generateContent";
 
-        // 1. Build Payload JSON using System.Text.Json
         var contentsList = new List<object>();
 
         foreach (var msg in messageHistory)
         {
-            // Convert sender roles to Gemini specification (user, model)
             string role = "user";
             if (msg.Sender.Equals("BOT", StringComparison.OrdinalIgnoreCase))
             {
@@ -69,24 +88,71 @@ public class GeminiService : IGeminiService
 
         var payload = new
         {
-            contents = contentsList
+            contents = contentsList,
+            generationConfig = new
+            {
+                maxOutputTokens = GetMaxOutputTokens()
+            }
         };
         string jsonInputString = JsonSerializer.Serialize(payload);
 
-        // 2. Send request
-        using var request = new HttpRequestMessage(HttpMethod.Post, apiUrl);
-        request.Headers.Add("x-goog-api-key", apiKey);
-        request.Content = new StringContent(jsonInputString, Encoding.UTF8, "application/json");
-        using var response = await _httpClient.SendAsync(request);
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(GetTimeoutSeconds()));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-        if (!response.IsSuccessStatusCode)
+        string responseString;
+        int attempt = 0;
+        while (true)
         {
-            string errorDetails = await response.Content.ReadAsStringAsync();
-            throw new HttpRequestException($"Lỗi gọi Gemini API (HTTP {response.StatusCode}): {errorDetails}");
+            attempt++;
+            HttpResponseMessage response;
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, apiUrl);
+                request.Headers.Add("x-goog-api-key", apiKey);
+                request.Content = new StringContent(jsonInputString, Encoding.UTF8, "application/json");
+                response = await _httpClient.SendAsync(request, linkedCts.Token);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException) when (attempt < MaxRetryAttempts)
+            {
+                await Task.Delay(BaseBackoffMilliseconds * (int)Math.Pow(2, attempt - 1), cancellationToken);
+                continue;
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"Gemini API không phản hồi sau {GetTimeoutSeconds()}s (đã thử {attempt} lần).");
+            }
+            catch (HttpRequestException) when (attempt < MaxRetryAttempts)
+            {
+                await Task.Delay(BaseBackoffMilliseconds * (int)Math.Pow(2, attempt - 1), cancellationToken);
+                continue;
+            }
+
+            bool isTransientStatus = response.StatusCode == HttpStatusCode.TooManyRequests ||
+                                      (int)response.StatusCode >= 500;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                if (isTransientStatus && attempt < MaxRetryAttempts)
+                {
+                    response.Dispose();
+                    await Task.Delay(BaseBackoffMilliseconds * (int)Math.Pow(2, attempt - 1), cancellationToken);
+                    continue;
+                }
+
+                string errorDetails = await response.Content.ReadAsStringAsync(cancellationToken);
+                response.Dispose();
+                throw new HttpRequestException($"Lỗi gọi Gemini API (HTTP {response.StatusCode}): {errorDetails}");
+            }
+
+            responseString = await response.Content.ReadAsStringAsync(cancellationToken);
+            response.Dispose();
+            break;
         }
 
-        // 3. Read and Parse Response
-        string responseString = await response.Content.ReadAsStringAsync();
         var jsonNode = JsonNode.Parse(responseString);
 
         try
@@ -95,11 +161,18 @@ public class GeminiService : IGeminiService
             if (string.IsNullOrWhiteSpace(aiResponse))
             {
                 var blockReason = jsonNode?["promptFeedback"]?["blockReason"]?.GetValue<string>();
-                throw new InvalidOperationException(string.IsNullOrWhiteSpace(blockReason)
-                    ? "Gemini không trả về nội dung. Vui lòng thử lại."
-                    : $"Gemini đã từ chối yêu cầu: {blockReason}.");
+                var finishReason = jsonNode?["candidates"]?[0]?["finishReason"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(blockReason))
+                    throw new InvalidOperationException($"Gemini đã từ chối yêu cầu: {blockReason}.");
+                if ("MAX_TOKENS".Equals(finishReason, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Gemini đã đạt giới hạn output token trước khi hoàn thành câu trả lời.");
+                throw new InvalidOperationException("Gemini không trả về nội dung. Vui lòng thử lại.");
             }
             return aiResponse.Trim();
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
 import { useAuth } from '../context/AuthContext';
 import { ArrowLeft, Trash2, Share2, AlertOctagon, Loader, Lock, Download } from 'lucide-react';
 import { FileTypeIcon } from '../components/FileTypeIcon';
+import { OriginalDocumentPreview } from '../components/OriginalDocumentPreview';
+
+const ORIGINAL_PREVIEW_EXTENSIONS = ['pdf', 'docx', 'xlsx'];
 
 interface DocumentDetails {
   documentId: number;
@@ -28,6 +31,7 @@ interface DocumentDetails {
   requiresAppeal?: boolean;
   publicReviewBlocked?: boolean;
   appealStatus?: string;
+  extractionCoveragePercent?: number | null;
 }
 
 export const DocumentViewer: React.FC = () => {
@@ -35,11 +39,21 @@ export const DocumentViewer: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const documentId = parseInt(id || '0');
+  const highlightStart = Number(searchParams.get('start'));
+  const highlightEnd = Number(searchParams.get('end'));
+  const hasHighlight = Number.isFinite(highlightStart) && Number.isFinite(highlightEnd) && highlightEnd > highlightStart;
+  const highlightRef = useRef<HTMLElement | null>(null);
+  const highlightPageParam = Number(searchParams.get('page'));
+  const hasHighlightPage = Number.isFinite(highlightPageParam) && highlightPageParam > 0;
 
   const [doc, setDoc] = useState<DocumentDetails | null>(null);
   const [extractedText, setExtractedText] = useState('');
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'original' | 'extracted'>(
+    hasHighlight && !hasHighlightPage ? 'extracted' : 'original',
+  );
 
   // Edit & Share
   const [sharingPermission, setSharingPermission] = useState('PRIVATE');
@@ -90,6 +104,12 @@ export const DocumentViewer: React.FC = () => {
   useEffect(() => {
     loadDocumentDetails();
   }, [documentId]);
+
+  useEffect(() => {
+    if (hasHighlight && extractedText && highlightRef.current) {
+      highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [hasHighlight, extractedText]);
 
   const handleToggleSharing = async () => {
     if (!doc) return;
@@ -357,28 +377,85 @@ export const DocumentViewer: React.FC = () => {
 
           {/* Main text content sheet panel */}
           <div className="text-viewer-sheet glass-panel">
-            <h4>Nội dung văn bản trích xuất (AI Text)</h4>
-            <div className="text-scroll-area">
-              {extractedText ? (
-                <pre className="extracted-text-pre">{extractedText}</pre>
-              ) : doc.aiParsingStatus === 'PENDING' ? (
-                <div className="empty-text-state">
-                  <Loader className="spin" size={24} />
-                  <p>
-                    Hệ thống AI đang tiến hành phân tích và trích xuất chữ từ tệp tin gốc. Quá trình
-                    này có thể mất vài giây...
-                  </p>
+            <div className="viewer-tabs">
+              <button
+                type="button"
+                className={viewMode === 'original' ? 'active' : ''}
+                onClick={() => setViewMode('original')}
+              >
+                Bản gốc
+              </button>
+              <button
+                type="button"
+                className={viewMode === 'extracted' ? 'active' : ''}
+                onClick={() => setViewMode('extracted')}
+              >
+                Văn bản trích xuất (AI)
+              </button>
+            </div>
+            {typeof doc.extractionCoveragePercent === 'number' && doc.extractionCoveragePercent < 1 && (
+              <div className="coverage-warning">
+                <AlertOctagon size={16} />
+                Chỉ trích xuất được khoảng {Math.round(doc.extractionCoveragePercent * 100)}% nội
+                dung. Một số trang có thể chứa ảnh/nội dung quét chưa được đọc.
+              </div>
+            )}
+            {viewMode === 'original' ? (
+              ORIGINAL_PREVIEW_EXTENSIONS.includes(doc.fileExtension.toLowerCase()) ? (
+                <div className="text-scroll-area original-scroll-area">
+                  <OriginalDocumentPreview
+                    documentId={doc.documentId}
+                    fileExtension={doc.fileExtension}
+                    highlightPage={hasHighlightPage ? highlightPageParam : null}
+                    onDownload={handleDownload}
+                  />
                 </div>
               ) : (
-                <div className="empty-text-state">
-                  <AlertOctagon size={32} />
-                  <p>
-                    Không có văn bản nào được trích xuất (Tệp tin trống hoặc định dạng hình ảnh/lỗi
-                    quét).
-                  </p>
+                <div className="text-scroll-area">
+                  <div className="empty-text-state">
+                    <AlertOctagon size={32} />
+                    <p>
+                      Chưa hỗ trợ xem trước bản gốc cho định dạng .{doc.fileExtension}. Hãy xem văn
+                      bản trích xuất hoặc tải xuống tài liệu.
+                    </p>
+                  </div>
                 </div>
-              )}
-            </div>
+              )
+            ) : (
+              <div className="text-scroll-area">
+                {extractedText ? (
+                  <pre className="extracted-text-pre">
+                    {hasHighlight && highlightEnd <= extractedText.length ? (
+                      <>
+                        {extractedText.slice(0, highlightStart)}
+                        <mark ref={highlightRef} className="citation-highlight">
+                          {extractedText.slice(highlightStart, highlightEnd)}
+                        </mark>
+                        {extractedText.slice(highlightEnd)}
+                      </>
+                    ) : (
+                      extractedText
+                    )}
+                  </pre>
+                ) : doc.aiParsingStatus === 'PENDING' ? (
+                  <div className="empty-text-state">
+                    <Loader className="spin" size={24} />
+                    <p>
+                      Hệ thống AI đang tiến hành phân tích và trích xuất chữ từ tệp tin gốc. Quá
+                      trình này có thể mất vài giây...
+                    </p>
+                  </div>
+                ) : (
+                  <div className="empty-text-state">
+                    <AlertOctagon size={32} />
+                    <p>
+                      Không có văn bản nào được trích xuất (Tệp tin trống hoặc định dạng hình
+                      ảnh/lỗi quét).
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       ) : null}
@@ -791,6 +868,126 @@ export const DocumentViewer: React.FC = () => {
           font-size: 0.95rem;
           line-height: 1.6;
           color: #d1d5db;
+        }
+
+        .citation-highlight {
+          background: rgba(0, 180, 216, 0.28);
+          color: inherit;
+          border-radius: 3px;
+          padding: 0.05rem 0.1rem;
+        }
+
+        .viewer-tabs {
+          display: flex;
+          gap: 0.5rem;
+          margin-bottom: 0.75rem;
+        }
+
+        .viewer-tabs button {
+          padding: 0.5rem 1rem;
+          border-radius: var(--radius-sm);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: rgba(255, 255, 255, 0.03);
+          color: var(--text-secondary);
+          cursor: pointer;
+          font-size: 0.85rem;
+        }
+
+        .viewer-tabs button.active {
+          border-color: var(--accent-purple);
+          background: rgba(157, 78, 221, 0.12);
+          color: var(--text-primary);
+        }
+
+        .original-scroll-area {
+          display: flex;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.15);
+        }
+
+        .original-preview-state {
+          min-height: 240px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 0.75rem;
+          color: var(--text-muted);
+          text-align: center;
+          padding: 2rem;
+        }
+
+        .original-preview-pdf {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.75rem;
+          width: 100%;
+        }
+
+        .original-preview-pager {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          color: var(--text-secondary);
+          font-size: 0.85rem;
+        }
+
+        .original-preview-pager button {
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-primary);
+          border-radius: var(--radius-sm);
+          padding: 0.35rem;
+          cursor: pointer;
+          display: flex;
+        }
+
+        .original-preview-pager button:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .original-preview-docx {
+          width: 100%;
+          background: #fff;
+          color: #111;
+          padding: 1.5rem;
+          border-radius: var(--radius-sm);
+          overflow: auto;
+        }
+
+        .original-preview-xlsx {
+          width: 100%;
+          overflow: auto;
+          background: #fff;
+          color: #111;
+          border-radius: var(--radius-sm);
+          padding: 1rem;
+        }
+
+        .original-preview-xlsx table {
+          border-collapse: collapse;
+          font-size: 0.85rem;
+        }
+
+        .original-preview-xlsx td,
+        .original-preview-xlsx th {
+          border: 1px solid #ddd;
+          padding: 0.3rem 0.5rem;
+        }
+
+        .coverage-warning {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin: 0.5rem 0 0.75rem;
+          padding: 0.6rem 0.9rem;
+          border-radius: var(--radius-sm);
+          border: 1px solid rgba(245, 158, 11, 0.3);
+          background: rgba(245, 158, 11, 0.08);
+          color: var(--warning);
+          font-size: 0.85rem;
         }
 
         .empty-text-state {

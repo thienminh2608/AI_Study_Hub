@@ -10,7 +10,7 @@ public static partial class DocumentChunker
     private const int MaximumCharacters = 6000; // approximately 1,500 tokens
     private const int OverlapCharacters = 600; // approximately 100-200 tokens
 
-    public static IReadOnlyList<DocumentChunk> Chunk(int documentId, string text, DateTime createdAt)
+    public static IReadOnlyList<DocumentChunk> Chunk(int documentId, string text, DateTime createdAt, IReadOnlyDictionary<int, double>? pageOcrConfidence = null)
     {
         if (string.IsNullOrWhiteSpace(text))
             return [];
@@ -54,15 +54,19 @@ public static partial class DocumentChunker
                 return;
             var first = current[0];
             var last = current[^1];
+            var pageNumber = current.Select(b => b.Page).LastOrDefault(p => p.HasValue);
             chunks.Add(new DocumentChunk
             {
                 DocumentId = documentId,
                 ChunkIndex = chunks.Count,
                 HeadingPath = headings.Count == 0 ? null : JsonSerializer.Serialize(headings.Values),
-                PageNumber = current.Select(b => b.Page).LastOrDefault(p => p.HasValue),
+                PageNumber = pageNumber,
                 Text = string.Join("\n\n", current.Select(b => b.Text)),
                 StartOffset = first.Start,
                 EndOffset = last.End,
+                OcrConfidence = pageNumber.HasValue && pageOcrConfidence != null && pageOcrConfidence.TryGetValue(pageNumber.Value, out var confidence)
+                    ? confidence
+                    : null,
                 CreatedAt = createdAt
             });
 
