@@ -14,6 +14,7 @@ public interface IDocumentService
     Task CancelUploadAsync(int userId, int pendingDocId);
     Task<List<DocumentResponseDto>> GetUserDocumentsAsync(int userId, int? folderId);
     Task<List<DocumentResponseDto>> GetPublicDocumentsAsync();
+    Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, string? fileType, string? sortBy, string? sortDirection);
     Task<DocumentResponseDto?> GetDocumentByIdAsync(int documentId);
     Task<bool> DeleteDocumentAsync(int userId, int documentId);
     Task<string?> GetExtractedTextAsync(int documentId);

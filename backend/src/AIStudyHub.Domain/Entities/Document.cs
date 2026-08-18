@@ -49,6 +49,7 @@ public partial class Document
 
     public virtual ICollection<Bookmark> Bookmarks { get; set; } = new List<Bookmark>();
     public virtual DocumentExtractedText? DocumentExtractedText { get; set; }
+    public virtual ICollection<DocumentOcrRegion> DocumentOcrRegions { get; set; } = new List<DocumentOcrRegion>();
     public virtual ICollection<DocumentChunk> DocumentChunks { get; set; } = new List<DocumentChunk>();
     public virtual ICollection<DocumentReport> DocumentReports { get; set; } = new List<DocumentReport>();
     public virtual ICollection<DocumentActivity> DocumentActivities { get; set; } = new List<DocumentActivity>();

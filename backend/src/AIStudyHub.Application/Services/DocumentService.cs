@@ -385,6 +385,41 @@ public class DocumentService : IDocumentService
         return docs.Select(d => MapToDto(d, d.User.Username)).ToList();
     }
 
+    public async Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, string? fileType, string? sortBy, string? sortDirection)
+    {
+        pageNumber = Math.Max(1, pageNumber);
+        pageSize = Math.Clamp(pageSize, 1, 50);
+        var query = _dbContext.Documents.Include(d => d.User)
+            .Where(d => d.SharingPermission == "PUBLIC" && d.IsFlagged == false && !d.IsDeleted);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim().ToLower();
+            query = query.Where(d => d.Title.ToLower().Contains(keyword) || d.User.Username.ToLower().Contains(keyword) || d.FileExtension.ToLower().Contains(keyword));
+        }
+        if (!string.IsNullOrWhiteSpace(fileType) && !fileType.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var extensions = fileType.ToUpperInvariant() switch
+            {
+                "PDF" => new[] { "pdf" }, "WORD" => new[] { "doc", "docx" },
+                "SHEET" => new[] { "xls", "xlsx", "csv" }, "SLIDE" => new[] { "ppt", "pptx" },
+                "TEXT" => new[] { "txt", "md" }, _ => Array.Empty<string>()
+            };
+            if (extensions.Length > 0) query = query.Where(d => extensions.Contains(d.FileExtension.ToLower()));
+        }
+        var totalCount = await query.CountAsync();
+        bool ascending = string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
+        var ordered = sortBy?.ToLowerInvariant() switch
+        {
+            "title" => ascending ? query.OrderBy(d => d.Title).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.Title).ThenByDescending(d => d.DocumentId),
+            "bookmarks" => ascending ? query.OrderBy(d => d.BookmarkCount).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.BookmarkCount).ThenByDescending(d => d.DocumentId),
+            "downloads" => ascending ? query.OrderBy(d => d.DownloadCount).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.DownloadCount).ThenByDescending(d => d.DocumentId),
+            "views" => ascending ? query.OrderBy(d => d.ViewCount).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.ViewCount).ThenByDescending(d => d.DocumentId),
+            _ => ascending ? query.OrderBy(d => d.CreatedAt).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.CreatedAt).ThenByDescending(d => d.DocumentId)
+        };
+        var docs = await ordered.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToListAsync();
+        return new PagedResult<DocumentResponseDto>(docs.Select(d => MapToDto(d, d.User.Username)).ToList(), totalCount, pageNumber, pageSize);
+    }
+
     public async Task<DocumentResponseDto?> GetDocumentByIdAsync(int documentId)
     {
         var doc = await _dbContext.Documents.Include(d => d.User).FirstOrDefaultAsync(d => d.DocumentId == documentId && !d.IsDeleted);

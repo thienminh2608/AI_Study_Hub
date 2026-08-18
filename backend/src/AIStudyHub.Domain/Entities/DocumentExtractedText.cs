@@ -17,6 +17,13 @@ public partial class DocumentExtractedText
 
     public string ExtractedText { get; set; } = null!;
 
+    public int TotalPages { get; set; }
+    public int ReadablePages { get; set; }
+    public decimal ExtractionCoverage { get; set; }
+    public bool ImageContentDetected { get; set; }
+    public bool UnreadImageContentWarning { get; set; }
+    public int OcrRegionCount { get; set; }
+
     public DateTime? CreatedAt
     {
         get; set;
