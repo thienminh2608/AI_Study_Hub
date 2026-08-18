@@ -11,6 +11,20 @@ export const Profile: React.FC = () => {
   const [editingUsername, setEditingUsername] = useState(false);
   const [username, setUsername] = useState(user?.username ?? '');
   const [savingUsername, setSavingUsername] = useState(false);
+  const [togglingAutoRenew, setTogglingAutoRenew] = useState(false);
+
+  const handleToggleAutoRenew = async () => {
+    setTogglingAutoRenew(true);
+    try {
+      const res = await api.auth.toggleAutoRenew();
+      alert(res.message);
+      await refreshUser();
+    } catch (err: any) {
+      alert(err.message || 'Thay đổi tự động gia hạn thất bại.');
+    } finally {
+      setTogglingAutoRenew(false);
+    }
+  };
 
   // States for Password Change
   const [step, setStep] = useState<0 | 1 | 2>(0); // 0: Idle, 1: Sent OTP, 2: Reset
@@ -213,6 +227,36 @@ export const Profile: React.FC = () => {
                   <span className="val">{new Date(user.expiresAt).toLocaleDateString()}</span>
                 </div>
               </div>
+            )}
+            {user?.tierId === 3 && (
+              <>
+                {user?.gracePeriodEndsAt && new Date(user.gracePeriodEndsAt).getTime() > Date.now() && (
+                  <div className="info-row" style={{ color: '#ef4444' }}>
+                    <Shield size={16} className="info-row-icon" style={{ color: '#ef4444' }} />
+                    <div className="info-details">
+                      <span className="label" style={{ color: '#ef4444' }}>Hạn cuối ân hạn (Grace Period)</span>
+                      <span className="val">{new Date(user.gracePeriodEndsAt).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="info-row">
+                  <Calendar size={16} className="info-row-icon" />
+                  <div className="info-details" style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span className="label">Tự động gia hạn</span>
+                      <span className="val">{user?.isAutoRenew ? 'Bật' : 'Tắt'}</span>
+                    </div>
+                    <button
+                      className="btn-secondary"
+                      onClick={handleToggleAutoRenew}
+                      disabled={togglingAutoRenew}
+                      style={{ padding: '4px 8px', fontSize: '11px', height: 'auto', width: 'auto' }}
+                    >
+                      {togglingAutoRenew ? 'Đang lưu...' : 'Thay đổi'}
+                    </button>
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </div>

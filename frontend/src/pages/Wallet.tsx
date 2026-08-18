@@ -39,6 +39,24 @@ export const Wallet: React.FC = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [transferConfig, setTransferConfig] = useState<TransferConfiguration | null>(null);
+  const [referenceCode, setReferenceCode] = useState('');
+  const [bankId, setBankId] = useState('');
+  const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [invoiceLoading, setInvoiceLoading] = useState(false);
+
+  const handleViewInvoice = async (txId: number) => {
+    setInvoiceLoading(true);
+    try {
+      const data = await api.transaction.getInvoice(txId);
+      setSelectedInvoice(data);
+      setShowInvoiceModal(true);
+    } catch (err: any) {
+      alert(err.message || 'Không thể tải hóa đơn.');
+    } finally {
+      setInvoiceLoading(false);
+    }
+  };
   const [sortKey, setSortKey] = useState<keyof Transaction>('startedAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const sortedTransactions = useMemo(
@@ -121,16 +139,25 @@ export const Wallet: React.FC = () => {
       return;
     }
 
+    if (!bankId.trim() || !referenceCode.trim()) {
+      setError('Vui lòng nhập đầy đủ ngân hàng và mã giao dịch để đối soát.');
+      return;
+    }
+
     setSubmitting(true);
     try {
       await api.transaction.create({
         amount,
         type: 'DEPOSIT',
+        bankId: bankId.trim(),
+        referenceCode: referenceCode.trim()
       });
       setSuccess(
         `Đã gửi yêu cầu nạp ${amount.toLocaleString('vi-VN')}đ. Vui lòng đợi Quản trị viên phê duyệt.`,
       );
       setAmount(null);
+      setBankId('');
+      setReferenceCode('');
       setShowDepositModal(false);
       await loadTransactions();
       await refreshUser();
@@ -264,6 +291,37 @@ export const Wallet: React.FC = () => {
                     Admin chưa bật cấu hình chuyển khoản. Vui lòng thử lại sau.
                   </div>
                 ))}
+              {amount && transferConfig?.isActive && (
+                <div className="reconciliation-inputs" style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '15px', marginBottom: '15px' }}>
+                  <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Thông tin đối soát giao dịch:</strong>
+                  <div>
+                    <label style={{ fontSize: '13px', display: 'block', marginBottom: '4px', textAlign: 'left' }}>Ngân hàng bạn đã dùng để chuyển khoản:</label>
+                    <input
+                      type="text"
+                      className="input-control"
+                      placeholder="Ví dụ: Vietcombank, Techcombank..."
+                      required
+                      value={bankId}
+                      onChange={(e) => setBankId(e.target.value)}
+                      disabled={submitting}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '13px', display: 'block', marginBottom: '4px', textAlign: 'left' }}>Mã tham chiếu / Mã giao dịch ngân hàng (Reference Code):</label>
+                    <input
+                      type="text"
+                      className="input-control"
+                      placeholder="Mã GD ngân hàng cung cấp trên biên lai"
+                      required
+                      value={referenceCode}
+                      onChange={(e) => setReferenceCode(e.target.value)}
+                      disabled={submitting}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                </div>
+              )}
               <button
                 type="submit"
                 className="btn-primary tx-submit"
@@ -300,6 +358,7 @@ export const Wallet: React.FC = () => {
                   <th>{sortHeader('status', 'Trạng thái')}</th>
                   <th>{sortHeader('startedAt', 'Thời gian khởi tạo')}</th>
                   <th>{sortHeader('completedAt', 'Hoàn thành lúc')}</th>
+                  <th>Biên lai</th>
                 </tr>
               </thead>
               <tbody>
@@ -310,7 +369,7 @@ export const Wallet: React.FC = () => {
                       <td className="tx-id">#{tx.transactionId}</td>
                       <td>
                         <span className={`type-tag ${isDeposit ? 'deposit' : 'withdraw'}`}>
-                          {isDeposit ? 'Nạp tiền' : 'Rút tiền'}
+                          {isDeposit ? 'Nạp tiền' : 'Chi tiêu'}
                         </span>
                       </td>
                       <td className={`tx-amount ${isDeposit ? 'positive' : 'negative'}`}>
@@ -320,6 +379,21 @@ export const Wallet: React.FC = () => {
                       <td>{renderStatusBadge(tx.status)}</td>
                       <td>{formatDateTime(tx.startedAt)}</td>
                       <td>{formatDateTime(tx.completedAt)}</td>
+                      <td>
+                        {tx.status === 'SUCCESS' ? (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => handleViewInvoice(tx.transactionId)}
+                            style={{ padding: '4px 8px', fontSize: '12px', height: 'auto', width: 'auto' }}
+                            disabled={invoiceLoading}
+                          >
+                            Biên lai
+                          </button>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -328,6 +402,42 @@ export const Wallet: React.FC = () => {
           )}
         </div>
       </div>
+
+      {showInvoiceModal && selectedInvoice && (
+        <div className="deposit-modal-overlay" onMouseDown={() => setShowInvoiceModal(false)}>
+          <div className="deposit-modal glass-panel animate-slide-up" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <button className="deposit-modal-close" onClick={() => setShowInvoiceModal(false)}>
+              <X size={20} />
+            </button>
+            <div style={{ padding: '20px', border: '1px dashed #ccc', borderRadius: '8px', background: '#fafafa', color: '#333' }}>
+              <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0, color: '#333' }}>BIÊN LAI GIAO DỊCH</h3>
+                <small>{selectedInvoice.companyName}</small>
+                <br />
+                <small>MST: {selectedInvoice.taxCode}</small>
+              </div>
+              <hr />
+              <div style={{ fontSize: '14px', lineHeight: '2', textAlign: 'left' }}>
+                <div><strong>Mã hóa đơn:</strong> {selectedInvoice.invoiceNumber}</div>
+                <div><strong>Mã giao dịch:</strong> #{selectedInvoice.transactionId}</div>
+                <div><strong>Khách hàng:</strong> {selectedInvoice.username} ({selectedInvoice.email})</div>
+                <div><strong>Nội dung:</strong> {selectedInvoice.description}</div>
+                <div><strong>Loại giao dịch:</strong> {selectedInvoice.type}</div>
+                <div><strong>Thời gian hoàn thành:</strong> {formatDateTime(selectedInvoice.date)}</div>
+                <div><strong>Địa chỉ:</strong> {selectedInvoice.address}</div>
+                <hr />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 'bold', marginTop: '10px' }}>
+                  <span>Số tiền:</span>
+                  <span>{selectedInvoice.amount.toLocaleString()} VNĐ</span>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
+              <button className="btn-primary" onClick={() => setShowInvoiceModal(false)}>Đóng</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .wallet-container {

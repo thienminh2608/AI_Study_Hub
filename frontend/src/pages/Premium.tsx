@@ -19,6 +19,7 @@ export const Premium: React.FC = () => {
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [loading, setLoading] = useState(true);
   const [buying, setBuying] = useState(false);
+  const [togglingAutoRenew, setTogglingAutoRenew] = useState(false);
 
   const loadTiers = async () => {
     try {
@@ -28,6 +29,19 @@ export const Premium: React.FC = () => {
       console.error('Failed to load subscription tiers:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleAutoRenew = async () => {
+    setTogglingAutoRenew(true);
+    try {
+      const res = await api.auth.toggleAutoRenew();
+      notify(res.message, 'success');
+      await refreshUser();
+    } catch (err: any) {
+      notify(err.message || 'Thay đổi tự động gia hạn thất bại.', 'error');
+    } finally {
+      setTogglingAutoRenew(false);
     }
   };
 
@@ -187,15 +201,36 @@ export const Premium: React.FC = () => {
             </ul>
 
             {isPremiumActive ? (
-              <div className="active-premium-status">
-                <ShieldCheck size={20} className="shield-icon" />
-                <div>
-                  <p className="status-title">Đang hoạt động</p>
-                  {user?.expiresAt && (
-                    <p className="status-date">
-                      Hạn dùng: {new Date(user.expiresAt).toLocaleDateString()}
-                    </p>
-                  )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%' }}>
+                <div className="active-premium-status">
+                  <ShieldCheck size={20} className="shield-icon" />
+                  <div>
+                    <p className="status-title">Đang hoạt động</p>
+                    {user?.expiresAt && (
+                      <p className="status-date">
+                        Hạn dùng: {new Date(user.expiresAt).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {user?.gracePeriodEndsAt && new Date(user.gracePeriodEndsAt).getTime() > Date.now() && (
+                  <div className="warning-alert" style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '10px', fontSize: '13px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', textAlign: 'left' }}>
+                    <strong>Gói đang trong thời gian gia hạn tạm (Grace Period)</strong>
+                    <span>Vui lòng nạp tiền trước ngày {new Date(user.gracePeriodEndsAt).toLocaleDateString()} để tránh bị hạ cấp gói dịch vụ.</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--card-bg-light)', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Tự động gia hạn mỗi tháng</span>
+                  <label className="switch-control" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={user?.isAutoRenew ?? true}
+                      onChange={handleToggleAutoRenew}
+                      disabled={togglingAutoRenew}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span>{user?.isAutoRenew ? 'Bật' : 'Tắt'}</span>
+                  </label>
                 </div>
               </div>
             ) : (

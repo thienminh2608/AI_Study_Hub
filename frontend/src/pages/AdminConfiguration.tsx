@@ -27,6 +27,12 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
   const [sortKey, setSortKey] = useState('title');
   const [direction, setDirection] = useState<'asc' | 'desc'>('asc');
   const [detail, setDetail] = useState<any | null>(null);
+  
+  // Pagination states
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const pageSize = 8;
+
   const [newReason, setNewReason] = useState({
     reasonCode: '',
     severityLevel: 'MEDIUM',
@@ -56,15 +62,19 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
     setLoading(true);
     setError('');
     try {
-      const data =
-        tab === 'documents'
-          ? await api.admin.getDocuments()
-          : tab === 'report-config'
+      if (tab === 'documents') {
+        const data = await api.admin.getDocuments(page, pageSize, query, status);
+        setItems(data.items);
+        setTotalCount(data.totalCount);
+      } else {
+        const data =
+          tab === 'report-config'
             ? await api.admin.getReportReasons()
             : tab === 'transfer-config'
               ? await api.admin.getTransferConfig()
               : await api.admin.getSubscriptions();
-      setItems(tab === 'transfer-config' ? [data] : data);
+        setItems(tab === 'transfer-config' ? [data] : data);
+      }
     } catch (err: any) {
       setError(err.message || 'Không thể tải dữ liệu.');
     } finally {
@@ -73,16 +83,23 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
   };
 
   useEffect(() => {
+    setPage(1);
     setQuery('');
     setStatus('ALL');
     setDirection('asc');
     setSortKey(tab === 'documents' ? 'title' : tab === 'report-config' ? 'reasonCode' : 'tierName');
-    load();
   }, [tab]);
 
+  useEffect(() => {
+    load();
+  }, [tab, page, query, status]);
+
   const visible = useMemo(
-    () =>
-      items
+    () => {
+      if (tab === 'documents') {
+        return items.map((item, index) => ({ ...item, __index: index }));
+      }
+      return items
         .map((item, index) => ({ ...item, __index: index }))
         .filter((item) => {
           const matchesQuery =
@@ -103,7 +120,8 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
               ? av - bv
               : String(av).localeCompare(String(bv), 'vi');
           return direction === 'asc' ? result : -result;
-        }),
+        });
+    },
     [items, query, status, sortKey, direction, tab],
   );
 
@@ -377,6 +395,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
       </div>
 
       {tab === 'documents' && (
+        <>
         <div className="table-scroll">
           <table className="admin-table document-admin-table">
             <thead>
@@ -436,6 +455,25 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
             </tbody>
           </table>
         </div>
+        <div className="admin-pagination">
+          <small>{totalCount} kết quả</small>
+          <div>
+            <button className="btn-secondary" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+              Trước
+            </button>
+            <span>
+              {page}/{Math.ceil(totalCount / pageSize) || 1}
+            </span>
+            <button
+              className="btn-secondary"
+              disabled={page >= Math.ceil(totalCount / pageSize)}
+              onClick={() => setPage(page + 1)}
+            >
+              Sau
+            </button>
+          </div>
+        </div>
+        </>
       )}
 
       {tab === 'report-config' && (

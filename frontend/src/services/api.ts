@@ -187,6 +187,8 @@ export const api = {
     getMe: () => request<any>('/auth/me', { method: 'GET' }),
     updateUsername: (username: string) =>
       request<any>('/auth/profile/username', { method: 'PUT', body: JSON.stringify({ username }) }),
+    toggleAutoRenew: () =>
+      request<any>('/auth/subscription/toggle-autorenew', { method: 'POST' }),
   },
 
   // Documents
@@ -372,12 +374,25 @@ export const api = {
     buyPremium: () => request<any>('/transaction/buy-premium', { method: 'POST' }),
     getTiers: () => request<any[]>('/transaction/tiers', { method: 'GET' }),
     getTransferConfig: () => request<any>('/transaction/transfer-config', { method: 'GET' }),
+    getInvoice: (transactionId: number) => request<any>(`/transaction/${transactionId}/invoice`, { method: 'GET' }),
   },
 
-  // Admin
   admin: {
-    getDashboard: () => request<any>('/admin/dashboard', { method: 'GET' }),
-    getUsers: () => request<any[]>('/admin/users', { method: 'GET' }),
+    getDashboard: (startDate?: string, endDate?: string) => {
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const query = params.toString();
+      return request<any>(`/admin/dashboard${query ? `?${query}` : ''}`, { method: 'GET' });
+    },
+    getUsers: (page = 1, pageSize = 8, search = '', status = '') => {
+      const params = new URLSearchParams();
+      params.set('pageNumber', String(page));
+      params.set('pageSize', String(pageSize));
+      if (search) params.set('search', search);
+      if (status) params.set('status', status);
+      return request<any>(`/admin/users?${params.toString()}`, { method: 'GET' });
+    },
     createUser: (dto: any, role: string, tierType: string) =>
       request<any>(`/admin/users?role=${role}&tierType=${tierType}`, {
         method: 'POST',
@@ -386,19 +401,43 @@ export const api = {
     updateUser: (userId: number, dto: any) =>
       request<any>(`/admin/users/${userId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     deleteUser: (userId: number) => request<any>(`/admin/users/${userId}`, { method: 'DELETE' }),
-    getTransactions: () => request<any[]>('/admin/transactions', { method: 'GET' }),
-    updateTransaction: (transactionId: number, status: string) =>
+    getTransactions: (page = 1, pageSize = 8, search = '', status = '', type = '') => {
+      const params = new URLSearchParams();
+      params.set('pageNumber', String(page));
+      params.set('pageSize', String(pageSize));
+      if (search) params.set('search', search);
+      if (status) params.set('status', status);
+      if (type) params.set('type', type);
+      return request<any>(`/admin/transactions?${params.toString()}`, { method: 'GET' });
+    },
+    updateTransaction: (transactionId: number, status: string, failureReason?: string) =>
       request<any>(`/admin/transactions/${transactionId}`, {
         method: 'PUT',
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, failureReason }),
       }),
-    getReports: () => request<any[]>('/admin/reports', { method: 'GET' }),
+    refundTransaction: (transactionId: number, reason: string) =>
+      request<any>(`/admin/transactions/${transactionId}/refund`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
+    getReports: (page = 1, pageSize = 8, search = '', status = '') => {
+      const params = new URLSearchParams();
+      params.set('pageNumber', String(page));
+      params.set('pageSize', String(pageSize));
+      if (search) params.set('search', search);
+      if (status) params.set('status', status);
+      return request<any>(`/admin/reports?${params.toString()}`, { method: 'GET' });
+    },
     resolveReport: (reportId: number, action: string) =>
       request<any>(`/admin/reports/${reportId}/resolve?action=${action}`, { method: 'POST' }),
-    getDocuments: (query = '') =>
-      request<any[]>(`/admin/documents${query ? `?query=${encodeURIComponent(query)}` : ''}`, {
-        method: 'GET',
-      }),
+    getDocuments: (page = 1, pageSize = 8, query = '', status = '') => {
+      const params = new URLSearchParams();
+      params.set('pageNumber', String(page));
+      params.set('pageSize', String(pageSize));
+      if (query) params.set('query', query);
+      if (status) params.set('status', status);
+      return request<any>(`/admin/documents?${params.toString()}`, { method: 'GET' });
+    },
     getDocumentDetail: (documentId: number) =>
       request<any>(`/admin/documents/${documentId}/detail`, { method: 'GET' }),
     updateDocumentVisibility: (documentId: number, sharingPermission: string) =>

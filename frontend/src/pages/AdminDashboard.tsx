@@ -115,9 +115,15 @@ export const AdminDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [sortKey, setSortKey] = useState('createdAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  
+  // Pagination
   const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const pageSize = 8;
 
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
@@ -176,17 +182,20 @@ export const AdminDashboard: React.FC = () => {
       )
         return;
       if (adminTab === 'overview') {
-        const data = await api.admin.getDashboard();
+        const data = await api.admin.getDashboard(startDate || undefined, endDate || undefined);
         setStats(data);
       } else if (adminTab === 'users') {
-        const data = await api.admin.getUsers();
-        setUsers(data as UserItem[]);
+        const data = await api.admin.getUsers(page, pageSize, searchText, statusFilter);
+        setUsers(data.items || []);
+        setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'transactions') {
-        const data = await api.admin.getTransactions();
-        setTransactions(data as TransactionItem[]);
+        const data = await api.admin.getTransactions(page, pageSize, searchText, statusFilter, typeFilter);
+        setTransactions(data.items || []);
+        setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'reports') {
-        const data = await api.admin.getReports();
-        setReports(data as ReportItem[]);
+        const data = await api.admin.getReports(page, pageSize, searchText, statusFilter);
+        setReports(data.items || []);
+        setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'audit-log') {
         const res = await api.admin.getAuditLogs(page, pageSize);
         setAuditLogs(res.items || res.data || (Array.isArray(res) ? res : []));
@@ -202,8 +211,9 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     setPage(1);
-    setSearchText(searchParams.get('q') ?? '');
-    setStatusFilter(searchParams.get('status') ?? 'ALL');
+    setSearchText('');
+    setStatusFilter('ALL');
+    setTypeFilter('ALL');
     setSortKey(
       adminTab === 'users' ? 'userId' : adminTab === 'transactions' ? 'transactionId' : 'reportId',
     );
@@ -215,8 +225,18 @@ export const AdminDashboard: React.FC = () => {
     setSelectedReport(null);
     setSelectedReportDocument(null);
     setReportPreviewLoading(false);
-    loadDashboardData();
   }, [adminTab]);
+
+  useEffect(() => {
+    loadDashboardData();
+  }, [adminTab, page, statusFilter, typeFilter, startDate, endDate]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadDashboardData();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchText]);
 
   const goToAdminTab = (tab: string, options?: { query?: string; status?: string }) => {
     const params = new URLSearchParams({ tab });
@@ -251,50 +271,10 @@ export const AdminDashboard: React.FC = () => {
     setReportPreviewLoading(false);
   };
 
-  const filteredUsers = useMemo(
-    () =>
-      users.filter((user) => {
-        const keyword = searchText.trim().toLowerCase();
-        return (
-          (!keyword ||
-            user.username.toLowerCase().includes(keyword) ||
-            user.email.toLowerCase().includes(keyword)) &&
-          (statusFilter === 'ALL' || user.status === statusFilter)
-        );
-      }),
-    [users, searchText, statusFilter],
-  );
-  const filteredTransactions = useMemo(
-    () =>
-      transactions.filter((transaction) => {
-        const keyword = searchText.trim().toLowerCase();
-        return (
-          (!keyword ||
-            transaction.username.toLowerCase().includes(keyword) ||
-            String(transaction.transactionId).includes(keyword)) &&
-          (statusFilter === 'ALL' || transaction.status === statusFilter)
-        );
-      }),
-    [transactions, searchText, statusFilter],
-  );
-  const filteredReports = useMemo(
-    () =>
-      reports.filter((report) => {
-        const keyword = searchText.trim().toLowerCase();
-        const matchesStatus =
-          statusFilter === 'ALL' ||
-          (statusFilter === 'RESOLVED'
-            ? report.status !== 'PENDING'
-            : report.status === statusFilter);
-        return (
-          (!keyword ||
-            report.documentTitle.toLowerCase().includes(keyword) ||
-            report.reporterName.toLowerCase().includes(keyword)) &&
-          matchesStatus
-        );
-      }),
-    [reports, searchText, statusFilter],
-  );
+  const filteredUsers = users;
+  const filteredTransactions = transactions;
+  const filteredReports = reports;
+
   const reportStatistics = useMemo(() => {
     const count = (status: string) => reports.filter((report) => report.status === status).length;
     return [
@@ -306,6 +286,7 @@ export const AdminDashboard: React.FC = () => {
       ['Xác nhận vi phạm', count('VIOLATION_CONFIRMED')],
     ] as const;
   }, [reports]);
+
   const overviewTransactions = useMemo(
     () =>
       [...(stats.recentTransactions ?? [])]
@@ -322,6 +303,7 @@ export const AdminDashboard: React.FC = () => {
         ),
     [stats, searchText, sortDirection],
   );
+
   const overviewReports = useMemo(
     () =>
       [...(stats.recentReports ?? [])]
@@ -338,23 +320,16 @@ export const AdminDashboard: React.FC = () => {
         ),
     [stats, searchText, sortDirection],
   );
+
   const rawRows: any[] =
     adminTab === 'users'
       ? filteredUsers
       : adminTab === 'transactions'
         ? filteredTransactions
         : filteredReports;
-  const activeRows = [...rawRows].sort((left, right) => {
-    const a = left[sortKey] ?? '';
-    const b = right[sortKey] ?? '';
-    const value =
-      typeof a === 'number' && typeof b === 'number'
-        ? a - b
-        : String(a).localeCompare(String(b), 'vi');
-    return sortDirection === 'asc' ? value : -value;
-  });
-  const totalPages = Math.max(1, Math.ceil(activeRows.length / pageSize));
-  const pagedRows = activeRows.slice((page - 1) * pageSize, page * pageSize);
+  const activeRows = [...rawRows];
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const pagedRows = activeRows;
 
   // Edit User Actions
   const handleOpenEditUser = (u: UserItem) => {
@@ -443,22 +418,51 @@ export const AdminDashboard: React.FC = () => {
   // Transaction Approval Actions
   const handleApproveTransaction = async (txId: number, status: 'SUCCESS' | 'CANCELLED') => {
     const actionText = status === 'SUCCESS' ? 'Duyệt thành công' : 'Hủy bỏ';
-    if (
-      !(await confirm({
-        title: 'Xử lý giao dịch',
-        message: `Xác nhận ${actionText} giao dịch này?`,
-        confirmLabel: actionText,
-        danger: status === 'CANCELLED',
-      }))
-    )
-      return;
+    let failureReason: string | undefined = undefined;
+    
+    if (status === 'CANCELLED') {
+      const reason = prompt('Vui lòng nhập lý do từ chối/hủy giao dịch này:');
+      if (reason === null) return;
+      if (!reason.trim()) {
+        notify('Lý do hủy bỏ không được để trống.', 'error');
+        return;
+      }
+      failureReason = reason.trim();
+    } else {
+      if (
+        !(await confirm({
+          title: 'Xử lý giao dịch',
+          message: `Xác nhận ${actionText} giao dịch này?`,
+          confirmLabel: actionText,
+          danger: false,
+        }))
+      )
+        return;
+    }
 
     try {
-      await api.admin.updateTransaction(txId, status);
+      await api.admin.updateTransaction(txId, status, failureReason);
       loadDashboardData();
       notify('Giao dịch đã được cập nhật.', 'success');
     } catch (err: any) {
       notify(err.message || 'Thao tác giao dịch thất bại.', 'error');
+    }
+  };
+
+  const handleRefundTransaction = async (txId: number) => {
+    const reason = prompt('Vui lòng nhập lý do hoàn tiền giao dịch này:');
+    if (reason === null) return;
+    if (!reason.trim()) {
+      notify('Lý do hoàn tiền không được để trống.', 'error');
+      return;
+    }
+
+    try {
+      await api.admin.refundTransaction(txId, reason.trim());
+      loadDashboardData();
+      notify('Đã hoàn tiền giao dịch thành công.', 'success');
+    } catch (err: any) {
+      notify(err.message || 'Hoàn tiền giao dịch thất bại.', 'error');
     }
   };
 
@@ -509,22 +513,52 @@ export const AdminDashboard: React.FC = () => {
           ) : adminTab === 'overview' ? (
             <div className="overview-pane animate-fade-in">
               <h3>Tổng quan hệ thống</h3>
-              <div className="admin-toolbar overview-toolbar">
-                <input
-                  className="input-control"
-                  placeholder="Lọc hoạt động gần đây..."
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                />
-                <select
-                  className="input-control"
-                  aria-label="Sắp xếp hoạt động"
-                  value={sortDirection}
-                  onChange={(e) => setSortDirection(e.target.value as 'asc' | 'desc')}
-                >
-                  <option value="desc">Mới nhất</option>
-                  <option value="asc">Cũ nhất</option>
-                </select>
+              <div className="admin-toolbar overview-toolbar" style={{ flexWrap: 'wrap', gap: '16px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <label style={{ fontSize: '14px' }}>Từ:</label>
+                  <input
+                    type="date"
+                    className="input-control"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                  />
+                  <label style={{ fontSize: '14px' }}>Đến:</label>
+                  <input
+                    type="date"
+                    className="input-control"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                  />
+                  {(startDate || endDate) && (
+                    <button
+                      className="btn-secondary"
+                      onClick={() => {
+                        setStartDate('');
+                        setEndDate('');
+                      }}
+                      style={{ padding: '4px 8px', fontSize: '12px' }}
+                    >
+                      Xóa lọc ngày
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flex: 1, justifyContent: 'flex-end', minWidth: '200px' }}>
+                  <input
+                    className="input-control"
+                    placeholder="Lọc hoạt động..."
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                  />
+                  <select
+                    className="input-control"
+                    aria-label="Sắp xếp hoạt động"
+                    value={sortDirection}
+                    onChange={(e) => setSortDirection(e.target.value as 'asc' | 'desc')}
+                  >
+                    <option value="desc">Mới nhất</option>
+                    <option value="asc">Cũ nhất</option>
+                  </select>
+                </div>
               </div>
 
               <div className="stats-grid">
@@ -582,18 +616,28 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 </button>
               </div>
-              <button
-                type="button"
-                className="dashboard-finance dashboard-finance-link glass-card"
-                onClick={() => goToAdminTab('transactions', { status: 'SUCCESS' })}
-              >
-                <span>Tổng tiền nạp đã duyệt</span>
-                <strong>{Number(stats.successfulDeposits ?? 0).toLocaleString('vi-VN')}đ</strong>
-                <small>
-                  {stats.suspendedUsers ?? 0} tài khoản bị khóa · {stats.privateDocuments ?? 0} tài
-                  liệu riêng tư
-                </small>
-              </button>
+              <div style={{ display: 'flex', gap: '16px', margin: '16px 0', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="dashboard-finance dashboard-finance-link glass-card"
+                  style={{ flex: 1, minWidth: '250px' }}
+                  onClick={() => goToAdminTab('transactions', { status: 'SUCCESS' })}
+                >
+                  <span>Tổng doanh thu nạp ví (Income)</span>
+                  <strong>{Number(stats.successfulDeposits ?? 0).toLocaleString('vi-VN')}đ</strong>
+                  <small>Giao dịch nạp tiền thành công</small>
+                </button>
+                <button
+                  type="button"
+                  className="dashboard-finance dashboard-finance-link glass-card"
+                  style={{ flex: 1, minWidth: '250px', borderLeft: '4px solid #ef4444' }}
+                  onClick={() => goToAdminTab('transactions', { status: 'SUCCESS' })}
+                >
+                  <span>Tổng tiền chi tiêu ví (Outcome)</span>
+                  <strong style={{ color: '#ef4444' }}>{Number(Math.abs(stats.successfulWithdrawals ?? 0)).toLocaleString('vi-VN')}đ</strong>
+                  <small>Giao dịch chi tiêu/mua gói Premium</small>
+                </button>
+              </div>
               <div className="dashboard-activity-grid">
                 <section className="activity-panel glass-card">
                   <h4>Giao dịch gần đây</h4>
@@ -727,7 +771,7 @@ export const AdminDashboard: React.FC = () => {
                 page={page}
                 totalPages={totalPages}
                 setPage={setPage}
-                total={filteredUsers.length}
+                total={totalCount}
               />
             </div>
           ) : adminTab === 'transactions' ? (
@@ -736,7 +780,7 @@ export const AdminDashboard: React.FC = () => {
               <div className="admin-toolbar">
                 <input
                   className="input-control"
-                  placeholder="Tìm người dùng hoặc mã giao dịch..."
+                  placeholder="Tìm người dùng..."
                   value={searchText}
                   onChange={(event) => {
                     setSearchText(event.target.value);
@@ -755,6 +799,20 @@ export const AdminDashboard: React.FC = () => {
                   <option value="PENDING">Chờ duyệt</option>
                   <option value="SUCCESS">Thành công</option>
                   <option value="CANCELLED">Đã hủy</option>
+                  <option value="REFUNDED">Đã hoàn tiền</option>
+                </select>
+                <select
+                  className="input-control"
+                  value={typeFilter}
+                  onChange={(event) => {
+                    setTypeFilter(event.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="ALL">Tất cả loại giao dịch</option>
+                  <option value="DEPOSIT">Nạp tiền (Deposit)</option>
+                  <option value="WITHDRAW">Mất phí/Mua gói (Withdraw)</option>
+                  <option value="REFUND">Hoàn tiền (Refund)</option>
                 </select>
               </div>
               <div className="table-scroll">
@@ -763,7 +821,11 @@ export const AdminDashboard: React.FC = () => {
                     <tr>
                       <th>{sortHeader('transactionId', 'ID')}</th>
                       <th>{sortHeader('username', 'Sinh viên')}</th>
+                      <th>Loại</th>
                       <th>{sortHeader('amount', 'Số tiền')}</th>
+                      <th>Mã đối soát</th>
+                      <th>Ngân hàng</th>
+                      <th>Người duyệt</th>
                       <th>{sortHeader('status', 'Trạng thái')}</th>
                       <th>{sortHeader('startedAt', 'Thời gian tạo')}</th>
                       <th>Thao tác</th>
@@ -776,12 +838,27 @@ export const AdminDashboard: React.FC = () => {
                         <tr key={tx.transactionId}>
                           <td className="monospace-text">#{tx.transactionId}</td>
                           <td className="bold-text">{tx.username}</td>
+                          <td>
+                            <span className={`role-badge ${tx.type}`}>
+                              {tx.type === 'DEPOSIT' ? 'Nạp tiền' : tx.type === 'WITHDRAW' ? 'Mua Premium' : 'Hoàn tiền'}
+                            </span>
+                          </td>
                           <td className={`tx-value ${tx.amount > 0 ? 'positive' : 'negative'}`}>
                             {tx.amount > 0 ? '+' : ''}
                             {tx.amount.toLocaleString()}đ
                           </td>
+                          <td>{tx.referenceCode || <span className="text-muted">—</span>}</td>
+                          <td>{tx.bankId || <span className="text-muted">—</span>}</td>
+                          <td>{tx.approverName || <span className="text-muted">—</span>}</td>
                           <td>
-                            <span className={`tx-status-badge ${tx.status}`}>{tx.status}</span>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <span className={`tx-status-badge ${tx.status}`}>{tx.status}</span>
+                              {tx.failureReason && (
+                                <small style={{ color: '#ef4444', fontSize: '11px', marginTop: '2px' }}>
+                                  Lý do: {tx.failureReason}
+                                </small>
+                              )}
+                            </div>
                           </td>
                           <td>{formatDateTime(tx.startedAt)}</td>
                           <td>
@@ -807,7 +884,20 @@ export const AdminDashboard: React.FC = () => {
                                 </button>
                               </div>
                             ) : (
-                              <span className="text-muted">Đã xử lý</span>
+                              <div className="table-actions">
+                                {tx.status === 'SUCCESS' && tx.type !== 'REFUND' && (
+                                  <button
+                                    onClick={() => handleRefundTransaction(tx.transactionId)}
+                                    className="action-btn reject"
+                                    title="Hoàn tiền giao dịch"
+                                    style={{ padding: '4px 8px', fontSize: '11px', height: 'auto', width: 'auto' }}
+                                  >
+                                    Hoàn tiền
+                                  </button>
+                                )}
+                                {tx.status !== 'SUCCESS' && <span className="text-muted">Đã xử lý</span>}
+                                {tx.status === 'SUCCESS' && tx.type === 'REFUND' && <span className="text-muted">Đã hoàn tiền</span>}
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -820,7 +910,7 @@ export const AdminDashboard: React.FC = () => {
                 page={page}
                 totalPages={totalPages}
                 setPage={setPage}
-                total={filteredTransactions.length}
+                total={totalCount}
               />
             </div>
           ) : (
@@ -957,7 +1047,7 @@ export const AdminDashboard: React.FC = () => {
                 page={page}
                 totalPages={totalPages}
                 setPage={setPage}
-                total={filteredReports.length}
+                total={totalCount}
               />
             </div>
           )}
