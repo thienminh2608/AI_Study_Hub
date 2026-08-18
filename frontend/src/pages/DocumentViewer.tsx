@@ -695,6 +695,9 @@ export const DocumentViewer: React.FC = () => {
           display: flex;
           justify-content: space-between;
           align-items: center;
+          flex-wrap: wrap;
+          gap: 0.75rem;
+          margin-top: 3rem;
           margin-bottom: 1.5rem;
         }
 
