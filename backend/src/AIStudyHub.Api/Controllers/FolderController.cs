@@ -112,9 +112,23 @@ public class FolderController : ControllerBase
                 message = "Không thể tạo thư mục."
             });
         }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new
+            {
+                message = ex.Message
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new
             {
                 message = ex.Message
             });

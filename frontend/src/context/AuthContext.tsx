@@ -37,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Failed to restore auth session:', err);
       localStorage.removeItem('token');
       localStorage.removeItem('refreshToken');
+      localStorage.removeItem('moderator_split_percent');
       sessionStorage.removeItem('token');
       setUser(null);
     } finally {
@@ -80,6 +81,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('refreshToken');
+    localStorage.removeItem('moderator_split_percent');
     sessionStorage.removeItem('token');
     setUser(null);
     window.location.href = '/login';

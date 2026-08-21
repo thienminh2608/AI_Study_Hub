@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useUiFeedback } from '../context/UiFeedbackContext';
 import { api } from '../services/api';
 import { User, Mail, Shield, Coins, Calendar, Loader, Key, Pencil, Save, X } from 'lucide-react';
 
 export const Profile: React.FC = () => {
   const { user, refreshUser } = useAuth();
+  const { notify } = useUiFeedback();
   const normalizedRole = user?.role?.trim().toUpperCase();
   const isStaff = normalizedRole === 'ADMIN' || normalizedRole === 'MODERATOR';
   const [editingUsername, setEditingUsername] = useState(false);
@@ -17,10 +19,10 @@ export const Profile: React.FC = () => {
     setTogglingAutoRenew(true);
     try {
       const res = await api.auth.toggleAutoRenew();
-      alert(res.message);
+      notify(res.message, 'success');
       await refreshUser();
     } catch (err: any) {
-      alert(err.message || 'Thay đổi tự động gia hạn thất bại.');
+      notify(err.message || 'Thay đổi tự động gia hạn thất bại.', 'error');
     } finally {
       setTogglingAutoRenew(false);
     }
@@ -28,6 +30,8 @@ export const Profile: React.FC = () => {
 
   // States for Password Change
   const [step, setStep] = useState<0 | 1 | 2>(0); // 0: Idle, 1: Sent OTP, 2: Reset
+  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [resetGrantToken, setResetGrantToken] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -42,8 +46,11 @@ export const Profile: React.FC = () => {
     setLoading(true);
 
     try {
-      await api.auth.forgotPassword(user.email);
-      setSuccess('Mã OTP xác minh đã được gửi đến email của bạn.');
+      const res = await api.auth.forgotPassword(user.email);
+      if (res?.challengeId) {
+        setChallengeId(res.challengeId);
+      }
+      setSuccess(res?.message || 'Mã OTP xác minh đã được gửi đến email của bạn.');
       setStep(1);
     } catch (err: any) {
       setError(err.message || 'Không thể gửi mã xác minh.');
@@ -81,7 +88,11 @@ export const Profile: React.FC = () => {
     setLoading(true);
 
     try {
-      await api.auth.verifyOtp({ email: user.email, otp });
+      const res = await api.auth.verifyOtp({ email: user.email, otp, challengeId });
+      if (!res?.resetGrantToken) {
+        throw new Error(res?.message || 'Mã OTP không chính xác hoặc đã hết hạn.');
+      }
+      setResetGrantToken(res.resetGrantToken);
       setSuccess('Xác minh OTP thành công. Điền mật khẩu mới của bạn.');
       setStep(2);
     } catch (err: any) {
@@ -93,7 +104,7 @@ export const Profile: React.FC = () => {
 
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !newPassword || !confirmPassword) return;
+    if (!user || !newPassword || !confirmPassword || !resetGrantToken) return;
     setError('');
     setSuccess('');
 
@@ -104,12 +115,14 @@ export const Profile: React.FC = () => {
 
     setLoading(true);
     try {
-      await api.auth.resetPassword({ email: user.email, otp, newPassword });
+      await api.auth.resetPassword({ email: user.email, resetGrantToken, newPassword });
       setSuccess('Cập nhật mật khẩu thành công!');
       setStep(0);
       setOtp('');
       setNewPassword('');
       setConfirmPassword('');
+      setResetGrantToken(null);
+      setChallengeId(null);
     } catch (err: any) {
       setError(err.message || 'Cập nhật mật khẩu thất bại.');
     } finally {

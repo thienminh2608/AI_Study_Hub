@@ -15,6 +15,11 @@ public partial class DocumentExtractedText
         get; set;
     }
 
+    public int? DocumentVersionId
+    {
+        get; set;
+    }
+
     public string ExtractedText { get; set; } = null!;
 
     public int TotalPages { get; set; }
@@ -30,4 +35,5 @@ public partial class DocumentExtractedText
     }
 
     public virtual Document Document { get; set; } = null!;
+    public virtual DocumentVersion? DocumentVersion { get; set; }
 }

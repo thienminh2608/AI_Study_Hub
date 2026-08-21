@@ -1,7 +1,25 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { api } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
-import { X, Lock, Link as LinkIcon, Globe, Copy, RefreshCw, Slash, UserPlus, Trash2, Shield, Loader } from 'lucide-react';
+import {
+  X,
+  Lock,
+  Link as LinkIcon,
+  Globe,
+  Copy,
+  RefreshCw,
+  UserPlus,
+  Trash2,
+  Shield,
+  Loader,
+  CheckCircle2,
+  Clock,
+  AlertCircle,
+  Send,
+  RotateCcw,
+  Slash,
+  Users,
+} from 'lucide-react';
 
 interface ManageAccessModalProps {
   itemType: 'document' | 'folder';
@@ -18,13 +36,15 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
 }) => {
   const { notify } = useUiFeedback();
   const [access, setAccess] = useState<any>(null);
+  const [friends, setFriends] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [updatingAccess, setUpdatingAccess] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [roleInput, setRoleInput] = useState<'VIEWER' | 'EDITOR'>('VIEWER');
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchAccessSettings = async () => {
+  const fetchAccessSettings = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -35,23 +55,40 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [itemType, itemId]);
+
+  const loadFriends = useCallback(async () => {
+    try {
+      const list = await api.friendship.getFriends();
+      setFriends(list || []);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
       fetchAccessSettings();
+      loadFriends();
     }
-  }, [isOpen, itemType, itemId]);
+  }, [isOpen, fetchAccessSettings, loadFriends]);
 
   if (!isOpen) return null;
 
   const handleUpdateGeneralAccess = async (newGeneralAccess: string) => {
+    setUpdatingAccess(true);
     try {
       await api.access.updateGeneralAccess(itemType, itemId, newGeneralAccess);
-      notify('Đã cập nhật quyền truy cập chung.', 'success');
+      if (newGeneralAccess === 'PUBLIC') {
+        notify('Đã gửi yêu cầu xét duyệt công khai lên Moderator.', 'success');
+      } else {
+        notify('Đã cập nhật quyền truy cập.', 'success');
+      }
       await fetchAccessSettings();
     } catch (err: any) {
       notify(err.message || 'Không thể cập nhật quyền truy cập.', 'error');
+    } finally {
+      setUpdatingAccess(false);
     }
   };
 
@@ -65,6 +102,17 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
       await fetchAccessSettings();
     } catch (err: any) {
       notify(err.message || 'Không thể thêm quyền người dùng.', 'error');
+    }
+  };
+
+  const handleShareWithFriend = async (friend: any, role: 'VIEWER' | 'EDITOR') => {
+    try {
+      const emailOrUsername = friend.email || friend.username;
+      await api.access.addUserShare(itemType, itemId, emailOrUsername, role);
+      notify(`Đã chia sẻ quyền ${role === 'EDITOR' ? 'Chỉnh sửa' : 'Xem'} cho ${friend.username}`, 'success');
+      await fetchAccessSettings();
+    } catch (err: any) {
+      notify(err.message || 'Không thể chia sẻ cho bạn bè.', 'error');
     }
   };
 
@@ -142,8 +190,8 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
                 <div className="input-group">
                   <UserPlus size={16} className="input-icon" />
                   <input
-                    type="email"
-                    placeholder="Nhập email người nhận..."
+                    type="text"
+                    placeholder="Nhập email hoặc username người nhận..."
                     value={emailInput}
                     onChange={(e) => setEmailInput(e.target.value)}
                     className="access-input"
@@ -162,6 +210,66 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
                 </button>
               </form>
             </div>
+
+            {/* Quick Share for Friends */}
+            {friends && friends.length > 0 && (
+              <div className="access-section friends-quick-section">
+                <div className="friends-header-row">
+                  <div className="friends-label-box">
+                    <Users size={14} className="friends-header-icon" />
+                    <label className="section-label">Chia sẻ nhanh cho bạn bè</label>
+                  </div>
+                  <span className="friends-count-pill">{friends.length} bạn bè</span>
+                </div>
+                <div className="friends-chips-list custom-scroll">
+                  {friends.map((friend) => {
+                    const existingShare = access.shares?.find((s: any) => s.userId === friend.userId);
+                    return (
+                      <div key={friend.userId} className={`friend-chip ${existingShare ? 'shared' : ''}`}>
+                        <div className="friend-chip-avatar">
+                          {friend.username.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="friend-chip-name" title={friend.username}>
+                          {friend.username}
+                        </div>
+                        {existingShare ? (
+                          <div className="friend-shared-status">
+                            <span className="friend-role-badge">{existingShare.role}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveShare(friend.userId)}
+                              className="friend-remove-btn"
+                              title="Gỡ quyền"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="friend-action-btns">
+                            <button
+                              type="button"
+                              onClick={() => handleShareWithFriend(friend, 'VIEWER')}
+                              className="friend-btn view"
+                              title="Cấp quyền Xem"
+                            >
+                              + Xem
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleShareWithFriend(friend, 'EDITOR')}
+                              className="friend-btn edit"
+                              title="Cấp quyền Chỉnh sửa"
+                            >
+                              + Sửa
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* User shares list */}
             <div className="access-section">
@@ -203,40 +311,124 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
                   {
                     value: 'RESTRICTED',
                     label: 'Bị hạn chế (Restricted)',
-                    desc: 'Chỉ những người được thêm đích danh mới có thể mở',
+                    desc: 'Chỉ những người được thêm đích danh trong danh sách mới có thể mở.',
                     Icon: Lock,
                   },
                   {
                     value: 'LINK',
                     label: 'Bất kỳ ai có liên kết (Anyone with link)',
-                    desc: 'Bất kỳ ai có link chia sẻ đều có thể xem',
+                    desc: 'Bất kỳ ai có liên kết chia sẻ đều có thể xem ngay (Không cần duyệt).',
                     Icon: LinkIcon,
                   },
-                  {
-                    value: 'PUBLIC',
-                    label: 'Công khai (Public catalog)',
-                    desc: 'Hiển thị công khai trên thư viện tài liệu cộng đồng',
-                    Icon: Globe,
-                  },
-                ].map(({ value, label, desc, Icon }) => {
+                  ...(itemType === 'document'
+                    ? [
+                        {
+                          value: 'PUBLIC',
+                          label: 'Công khai Thư viện cộng đồng (Public catalog)',
+                          desc: 'Hiển thị trên Thư viện tài liệu cộng đồng để tất cả sinh viên tra cứu và học tập.',
+                          Icon: Globe,
+                          requiresReview: true,
+                        },
+                      ]
+                    : []),
+                ].map(({ value, label, desc, Icon, requiresReview }) => {
                   const isChecked = (access.generalAccess || 'RESTRICTED') === value;
+                  const isModerationPending = access.moderationStatus === 'PENDING_REVIEW';
+                  const isApproved = access.moderationStatus === 'APPROVED';
+                  const isRejected = access.moderationStatus === 'REJECTED';
+
                   return (
                     <div
                       key={value}
-                      className={`radio-card ${isChecked ? 'active' : ''}`}
-                      onClick={() => handleUpdateGeneralAccess(value)}
+                      className={`radio-card ${isChecked ? 'active' : ''} ${value === 'PUBLIC' ? 'public-option-card' : ''}`}
+                      onClick={() => !updatingAccess && handleUpdateGeneralAccess(value)}
                     >
                       <input
                         type="radio"
                         name="generalAccess"
                         value={value}
                         checked={isChecked}
+                        disabled={updatingAccess}
                         onChange={() => {}}
                       />
                       <Icon size={18} className="radio-icon" />
                       <div className="radio-info">
-                        <span className="radio-title">{label}</span>
+                        <div className="radio-title-row">
+                          <span className="radio-title">{label}</span>
+                          {requiresReview && isApproved && isChecked && (
+                            <span className="moderation-badge approved">
+                              <CheckCircle2 size={12} /> Đã phê duyệt
+                            </span>
+                          )}
+                          {requiresReview && isModerationPending && (
+                            <span className="moderation-badge pending">
+                              <Clock size={12} /> Chờ duyệt
+                            </span>
+                          )}
+                          {requiresReview && isRejected && (
+                            <span className="moderation-badge rejected">
+                              <AlertCircle size={12} /> Bị từ chối
+                            </span>
+                          )}
+                        </div>
                         <span className="radio-desc">{desc}</span>
+
+                        {/* Moderation Status Banner when Public is selected */}
+                        {value === 'PUBLIC' && isChecked && (
+                          <div className="moderation-callout" onClick={(e) => e.stopPropagation()}>
+                            {isApproved ? (
+                              <div className="mod-status-box approved">
+                                <CheckCircle2 size={15} className="mod-status-icon" />
+                                <div className="mod-status-text">
+                                  <strong>Tài liệu đã được Moderator phê duyệt công khai.</strong>
+                                  <p>Hiện đang xuất hiện trên Thư viện cộng đồng cho toàn bộ người dùng.</p>
+                                </div>
+                              </div>
+                            ) : isModerationPending ? (
+                              <div className="mod-status-box pending">
+                                <Clock size={15} className="mod-status-icon" />
+                                <div className="mod-status-text">
+                                  <strong>Đang chờ Moderator xét duyệt nội dung.</strong>
+                                  <p>
+                                    Tài liệu tạm thời được bảo mật riêng tư cho đến khi được duyệt. Bạn vẫn có thể chia sẻ trực tiếp qua liên kết.
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateGeneralAccess('RESTRICTED')}
+                                    className="mod-action-btn cancel"
+                                    disabled={updatingAccess}
+                                  >
+                                    <RotateCcw size={12} /> Hủy yêu cầu duyệt
+                                  </button>
+                                </div>
+                              </div>
+                            ) : isRejected ? (
+                              <div className="mod-status-box rejected">
+                                <AlertCircle size={15} className="mod-status-icon" />
+                                <div className="mod-status-text">
+                                  <strong>Yêu cầu công khai bị từ chối.</strong>
+                                  <p>Lý do: {access.moderationNote || 'Nội dung chưa phù hợp tiêu chuẩn cộng đồng.'}</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateGeneralAccess('PUBLIC')}
+                                    className="mod-action-btn re-request"
+                                    disabled={updatingAccess}
+                                  >
+                                    <Send size={12} /> Gửi duyệt lại
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mod-status-box not-requested">
+                                <AlertCircle size={15} className="mod-status-icon" />
+                                <div className="mod-status-text">
+                                  <strong>Yêu cầu cần qua kiểm duyệt.</strong>
+                                  <p>Khi chọn chế độ này, yêu cầu xét duyệt sẽ được gửi tới Ban kiểm duyệt trước khi hiển thị công khai.</p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -479,6 +671,144 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
           opacity: 0.9;
         }
 
+        .friends-quick-section {
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          border-radius: var(--radius-md);
+          padding: 0.65rem 0.85rem;
+        }
+
+        .friends-header-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.45rem;
+        }
+
+        .friends-label-box {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+        }
+
+        .friends-header-icon {
+          color: var(--accent-purple);
+        }
+
+        .friends-count-pill {
+          font-size: 0.7rem;
+          color: var(--text-muted);
+          background: rgba(255, 255, 255, 0.06);
+          padding: 0.1rem 0.45rem;
+          border-radius: 999px;
+        }
+
+        .friends-chips-list {
+          display: flex;
+          gap: 0.45rem;
+          overflow-x: auto;
+          padding-bottom: 0.3rem;
+        }
+
+        .friend-chip {
+          display: flex;
+          align-items: center;
+          gap: 0.45rem;
+          padding: 0.3rem 0.55rem;
+          border-radius: 20px;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          flex-shrink: 0;
+          transition: var(--transition-fast);
+        }
+
+        .friend-chip.shared {
+          background: rgba(157, 78, 221, 0.12);
+          border-color: rgba(157, 78, 221, 0.3);
+        }
+
+        .friend-chip-avatar {
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, var(--accent-purple), #7928ca);
+          color: #fff;
+          font-size: 0.65rem;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .friend-chip-name {
+          font-size: 0.78rem;
+          font-weight: 600;
+          color: var(--text-primary);
+          max-width: 90px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .friend-action-btns {
+          display: flex;
+          gap: 0.25rem;
+        }
+
+        .friend-btn {
+          padding: 0.15rem 0.4rem;
+          border-radius: 12px;
+          font-size: 0.68rem;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          transition: var(--transition-fast);
+        }
+        .friend-btn.view {
+          background: rgba(255, 255, 255, 0.1);
+          color: #cbd5e1;
+        }
+        .friend-btn.view:hover {
+          background: rgba(255, 255, 255, 0.2);
+          color: #fff;
+        }
+        .friend-btn.edit {
+          background: rgba(157, 78, 221, 0.25);
+          color: #d8b4fe;
+        }
+        .friend-btn.edit:hover {
+          background: var(--accent-purple);
+          color: #fff;
+        }
+
+        .friend-shared-status {
+          display: flex;
+          align-items: center;
+          gap: 0.25rem;
+        }
+
+        .friend-role-badge {
+          font-size: 0.65rem;
+          font-weight: 700;
+          padding: 0.1rem 0.35rem;
+          border-radius: 10px;
+          background: rgba(16, 185, 129, 0.2);
+          color: #34d399;
+        }
+
+        .friend-remove-btn {
+          background: transparent;
+          border: none;
+          color: #f87171;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          padding: 0.1rem;
+        }
+        .friend-remove-btn:hover {
+          color: #ef4444;
+        }
+
         .shares-list {
           max-height: 140px;
           overflow-y: auto;
@@ -582,12 +912,145 @@ export const ManageAccessModal: React.FC<ManageAccessModalProps> = ({
         .radio-info {
           display: flex;
           flex-direction: column;
+          flex: 1;
+        }
+
+        .radio-title-row {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          flex-wrap: wrap;
         }
 
         .radio-title {
           font-size: 0.85rem;
           font-weight: 600;
           color: var(--text-primary);
+        }
+
+        .moderation-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.25rem;
+          font-size: 0.7rem;
+          font-weight: 700;
+          padding: 0.12rem 0.45rem;
+          border-radius: 4px;
+        }
+        .moderation-badge.approved {
+          background: rgba(16, 185, 129, 0.2);
+          color: #34d399;
+          border: 1px solid rgba(16, 185, 129, 0.35);
+        }
+        .moderation-badge.pending {
+          background: rgba(245, 158, 11, 0.2);
+          color: #fbbf24;
+          border: 1px solid rgba(245, 158, 11, 0.35);
+        }
+        .moderation-badge.rejected {
+          background: rgba(239, 68, 68, 0.2);
+          color: #f87171;
+          border: 1px solid rgba(239, 68, 68, 0.35);
+        }
+
+        .moderation-callout {
+          margin-top: 0.55rem;
+          width: 100%;
+        }
+
+        .mod-status-box {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.55rem;
+          padding: 0.6rem 0.75rem;
+          border-radius: 6px;
+          font-size: 0.78rem;
+          line-height: 1.35;
+        }
+
+        .mod-status-box.approved {
+          background: rgba(16, 185, 129, 0.08);
+          border: 1px solid rgba(16, 185, 129, 0.25);
+          color: #a7f3d0;
+        }
+        .mod-status-box.approved .mod-status-icon {
+          color: #34d399;
+          flex-shrink: 0;
+          margin-top: 0.1rem;
+        }
+
+        .mod-status-box.pending {
+          background: rgba(245, 158, 11, 0.08);
+          border: 1px solid rgba(245, 158, 11, 0.25);
+          color: #fde68a;
+        }
+        .mod-status-box.pending .mod-status-icon {
+          color: #fbbf24;
+          flex-shrink: 0;
+          margin-top: 0.1rem;
+        }
+
+        .mod-status-box.rejected {
+          background: rgba(239, 68, 68, 0.08);
+          border: 1px solid rgba(239, 68, 68, 0.25);
+          color: #fca5a5;
+        }
+        .mod-status-box.rejected .mod-status-icon {
+          color: #f87171;
+          flex-shrink: 0;
+          margin-top: 0.1rem;
+        }
+
+        .mod-status-box.not-requested {
+          background: rgba(99, 102, 241, 0.08);
+          border: 1px solid rgba(99, 102, 241, 0.25);
+          color: #c7d2fe;
+        }
+        .mod-status-box.not-requested .mod-status-icon {
+          color: #818cf8;
+          flex-shrink: 0;
+          margin-top: 0.1rem;
+        }
+
+        .mod-status-text {
+          flex: 1;
+        }
+        .mod-status-text strong {
+          display: block;
+          font-size: 0.8rem;
+          margin-bottom: 0.15rem;
+        }
+        .mod-status-text p {
+          margin: 0 0 0.35rem 0;
+          opacity: 0.9;
+        }
+
+        .mod-action-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          padding: 0.3rem 0.6rem;
+          border-radius: 5px;
+          font-size: 0.72rem;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          transition: var(--transition-fast);
+          margin-top: 0.25rem;
+        }
+        .mod-action-btn.cancel {
+          background: rgba(255, 255, 255, 0.1);
+          color: #e2e8f0;
+        }
+        .mod-action-btn.cancel:hover {
+          background: rgba(255, 255, 255, 0.2);
+        }
+        .mod-action-btn.re-request {
+          background: var(--accent-purple);
+          color: #fff;
+        }
+        .mod-action-btn.re-request:hover {
+          opacity: 0.9;
         }
 
         .radio-desc {

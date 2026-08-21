@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { NavLink, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { FileTypeIcon } from '../components/FileTypeIcon';
 import { AdminConfiguration } from './AdminConfiguration';
 import { useUiFeedback } from '../context/UiFeedbackContext';
 import { formatDateTime } from '../utils/dateTime';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import {
   Users,
   FileText,
@@ -18,6 +19,9 @@ import {
   Plus,
   Lock,
   Unlock,
+  Bot,
+  Cpu,
+  Zap,
 } from 'lucide-react';
 
 interface UserItem {
@@ -99,7 +103,8 @@ export const AdminDashboard: React.FC = () => {
     requestedTab === 'report-config' ||
     requestedTab === 'system-config' ||
     requestedTab === 'transfer-config' ||
-    requestedTab === 'audit-log'
+    requestedTab === 'audit-log' ||
+    requestedTab === 'ai-observability'
       ? requestedTab
       : 'overview';
 
@@ -118,8 +123,18 @@ export const AdminDashboard: React.FC = () => {
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [auditTotalPages, setAuditTotalPages] = useState(1);
   const [auditTotalCount, setAuditTotalCount] = useState(0);
+  const [aiSummary, setAiSummary] = useState<any>(null);
+  const [aiUsages, setAiUsages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Date states for Overview (Thuần Việt)
+  const now = new Date();
+  const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
+  const dashboardMonth = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
+  
   const [searchText, setSearchText] = useState('');
+  const debouncedSearchText = useDebouncedValue(searchText, 1000);
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [startDate, setStartDate] = useState('');
@@ -177,8 +192,7 @@ export const AdminDashboard: React.FC = () => {
     </button>
   );
 
-  const loadDashboardData = async () => {
-    setLoading(true);
+  const loadDashboardData = useCallback(async () => {
     try {
       if (
         adminTab === 'documents' ||
@@ -188,18 +202,34 @@ export const AdminDashboard: React.FC = () => {
       )
         return;
       if (adminTab === 'overview') {
-        const data = await api.admin.getDashboard(startDate || undefined, endDate || undefined);
+        let mStart: string | undefined = undefined;
+        let mEnd: string | undefined = undefined;
+        if (dashboardMonth) {
+          const [y, m] = dashboardMonth.split('-').map(Number);
+          mStart = `${dashboardMonth}-01`;
+          const lastDay = new Date(y, m, 0).getDate();
+          mEnd = `${dashboardMonth}-${String(lastDay).padStart(2, '0')}`;
+        }
+        const data = await api.admin.getDashboard(mStart, mEnd);
         setStats(data);
       } else if (adminTab === 'users') {
-        const data = await api.admin.getUsers(page, pageSize, searchText, statusFilter);
+        const data = await api.admin.getUsers(page, pageSize, debouncedSearchText, statusFilter);
         setUsers(data.items || []);
         setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'transactions') {
-        const data = await api.admin.getTransactions(page, pageSize, searchText, statusFilter, typeFilter);
+        const data = await api.admin.getTransactions(
+          page,
+          pageSize,
+          debouncedSearchText,
+          statusFilter,
+          typeFilter,
+          startDate,
+          endDate
+        );
         setTransactions(data.items || []);
         setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'reports') {
-        const data = await api.admin.getReports(page, pageSize, searchText, statusFilter);
+        const data = await api.admin.getReports(page, pageSize, debouncedSearchText, statusFilter);
         setReports(data.items || []);
         setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'audit-log') {
@@ -207,19 +237,30 @@ export const AdminDashboard: React.FC = () => {
         setAuditLogs(res.items || res.data || (Array.isArray(res) ? res : []));
         setAuditTotalPages(res.totalPages || 1);
         setAuditTotalCount(res.totalCount || (Array.isArray(res) ? res.length : 0));
+      } else if (adminTab === 'ai-observability') {
+        const [summary, usages] = await Promise.all([
+          api.admin.getAiObservabilitySummary(),
+          api.admin.getAiObservabilityUsages(page, pageSize),
+        ]);
+        setAiSummary(summary);
+        setAiUsages(usages.items || usages.data || []);
+        setTotalCount(usages.totalCount || 0);
       }
     } catch (err: any) {
       console.error('Error loading admin page data:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [adminTab, dashboardMonth, page, pageSize, debouncedSearchText, statusFilter, typeFilter, startDate, endDate]);
 
   useEffect(() => {
+    setLoading(true);
     setPage(1);
     setSearchText('');
     setStatusFilter('ALL');
     setTypeFilter('ALL');
+    setStartDate('');
+    setEndDate('');
     setSortKey(
       adminTab === 'users' ? 'userId' : adminTab === 'transactions' ? 'transactionId' : 'reportId',
     );
@@ -235,14 +276,7 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     loadDashboardData();
-  }, [adminTab, page, statusFilter, typeFilter, startDate, endDate]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadDashboardData();
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [searchText]);
+  }, [loadDashboardData]);
 
   const goToAdminTab = (tab: string, options?: { query?: string; status?: string }) => {
     const params = new URLSearchParams({ tab });
@@ -333,7 +367,51 @@ export const AdminDashboard: React.FC = () => {
       : adminTab === 'transactions'
         ? filteredTransactions
         : filteredReports;
-  const activeRows = [...rawRows];
+  const activeRows = useMemo(() => {
+    const list = [...rawRows];
+    if (!sortKey) return list;
+    return list.sort((a, b) => {
+      let av = a[sortKey] ?? '';
+      let bv = b[sortKey] ?? '';
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return sortDirection === 'asc' ? av - bv : bv - av;
+      }
+      const keyLower = sortKey.toLowerCase();
+      if (keyLower.includes('at') || keyLower.includes('date') || keyLower.includes('time')) {
+        const at = new Date(av || 0).getTime();
+        const bt = new Date(bv || 0).getTime();
+        return sortDirection === 'asc' ? at - bt : bt - at;
+      }
+      return sortDirection === 'asc'
+        ? String(av).localeCompare(String(bv), 'vi')
+        : String(bv).localeCompare(String(av), 'vi');
+    });
+  }, [rawRows, sortKey, sortDirection]);
+  const sortRows = useCallback(
+    (rows: any[]) => [...rows].sort((a, b) => {
+      const value = (item: any) => {
+        if (sortKey === 'logId') return item.logId || item.id || 0;
+        if (sortKey === 'actor') return item.actorName || item.username || item.actorUserId || '';
+        if (sortKey === 'username') return item.username || item.userId || '';
+        if (sortKey === 'target') return `${item.targetType || ''} ${item.targetId || ''}`;
+        if (sortKey === 'modelOperation') return `${item.model || ''} ${item.operation || ''}`;
+        return item[sortKey] ?? '';
+      };
+      const av = value(a);
+      const bv = value(b);
+      let result: number;
+      if (typeof av === 'number' && typeof bv === 'number') result = av - bv;
+      else if (/at$|time|timestamp/i.test(sortKey)) {
+        result = new Date(av || 0).getTime() - new Date(bv || 0).getTime();
+      } else result = String(av).localeCompare(String(bv), 'vi', { numeric: true });
+      return sortDirection === 'asc' ? result : -result;
+    }),
+    [sortKey, sortDirection],
+  );
+  const sortedAuditLogs = useMemo(() => sortRows(auditLogs), [auditLogs, sortRows]);
+  const sortedAiUsages = useMemo(() => sortRows(aiUsages), [aiUsages, sortRows]);
+  const sortedAiModels = useMemo(() => sortRows(aiSummary?.byModel || []), [aiSummary, sortRows]);
+  const sortedAiOperations = useMemo(() => sortRows(aiSummary?.byOperation || []), [aiSummary, sortRows]);
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const pagedRows = activeRows;
 
@@ -497,10 +575,22 @@ export const AdminDashboard: React.FC = () => {
 
   return (
     <div className="admin-container">
-      {/* Admin Title */}
-      <div className="admin-header">
-        <h1>Bảng Điều Khiển Admin</h1>
-        <p>Quản trị hệ thống, phê duyệt thanh toán ví và kiểm duyệt tài liệu vi phạm.</p>
+      {/* Admin Title & Actions */}
+      <div className="admin-header glass-card">
+        <div className="admin-header-text">
+          <h1>Bảng Điều Khiển Quản Trị</h1>
+          <p>Quản trị hệ thống, phê duyệt giao dịch ví, kiểm duyệt tài liệu và theo dõi vận hành nền tảng.</p>
+        </div>
+        <button
+          type="button"
+          className="admin-refresh-btn"
+          onClick={loadDashboardData}
+          disabled={loading}
+          title="Tải lại dữ liệu trang hiện tại"
+        >
+          <Loader className={loading ? 'spin' : ''} size={15} />
+          <span>Làm mới</span>
+        </button>
       </div>
 
       <div className="admin-layout-grid">
@@ -518,55 +608,6 @@ export const AdminDashboard: React.FC = () => {
             </div>
           ) : adminTab === 'overview' ? (
             <div className="overview-pane animate-fade-in">
-              <h3>Tổng quan hệ thống</h3>
-              <div className="admin-toolbar overview-toolbar" style={{ flexWrap: 'wrap', gap: '16px' }}>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <label style={{ fontSize: '14px' }}>Từ:</label>
-                  <input
-                    type="date"
-                    className="input-control"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                  />
-                  <label style={{ fontSize: '14px' }}>Đến:</label>
-                  <input
-                    type="date"
-                    className="input-control"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                  />
-                  {(startDate || endDate) && (
-                    <button
-                      className="btn-secondary"
-                      onClick={() => {
-                        setStartDate('');
-                        setEndDate('');
-                      }}
-                      style={{ padding: '4px 8px', fontSize: '12px' }}
-                    >
-                      Xóa lọc ngày
-                    </button>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: '8px', flex: 1, justifyContent: 'flex-end', minWidth: '200px' }}>
-                  <input
-                    className="input-control"
-                    placeholder="Lọc hoạt động..."
-                    value={searchText}
-                    onChange={(e) => setSearchText(e.target.value)}
-                  />
-                  <select
-                    className="input-control"
-                    aria-label="Sắp xếp hoạt động"
-                    value={sortDirection}
-                    onChange={(e) => setSortDirection(e.target.value as 'asc' | 'desc')}
-                  >
-                    <option value="desc">Mới nhất</option>
-                    <option value="asc">Cũ nhất</option>
-                  </select>
-                </div>
-              </div>
-
               <div className="stats-grid">
                 <button
                   type="button"
@@ -622,70 +663,144 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 </button>
               </div>
-              <div style={{ display: 'flex', gap: '16px', margin: '16px 0', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="dashboard-finance dashboard-finance-link glass-card"
-                  style={{ flex: 1, minWidth: '250px' }}
-                  onClick={() => goToAdminTab('transactions', { status: 'SUCCESS' })}
-                >
-                  <span>Tổng doanh thu nạp ví (Income)</span>
-                  <strong>{Number(stats.successfulDeposits ?? 0).toLocaleString('vi-VN')}đ</strong>
-                  <small>Giao dịch nạp tiền thành công</small>
-                </button>
-                <button
-                  type="button"
-                  className="dashboard-finance dashboard-finance-link glass-card"
-                  style={{ flex: 1, minWidth: '250px', borderLeft: '4px solid #ef4444' }}
-                  onClick={() => goToAdminTab('transactions', { status: 'SUCCESS' })}
-                >
-                  <span>Tổng tiền chi tiêu ví (Outcome)</span>
-                  <strong style={{ color: '#ef4444' }}>{Number(Math.abs(stats.successfulWithdrawals ?? 0)).toLocaleString('vi-VN')}đ</strong>
-                  <small>Giao dịch chi tiêu/mua gói Premium</small>
-                </button>
+
+              <div className="overview-finance-section">
+                <div className="overview-finance-header">
+                  <div className="overview-finance-title">
+                    <h4>Doanh thu & Biến động ví theo tháng</h4>
+                    <p className="text-muted">Theo dõi tổng tiền nạp và tổng giá trị các gói Premium kích hoạt</p>
+                  </div>
+                  <div className="month-picker-wrapper">
+                    <span className="month-picker-label">Thời gian:</span>
+                    <select
+                      className="input-control month-select"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                      aria-label="Chọn tháng"
+                    >
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                        <option key={m} value={m}>
+                          Tháng {m}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="input-control year-select"
+                      value={selectedYear}
+                      onChange={(e) => setSelectedYear(Number(e.target.value))}
+                      aria-label="Chọn năm"
+                    >
+                      {[2024, 2025, 2026, 2027, 2028].map((y) => (
+                        <option key={y} value={y}>
+                          Năm {y}
+                        </option>
+                      ))}
+                    </select>
+                    {(selectedMonth !== now.getMonth() + 1 || selectedYear !== now.getFullYear()) && (
+                      <button
+                        type="button"
+                        className="btn-secondary month-reset-btn"
+                        onClick={() => {
+                          setSelectedMonth(now.getMonth() + 1);
+                          setSelectedYear(now.getFullYear());
+                        }}
+                      >
+                        Tháng này
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="dashboard-finance-grid">
+                  <button
+                    type="button"
+                    className="dashboard-finance dashboard-finance-link glass-card income-card"
+                    onClick={() => goToAdminTab('transactions', { status: 'SUCCESS' })}
+                  >
+                    <div className="finance-header">
+                      <span>Tổng tiền nạp vào ví</span>
+                      <small>Nạp tiền thành công (Tháng {selectedMonth}/{selectedYear})</small>
+                    </div>
+                    <strong>{Number(stats.successfulDeposits ?? 0).toLocaleString('vi-VN')}đ</strong>
+                  </button>
+                  <button
+                    type="button"
+                    className="dashboard-finance dashboard-finance-link glass-card premium-revenue-card"
+                    onClick={() => goToAdminTab('transactions', { status: 'SUCCESS' })}
+                  >
+                    <div className="finance-header">
+                      <span>Tổng giá trị các gói Premium đã mua</span>
+                      <small>Gói Premium đã kích hoạt (Tháng {selectedMonth}/{selectedYear})</small>
+                    </div>
+                    <strong className="premium-revenue-text">{Number(Math.abs(stats.successfulWithdrawals ?? 0)).toLocaleString('vi-VN')}đ</strong>
+                  </button>
+                </div>
               </div>
+
               <div className="dashboard-activity-grid">
                 <section className="activity-panel glass-card">
-                  <h4>Giao dịch gần đây</h4>
-                  {overviewTransactions.map((transaction: any) => (
-                    <button
-                      type="button"
-                      className="activity-row activity-link"
-                      key={transaction.transactionId}
-                      onClick={() =>
-                        goToAdminTab('transactions', { query: String(transaction.transactionId) })
-                      }
-                    >
-                      <div>
-                        <strong>{transaction.username}</strong>
-                        <small>
-                          #{transaction.transactionId} · {transaction.status}
-                        </small>
-                      </div>
-                      <span>{Number(transaction.amount).toLocaleString('vi-VN')}đ</span>
+                  <div className="activity-panel-header">
+                    <h4>Giao dịch gần đây</h4>
+                    <button type="button" className="activity-view-all-btn" onClick={() => goToAdminTab('transactions')}>
+                      Xem tất cả →
                     </button>
-                  ))}
+                  </div>
+                  <div className="activity-list-container">
+                    {overviewTransactions.length === 0 ? (
+                      <p className="empty-hint">Không có giao dịch nào phù hợp</p>
+                    ) : (
+                      overviewTransactions.map((transaction: any) => (
+                        <button
+                          type="button"
+                          className="activity-row activity-link"
+                          key={transaction.transactionId}
+                          onClick={() =>
+                            goToAdminTab('transactions', { query: String(transaction.transactionId) })
+                          }
+                        >
+                          <div>
+                            <strong>{transaction.username}</strong>
+                            <small>
+                              #{transaction.transactionId} · {transaction.status}
+                            </small>
+                          </div>
+                          <span className="amount-badge">{Number(transaction.amount).toLocaleString('vi-VN')}đ</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </section>
                 <section className="activity-panel glass-card">
-                  <h4>Report gần đây</h4>
-                  {overviewReports.map((report: any) => (
-                    <button
-                      type="button"
-                      className="activity-row activity-link"
-                      key={report.reportId}
-                      onClick={() => goToAdminTab('reports', { query: report.title })}
-                    >
-                      <div>
-                        <strong>{report.title}</strong>
-                        <small>
-                          {report.reporterName} · {report.reasonCode}
-                        </small>
-                      </div>
-                      <span className={report.status === 'PENDING' ? 'pending-text' : ''}>
-                        {report.status}
-                      </span>
+                  <div className="activity-panel-header">
+                    <h4>Report gần đây</h4>
+                    <button type="button" className="activity-view-all-btn" onClick={() => goToAdminTab('reports')}>
+                      Xem tất cả →
                     </button>
-                  ))}
+                  </div>
+                  <div className="activity-list-container">
+                    {overviewReports.length === 0 ? (
+                      <p className="empty-hint">Không có báo cáo nào phù hợp</p>
+                    ) : (
+                      overviewReports.map((report: any) => (
+                        <button
+                          type="button"
+                          className="activity-row activity-link"
+                          key={report.reportId}
+                          onClick={() => goToAdminTab('reports', { query: report.title })}
+                        >
+                          <div>
+                            <strong>{report.title}</strong>
+                            <small>
+                              {report.reporterName} · {report.reasonCode}
+                            </small>
+                          </div>
+                          <span className={`report-status-tag ${report.status === 'PENDING' ? 'pending' : ''}`}>
+                            {report.status}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </section>
               </div>
             </div>
@@ -725,7 +840,7 @@ export const AdminDashboard: React.FC = () => {
                   <thead>
                     <tr>
                       <th>{sortHeader('userId', 'ID')}</th>
-                      <th>{sortHeader('username', 'Sinh viên')}</th>
+                      <th>{sortHeader('username', 'Tên')}</th>
                       <th>{sortHeader('email', 'Email')}</th>
                       <th>{sortHeader('role', 'Vai trò')}</th>
                       <th>{sortHeader('tierName', 'Membership')}</th>
@@ -782,56 +897,109 @@ export const AdminDashboard: React.FC = () => {
             </div>
           ) : adminTab === 'transactions' ? (
             <div className="txs-pane animate-fade-in">
-              <h3>Phê duyệt Giao dịch</h3>
-              <div className="admin-toolbar">
-                <input
-                  className="input-control"
-                  placeholder="Tìm người dùng..."
-                  value={searchText}
-                  onChange={(event) => {
-                    setSearchText(event.target.value);
-                    setPage(1);
-                  }}
-                />
-                <select
-                  className="input-control"
-                  value={statusFilter}
-                  onChange={(event) => {
-                    setStatusFilter(event.target.value);
-                    setPage(1);
-                  }}
-                >
-                  <option value="ALL">Tất cả trạng thái</option>
-                  <option value="PENDING">Chờ duyệt</option>
-                  <option value="SUCCESS">Thành công</option>
-                  <option value="CANCELLED">Đã hủy</option>
-                  <option value="REFUNDED">Đã hoàn tiền</option>
-                </select>
-                <select
-                  className="input-control"
-                  value={typeFilter}
-                  onChange={(event) => {
-                    setTypeFilter(event.target.value);
-                    setPage(1);
-                  }}
-                >
-                  <option value="ALL">Tất cả loại giao dịch</option>
-                  <option value="DEPOSIT">Nạp tiền (Deposit)</option>
-                  <option value="WITHDRAW">Mất phí/Mua gói (Withdraw)</option>
-                  <option value="REFUND">Hoàn tiền (Refund)</option>
-                </select>
+              <div className="admin-section-heading">
+                <h3>Phê duyệt & Quản lý Giao dịch</h3>
+              </div>
+
+              <div className="transactions-toolbar-card glass-card">
+                <div className="transactions-filter-grid">
+                  <div className="transactions-filter-dates">
+                    <span className="tx-filter-label">Thời gian:</span>
+                    <input
+                      type="date"
+                      className="input-control"
+                      value={startDate}
+                      onChange={(e) => {
+                        setStartDate(e.target.value);
+                        setPage(1);
+                      }}
+                      title="Từ ngày"
+                    />
+                    <span className="tx-arrow">→</span>
+                    <input
+                      type="date"
+                      className="input-control"
+                      value={endDate}
+                      onChange={(e) => {
+                        setEndDate(e.target.value);
+                        setPage(1);
+                      }}
+                      title="Đến ngày"
+                    />
+                    {(startDate || endDate) && (
+                      <button
+                        className="btn-secondary filter-clear-btn"
+                        onClick={() => {
+                          setStartDate('');
+                          setEndDate('');
+                          setPage(1);
+                        }}
+                      >
+                        Xóa ngày
+                      </button>
+                    )}
+                  </div>
+                  <div className="transactions-filter-controls">
+                    <input
+                      className="input-control tx-search-input"
+                      placeholder="Lọc theo tên, mã giao dịch, mã đối soát..."
+                      value={searchText}
+                      onChange={(event) => {
+                        setSearchText(event.target.value);
+                        setPage(1);
+                      }}
+                    />
+                    <div className="tx-dropdowns-row">
+                      <select
+                        className="input-control"
+                        value={statusFilter}
+                        onChange={(event) => {
+                          setStatusFilter(event.target.value);
+                          setPage(1);
+                        }}
+                      >
+                        <option value="ALL">Tất cả trạng thái</option>
+                        <option value="PENDING">Chờ duyệt</option>
+                        <option value="SUCCESS">Thành công</option>
+                        <option value="CANCELLED">Đã hủy</option>
+                        <option value="REFUNDED">Đã hoàn tiền</option>
+                      </select>
+                      <select
+                        className="input-control"
+                        value={typeFilter}
+                        onChange={(event) => {
+                          setTypeFilter(event.target.value);
+                          setPage(1);
+                        }}
+                      >
+                        <option value="ALL">Tất cả loại giao dịch</option>
+                        <option value="DEPOSIT">Nạp tiền (Deposit)</option>
+                        <option value="WITHDRAW">Mua Premium (Withdraw)</option>
+                        <option value="REFUND">Hoàn tiền (Refund)</option>
+                      </select>
+                      <select
+                        className="input-control tx-sort-select"
+                        value={sortDirection}
+                        onChange={(e) => setSortDirection(e.target.value as 'asc' | 'desc')}
+                      >
+                        <option value="desc">Mới nhất trước</option>
+                        <option value="asc">Cũ nhất trước</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
               <div className="table-scroll">
                 <table className="admin-table">
                   <thead>
                     <tr>
                       <th>{sortHeader('transactionId', 'ID')}</th>
-                      <th>{sortHeader('username', 'Sinh viên')}</th>
-                      <th>Loại</th>
+                      <th>{sortHeader('username', 'Tên')}</th>
+                      <th>{sortHeader('type', 'Loại')}</th>
                       <th>{sortHeader('amount', 'Số tiền')}</th>
-                      <th>Mã đối soát</th>
-                      <th>Ngân hàng</th>
-                      <th>Người duyệt</th>
+                      <th>{sortHeader('referenceCode', 'Mã đối soát')}</th>
+                      <th>{sortHeader('bankId', 'Ngân hàng')}</th>
+                      <th>{sortHeader('approverName', 'Người duyệt')}</th>
                       <th>{sortHeader('status', 'Trạng thái')}</th>
                       <th>{sortHeader('startedAt', 'Thời gian tạo')}</th>
                       <th>Thao tác</th>
@@ -919,13 +1087,14 @@ export const AdminDashboard: React.FC = () => {
                 total={totalCount}
               />
             </div>
-          ) : (
+          ) : adminTab === 'reports' ? (
             <div className="reports-pane animate-fade-in">
               <div className="admin-section-tabs">
                 <NavLink className="active" to="/admin?tab=reports">
                   Báo cáo vi phạm
                 </NavLink>
                 <NavLink to="/admin?tab=documents">Tài liệu</NavLink>
+                <NavLink to="/admin?tab=audit-log">Nhật ký hệ thống</NavLink>
               </div>
               <h3>Báo cáo tài liệu vi phạm</h3>
               <section
@@ -1056,10 +1225,15 @@ export const AdminDashboard: React.FC = () => {
                 total={totalCount}
               />
             </div>
-          )}
-
-          {adminTab === 'audit-log' && (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          ) : adminTab === 'audit-log' ? (
+            <div className="reports-pane animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div className="admin-section-tabs">
+                <NavLink to="/admin?tab=reports">Báo cáo vi phạm</NavLink>
+                <NavLink to="/admin?tab=documents">Tài liệu</NavLink>
+                <NavLink className="active" to="/admin?tab=audit-log">
+                  Nhật ký hệ thống
+                </NavLink>
+              </div>
               <div className="admin-section-heading">
                 <h3>Nhật ký hoạt động hệ thống (Audit Logs)</h3>
               </div>
@@ -1071,12 +1245,12 @@ export const AdminDashboard: React.FC = () => {
                 <table className="admin-table">
                   <thead>
                     <tr>
-                      <th>Mã Log</th>
-                      <th>Người thực hiện</th>
-                      <th>Hành động</th>
-                      <th>Đối tượng</th>
-                      <th>Chi tiết</th>
-                      <th>Thời gian</th>
+                      <th>{sortHeader('logId', 'Mã Log')}</th>
+                      <th>{sortHeader('actor', 'Người thực hiện')}</th>
+                      <th>{sortHeader('action', 'Hành động')}</th>
+                      <th>{sortHeader('target', 'Đối tượng')}</th>
+                      <th>{sortHeader('details', 'Chi tiết')}</th>
+                      <th>{sortHeader('createdAt', 'Thời gian')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1087,7 +1261,7 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                       </tr>
                     ) : (
-                      auditLogs.map((log: any) => (
+                      sortedAuditLogs.map((log: any) => (
                         <tr key={log.logId || log.id}>
                           <td className="monospace-text">#{log.logId || log.id}</td>
                           <td>
@@ -1115,7 +1289,209 @@ export const AdminDashboard: React.FC = () => {
                 total={auditTotalCount}
               />
             </div>
-          )}
+          ) : adminTab === 'ai-observability' ? (
+            <div className="ai-observability-pane animate-fade-in">
+              <div className="admin-section-heading">
+                <div>
+                  <h3>Giám sát Hệ thống AI (AI Observability)</h3>
+                  <p className="section-subtitle">
+                    Theo dõi chi phí API, độ trễ phản hồi, tổng token tiêu thụ và hiệu năng mô hình AI
+                  </p>
+                </div>
+              </div>
+
+              {/* KPI Top Cards */}
+              <div className="stats-grid ai-stats-grid">
+                <div className="stat-box glass-card">
+                  <Bot size={28} className="stat-icon blue" />
+                  <div className="stat-details">
+                    <span className="stat-label">Tổng lượt gọi AI</span>
+                    <span className="stat-value">{aiSummary?.totalRequests?.toLocaleString() || 0}</span>
+                    <small>
+                      Lỗi: {aiSummary?.errorCount || 0} ({aiSummary?.errorRatePercent || 0}%)
+                    </small>
+                  </div>
+                </div>
+
+                <div className="stat-box glass-card">
+                  <Cpu size={28} className="stat-icon purple" />
+                  <div className="stat-details">
+                    <span className="stat-label">Tokens Tiêu Thụ</span>
+                    <span className="stat-value">{aiSummary?.totalTokens?.toLocaleString() || 0}</span>
+                    <small>
+                      In: {aiSummary?.totalPromptTokens?.toLocaleString() || 0} · Out: {aiSummary?.totalCompletionTokens?.toLocaleString() || 0}
+                    </small>
+                  </div>
+                </div>
+
+                <div className="stat-box glass-card">
+                  <DollarSign size={28} className="stat-icon green" />
+                  <div className="stat-details">
+                    <span className="stat-label">Tổng Chi Phí Ước Tính</span>
+                    <span className="stat-value" style={{ color: '#34d399' }}>${aiSummary?.totalCostUsd || '0.0000'}</span>
+                    <small>Cache Tokens: {aiSummary?.totalCachedTokens?.toLocaleString() || 0}</small>
+                  </div>
+                </div>
+
+                <div className="stat-box glass-card">
+                  <Zap size={28} className="stat-icon yellow" />
+                  <div className="stat-details">
+                    <span className="stat-label">Độ Trễ Trung Bình</span>
+                    <span className="stat-value" style={{ color: '#fbbf24' }}>{aiSummary?.avgLatencyMs || 0} ms</span>
+                    <small>Thời gian phản hồi trung bình</small>
+                  </div>
+                </div>
+              </div>
+
+              {/* Breakdown Grid: Clean Model & Operation Tables */}
+              <div className="ai-breakdown-grid">
+                <div className="ai-breakdown-card glass-card">
+                  <div className="ai-breakdown-header">
+                    <div className="ai-breakdown-title">
+                      <Cpu size={18} className="ai-breakdown-icon blue" />
+                      <h4>Phân bổ theo Model AI</h4>
+                    </div>
+                    <span className="ai-chart-badge">{aiSummary?.byModel?.length || 0} Mô hình</span>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="admin-table mini-table">
+                      <thead>
+                        <tr>
+                          <th>{sortHeader('model', 'Model')}</th>
+                          <th>{sortHeader('count', 'Lượt gọi')}</th>
+                          <th>{sortHeader('tokens', 'Tokens')}</th>
+                          <th>{sortHeader('cost', 'Chi phí')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {aiSummary?.byModel && aiSummary.byModel.length > 0 ? (
+                          sortedAiModels.map((m: any, idx: number) => (
+                            <tr key={idx}>
+                              <td><strong className="model-name">{m.model}</strong></td>
+                              <td>{m.count?.toLocaleString()}</td>
+                              <td>{m.tokens?.toLocaleString()}</td>
+                              <td className="cost-tag">${Number(m.cost || 0).toFixed(4)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Chưa có dữ liệu</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="ai-breakdown-card glass-card">
+                  <div className="ai-breakdown-header">
+                    <div className="ai-breakdown-title">
+                      <Zap size={18} className="ai-breakdown-icon yellow" />
+                      <h4>Phân bổ theo Tác vụ (Operation)</h4>
+                    </div>
+                    <span className="ai-chart-badge">{aiSummary?.byOperation?.length || 0} Tác vụ</span>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="admin-table mini-table">
+                      <thead>
+                        <tr>
+                          <th>{sortHeader('operation', 'Tác vụ')}</th>
+                          <th>{sortHeader('count', 'Lượt gọi')}</th>
+                          <th>{sortHeader('tokens', 'Tokens')}</th>
+                          <th>{sortHeader('cost', 'Chi phí')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {aiSummary?.byOperation && aiSummary.byOperation.length > 0 ? (
+                          sortedAiOperations.map((op: any, idx: number) => (
+                            <tr key={idx}>
+                              <td><span className="role-badge ADMIN">{op.operation}</span></td>
+                              <td>{op.count?.toLocaleString()}</td>
+                              <td>{op.tokens?.toLocaleString()}</td>
+                              <td className="cost-tag">${Number(op.cost || 0).toFixed(4)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Chưa có dữ liệu</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* Logs Table */}
+              <div className="ai-logs-section glass-card">
+                <div className="ai-logs-header">
+                  <div>
+                    <h4>Nhật ký gọi AI gần đây (Audit Usage Logs)</h4>
+                    <p className="text-muted">Chi tiết các request gọi API, độ trễ và chi phí theo thời gian thực</p>
+                  </div>
+                </div>
+                <div className="table-scroll">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>{sortHeader('usageId', 'ID')}</th>
+                        <th>{sortHeader('username', 'Người dùng')}</th>
+                        <th>{sortHeader('modelOperation', 'Model / Tác vụ')}</th>
+                        <th>{sortHeader('totalTokens', 'Tokens (In / Out / Cache)')}</th>
+                        <th>{sortHeader('latencyMs', 'Độ trễ')}</th>
+                        <th>{sortHeader('estimatedCost', 'Chi phí')}</th>
+                        <th>{sortHeader('status', 'Trạng thái')}</th>
+                        <th>{sortHeader('createdAt', 'Thời gian')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {aiUsages.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} style={{ textAlign: 'center', padding: '24px' }}>
+                            Chưa có nhật ký sử dụng AI nào.
+                          </td>
+                        </tr>
+                      ) : (
+                        sortedAiUsages.map((u: any) => (
+                          <tr key={u.usageId}>
+                            <td className="monospace-text">#{u.usageId}</td>
+                            <td className="bold-text">{u.username || `User #${u.userId}`}</td>
+                            <td>
+                              <div><strong>{u.model}</strong></div>
+                              <small style={{ color: 'var(--text-secondary)' }}>{u.operation}</small>
+                            </td>
+                            <td>
+                              <strong>{u.totalTokens?.toLocaleString()}</strong>
+                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                In: {u.promptTokens} · Out: {u.completionTokens} · Cache: {u.cachedTokens}
+                              </div>
+                            </td>
+                            <td>
+                              <span className={`latency-tag ${u.latencyMs > 2000 ? 'high' : u.latencyMs > 1000 ? 'medium' : 'good'}`}>
+                                {u.latencyMs} ms
+                              </span>
+                            </td>
+                            <td>
+                              <span className="cost-tag">${Number(u.estimatedCost || 0).toFixed(6)}</span>
+                            </td>
+                            <td>
+                              <span className={`tx-status-badge ${u.status === 'SUCCESS' ? 'SUCCESS' : 'CANCELLED'}`}>
+                                {u.status}
+                              </span>
+                            </td>
+                            <td>{formatDateTime(u.createdAt)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <Pagination
+                  page={page}
+                  totalPages={Math.ceil(totalCount / pageSize) || 1}
+                  setPage={setPage}
+                  total={totalCount}
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1419,55 +1795,89 @@ export const AdminDashboard: React.FC = () => {
       <style>{`
         .admin-container {
           min-height: 80vh;
+          max-width: 1400px;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 1.25rem;
         }
-
-        .admin-section-heading { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
-        .admin-section-heading .btn-primary { display:flex; align-items:center; gap:.4rem; }
-        .admin-toolbar { display:grid; grid-template-columns:minmax(220px,1fr) 190px minmax(250px,auto); gap:.75rem; margin:1rem 0; }
-        .sort-controls{display:grid;grid-template-columns:1fr 110px;gap:.5rem}
-        .admin-section-tabs { display:flex; gap:.5rem; border-bottom:1px solid rgba(255,255,255,.08); margin-bottom:1rem; }
-        .admin-section-tabs a { padding:.7rem 1rem; color:var(--text-muted); border-bottom:2px solid transparent; }
-        .admin-section-tabs a.active { color:var(--text-primary); border-color:var(--accent-purple); }
-        .admin-pagination { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-top:1rem; color:var(--text-muted); }
-        .admin-pagination div { display:flex; align-items:center; gap:.65rem; }
-        .admin-pagination button:disabled { opacity:.4; cursor:not-allowed; }
 
         .admin-header {
-          margin-bottom: 2rem;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 1.25rem 1.5rem;
+          border-radius: var(--radius-md);
+          background: rgba(255, 255, 255, 0.025);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          gap: 1rem;
+          flex-wrap: wrap;
         }
 
-        .admin-header h1 {
-          font-size: 2rem;
-          margin-bottom: 0.25rem;
+        .admin-header-text h1 {
+          font-size: 1.65rem;
+          font-weight: 700;
+          margin: 0 0 0.25rem;
           background: var(--accent-glow);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
         }
 
-        .admin-header p {
+        .admin-header-text p {
           color: var(--text-secondary);
-          font-size: 0.95rem;
+          font-size: 0.88rem;
+          margin: 0;
+        }
+
+        .admin-refresh-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.45rem;
+          padding: 0.5rem 1rem;
+          font-size: 0.85rem;
+          font-weight: 600;
+          border-radius: var(--radius-sm);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-primary);
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .admin-refresh-btn:hover:not(:disabled) {
+          background: rgba(255, 255, 255, 0.1);
+          border-color: rgba(255, 255, 255, 0.25);
+          transform: translateY(-1px);
+        }
+
+        .admin-refresh-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
 
         .admin-layout-grid {
           display: block;
-          height: calc(100vh - 12rem);
         }
 
         .admin-content-pane {
-          flex: 1;
           display: flex;
           flex-direction: column;
-          padding: 1.5rem;
-          border-radius: var(--radius-md);
-          overflow: hidden;
+          padding: 1.5rem 1.75rem;
+          border-radius: var(--radius-lg);
+          background: rgba(13, 17, 28, 0.7);
+          backdrop-filter: blur(12px);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          min-height: calc(100vh - 12rem);
+          box-sizing: border-box;
         }
 
         .admin-content-pane h3 {
-          font-size: 1.1rem;
-          margin-bottom: 1.25rem;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-          padding-bottom: 0.5rem;
+          font-size: 1.15rem;
+          font-weight: 700;
+          margin: 0 0 1rem;
+          padding-bottom: 0.65rem;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          color: var(--text-primary);
         }
 
         .admin-loader {
@@ -1475,98 +1885,562 @@ export const AdminDashboard: React.FC = () => {
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          height: 100%;
+          min-height: 350px;
           color: var(--text-muted);
           gap: 0.75rem;
+        }
+
+        .admin-section-heading {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          margin-bottom: 1rem;
+        }
+
+        .admin-section-heading h3 {
+          margin: 0;
+          padding: 0;
+          border: none;
+        }
+
+        .admin-section-heading .btn-primary {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.4rem;
+        }
+
+        .admin-toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          margin: 0 0 1.25rem;
+          flex-wrap: wrap;
+        }
+
+        .overview-finance-section {
+          margin-bottom: 1.25rem;
+        }
+
+        .overview-finance-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          margin-bottom: 0.85rem;
+          flex-wrap: wrap;
+        }
+
+        .overview-finance-title h4 {
+          font-size: 1rem;
+          font-weight: 700;
+          margin: 0 0 0.15rem;
+          color: var(--text-primary);
+        }
+
+        .overview-finance-title p {
+          font-size: 0.78rem;
+          margin: 0;
+        }
+
+        .month-picker-wrapper {
+          display: flex;
+          align-items: center;
+          gap: 0.6rem;
+        }
+
+        .month-picker-label {
+          font-size: 0.82rem;
+          color: var(--text-secondary);
+          font-weight: 600;
+        }
+
+        .month-select,
+        .year-select {
+          padding: 0.45rem 0.85rem;
+          font-size: 0.85rem;
+          border-radius: var(--radius-sm);
+          width: auto;
+          min-width: 110px;
+        }
+
+        .month-reset-btn {
+          padding: 0.45rem 0.75rem;
+          font-size: 0.78rem;
+          white-space: nowrap;
+        }
+
+        /* Transactions Filter Toolbar */
+        .transactions-toolbar-card {
+          padding: 1.25rem 1.5rem;
+          margin-bottom: 1.25rem;
+          background: rgba(255, 255, 255, 0.025);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          border-radius: var(--radius-md);
+        }
+
+        .transactions-filter-grid {
+          display: grid;
+          grid-template-columns: 1fr 1.3fr;
+          gap: 1.5rem;
+          align-items: flex-end;
+        }
+
+        .transactions-filter-dates {
+          display: flex;
+          flex-direction: column;
+          gap: 0.45rem;
+        }
+
+        .tx-filter-label {
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: var(--text-secondary);
+          margin-bottom: 0.15rem;
+        }
+
+        .tx-arrow {
+          color: var(--text-muted);
+          font-size: 0.85rem;
+          line-height: 1;
+        }
+
+        .transactions-filter-controls {
+          display: flex;
+          flex-direction: column;
+          gap: 0.65rem;
+        }
+
+        .tx-search-input {
+          width: 100%;
+        }
+
+        .tx-dropdowns-row {
+          display: grid;
+          grid-template-columns: 1.2fr 1.2fr 1fr;
+          gap: 0.5rem;
+        }
+
+        .tx-dropdowns-row select {
+          font-size: 0.82rem;
+          padding: 0.55rem 0.75rem;
+        }
+
+        .sort-controls {
+          display: grid;
+          grid-template-columns: 1fr 110px;
+          gap: 0.5rem;
+        }
+
+        .admin-section-tabs {
+          display: flex;
+          gap: 0.5rem;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+          margin-bottom: 1.25rem;
+        }
+
+        .admin-section-tabs a {
+          padding: 0.65rem 1rem;
+          color: var(--text-muted);
+          border-bottom: 2px solid transparent;
+          font-weight: 500;
+          text-decoration: none;
+          transition: all 0.2s ease;
+        }
+
+        .admin-section-tabs a:hover {
+          color: var(--text-primary);
+        }
+
+        .admin-section-tabs a.active {
+          color: var(--text-primary);
+          border-color: var(--accent-purple);
+          font-weight: 700;
+        }
+
+        .admin-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          margin-top: 1.25rem;
+          padding-top: 0.85rem;
+          border-top: 1px solid rgba(255, 255, 255, 0.05);
+          color: var(--text-muted);
+          font-size: 0.85rem;
+        }
+
+        .admin-pagination div {
+          display: flex;
+          align-items: center;
+          gap: 0.65rem;
+        }
+
+        .admin-pagination button:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
         }
 
         /* Overview Page */
         .stats-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-          gap: 1.25rem;
+          grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+          gap: 1rem;
+          margin-bottom: 1.25rem;
         }
 
         .stat-box {
           display: flex;
           align-items: center;
           gap: 1rem;
-          padding: 1.5rem;
+          padding: 1.25rem;
+          border-radius: var(--radius-md);
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          transition: all 0.2s ease;
         }
 
-        .stat-link { width:100%; border:1px solid rgba(255,255,255,.08); color:inherit; text-align:left; cursor:pointer; font:inherit; }
-        .stat-link:hover,.stat-link:focus-visible { transform:translateY(-2px); border-color:var(--accent-blue); outline:none; }
+        .stat-link {
+          width: 100%;
+          color: inherit;
+          text-align: left;
+          cursor: pointer;
+          font: inherit;
+        }
+
+        .stat-link:hover,
+        .stat-link:focus-visible {
+          transform: translateY(-2px);
+          border-color: var(--accent-blue);
+          box-shadow: 0 6px 20px rgba(0, 180, 216, 0.15);
+          outline: none;
+        }
 
         .stat-icon {
           flex-shrink: 0;
-          padding: 0.4rem;
-          background: rgba(255, 255, 255, 0.03);
-          border-radius: var(--radius-sm);
+          padding: 0.55rem;
+          background: rgba(255, 255, 255, 0.04);
+          border-radius: 10px;
         }
 
         .stat-icon.purple {
-          color: var(--accent-purple);
-          border: 1px solid rgba(157, 78, 221, 0.2);
+          color: #c084fc;
+          background: rgba(192, 132, 252, 0.1);
+          border: 1px solid rgba(192, 132, 252, 0.25);
         }
 
         .stat-icon.green {
-          color: var(--success);
-          border: 1px solid rgba(16, 185, 129, 0.2);
+          color: #34d399;
+          background: rgba(52, 211, 153, 0.1);
+          border: 1px solid rgba(52, 211, 153, 0.25);
         }
 
         .stat-icon.blue {
-          color: var(--accent-blue);
-          border: 1px solid rgba(0, 180, 216, 0.2);
+          color: #38bdf8;
+          background: rgba(56, 189, 248, 0.1);
+          border: 1px solid rgba(56, 189, 248, 0.25);
         }
 
         .stat-icon.red {
-          color: var(--danger);
-          border: 1px solid rgba(239, 68, 68, 0.2);
+          color: #f87171;
+          background: rgba(248, 113, 113, 0.1);
+          border: 1px solid rgba(248, 113, 113, 0.25);
         }
 
         .stat-details {
           display: flex;
           flex-direction: column;
           gap: 0.15rem;
+          min-width: 0;
         }
 
         .stat-label {
-          font-size: 0.8rem;
+          font-size: 0.78rem;
           color: var(--text-muted);
-          font-weight: 500;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
         }
 
         .stat-value {
+          font-size: 1.6rem;
+          font-weight: 700;
+          color: var(--text-primary);
+          line-height: 1.2;
+        }
+
+        .stat-details small {
+          color: var(--text-muted);
+          font-size: 0.72rem;
+          margin-top: 0.2rem;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .dashboard-finance-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          gap: 1rem;
+          margin-bottom: 1.25rem;
+        }
+
+        .dashboard-finance {
+          padding: 1.25rem 1.5rem;
+          border-radius: var(--radius-md);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.07);
+          transition: all 0.2s ease;
+        }
+
+        .income-card {
+          border-left: 4px solid var(--success);
+        }
+
+        .premium-revenue-card {
+          border-left: 4px solid var(--accent-purple);
+        }
+
+        .premium-revenue-card:hover {
+          border-left-color: #c084fc;
+        }
+
+        .finance-header {
+          display: flex;
+          flex-direction: column;
+          gap: 0.2rem;
+        }
+
+        .finance-header span {
+          font-size: 0.88rem;
+          font-weight: 600;
+          color: var(--text-secondary);
+        }
+
+        .finance-header small {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+        }
+
+        .dashboard-finance strong {
           font-size: 1.5rem;
+          color: var(--success);
+          font-weight: 700;
+          white-space: nowrap;
+        }
+
+        .dashboard-finance strong.premium-revenue-text {
+          color: #c084fc;
+        }
+
+        .dashboard-finance-link {
+          width: 100%;
+          color: inherit;
+          text-align: left;
+          cursor: pointer;
+          font: inherit;
+        }
+
+        .dashboard-finance-link:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+        }
+
+        .dashboard-activity-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1.25rem;
+        }
+
+        .activity-panel {
+          padding: 1.25rem;
+          border-radius: var(--radius-md);
+          background: rgba(255, 255, 255, 0.025);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          display: flex;
+          flex-direction: column;
+        }
+
+        .activity-panel-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 0.85rem;
+          padding-bottom: 0.5rem;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .activity-panel-header h4 {
+          margin: 0;
+          font-size: 0.95rem;
           font-weight: 700;
           color: var(--text-primary);
         }
 
-        .stat-details small { color: var(--text-muted); font-size: .72rem; margin-top: .2rem; }
-        .dashboard-finance { margin-top: 1rem; padding: 1.2rem; display: grid; grid-template-columns: 1fr auto; gap: .35rem 1rem; align-items: center; }
-        .dashboard-finance span { color: var(--text-secondary); }
-        .dashboard-finance strong { grid-row: span 2; font-size: 1.65rem; color: var(--success); }
-        .dashboard-finance small { color: var(--text-muted); }
-        .dashboard-finance-link { width:100%; border:1px solid rgba(255,255,255,.08); color:inherit; text-align:left; cursor:pointer; font:inherit; }
-        .dashboard-activity-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
-        .activity-panel { padding: 1.2rem; }
-        .activity-panel h4 { margin-bottom: .7rem; }
-        .activity-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .7rem 0; border-bottom: 1px solid rgba(255,255,255,.05); }
-        .activity-row div { min-width: 0; display: flex; flex-direction: column; gap: .2rem; }
-        .activity-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
-        .activity-row small { color: var(--text-muted); }
-        .activity-row > span { flex-shrink: 0; color: var(--text-secondary); font-size: .8rem; }
-        .activity-row > span.pending-text { color: var(--warning); }
-        .activity-link { width:100%; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; font:inherit; }
-        .activity-link:hover,.activity-link:focus-visible { background:rgba(255,255,255,.04); outline:none; }
+        .activity-view-all-btn {
+          border: none;
+          background: transparent;
+          color: var(--accent-blue);
+          font-size: 0.78rem;
+          font-weight: 600;
+          cursor: pointer;
+          padding: 0.2rem 0.4rem;
+          transition: all 0.15s ease;
+        }
 
-        .modal-overlay { position:fixed; inset:0; z-index:2000; display:grid; place-items:center; padding:1rem; background:rgba(3,7,18,.78); backdrop-filter:blur(8px); }
-        .modal-box { width:min(560px,calc(100vw - 2rem)); max-height:calc(100vh - 2rem); overflow:auto; padding:1.5rem; border-radius:var(--radius-md); }
-        .admin-user-modal { position:relative; }
-        .modal-title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding-bottom:1rem; margin-bottom:1rem; border-bottom:1px solid rgba(255,255,255,.08); }
-        .modal-title-row h3 { margin:0 0 .3rem; padding:0; border:0; }
-        .modal-title-row p { color:var(--text-muted); font-size:.85rem; overflow-wrap:anywhere; }
-        .modal-close-button { display:grid; place-items:center; flex:0 0 auto; border:0; background:transparent; color:var(--text-secondary); cursor:pointer; padding:.25rem; }
+        .activity-view-all-btn:hover {
+          text-decoration: underline;
+        }
+
+        .activity-list-container {
+          display: flex;
+          flex-direction: column;
+          gap: 0.45rem;
+          max-height: 320px;
+          overflow-y: auto;
+          padding-right: 4px;
+        }
+
+        .empty-hint {
+          color: var(--text-muted);
+          font-size: 0.85rem;
+          text-align: center;
+          padding: 2rem 1rem;
+        }
+
+        .activity-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 1rem;
+          padding: 0.65rem 0.85rem;
+          border-radius: var(--radius-sm);
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid rgba(255, 255, 255, 0.04);
+          transition: all 0.15s ease;
+        }
+
+        .activity-row div {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 0.15rem;
+        }
+
+        .activity-row strong {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 0.85rem;
+          color: var(--text-primary);
+        }
+
+        .activity-row small {
+          color: var(--text-muted);
+          font-size: 0.75rem;
+        }
+
+        .amount-badge {
+          font-size: 0.85rem;
+          font-weight: 700;
+          color: var(--success);
+          flex-shrink: 0;
+        }
+
+        .report-status-tag {
+          font-size: 0.72rem;
+          font-weight: 700;
+          padding: 0.2rem 0.5rem;
+          border-radius: 4px;
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-secondary);
+          flex-shrink: 0;
+        }
+
+        .report-status-tag.pending {
+          background: rgba(245, 158, 11, 0.15);
+          color: #fbbf24;
+          border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .activity-link {
+          width: 100%;
+          border: 1px solid rgba(255, 255, 255, 0.04);
+          background: rgba(255, 255, 255, 0.02);
+          color: inherit;
+          text-align: left;
+          cursor: pointer;
+          font: inherit;
+        }
+
+        .activity-link:hover,
+        .activity-link:focus-visible {
+          background: rgba(255, 255, 255, 0.06);
+          border-color: rgba(255, 255, 255, 0.12);
+          transform: translateX(2px);
+          outline: none;
+        }
+
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 2000;
+          display: grid;
+          place-items: center;
+          padding: 1rem;
+          background: rgba(3, 7, 18, 0.78);
+          backdrop-filter: blur(8px);
+        }
+
+        .modal-box {
+          width: min(560px, calc(100vw - 2rem));
+          max-height: calc(100vh - 2rem);
+          overflow: auto;
+          padding: 1.5rem;
+          border-radius: var(--radius-md);
+        }
+
+        .admin-user-modal {
+          position: relative;
+        }
+
+        .modal-title-row {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 1rem;
+          padding-bottom: 1rem;
+          margin-bottom: 1rem;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .modal-title-row h3 {
+          margin: 0 0 0.3rem;
+          padding: 0;
+          border: 0;
+        }
+
+        .modal-title-row p {
+          color: var(--text-muted);
+          font-size: 0.85rem;
+          overflow-wrap: anywhere;
+        }
+
+        .modal-close-button {
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          border: 0;
+          background: transparent;
+          color: var(--text-secondary);
+          cursor: pointer;
+          padding: 0.25rem;
+        }
 
         /* Tables & Lists */
         .table-scroll {
@@ -1587,14 +2461,19 @@ export const AdminDashboard: React.FC = () => {
           text-transform: uppercase;
           letter-spacing: 0.05em;
           color: var(--text-muted);
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.02);
         }
 
         .admin-table td {
           padding: 0.85rem 1rem;
           font-size: 0.85rem;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+          border-bottom: 1px solid rgba(255, 255, 255, 0.04);
           color: var(--text-primary);
+        }
+
+        .admin-table tbody tr:hover td {
+          background: rgba(255, 255, 255, 0.02);
         }
 
         .monospace-text {
@@ -1611,7 +2490,8 @@ export const AdminDashboard: React.FC = () => {
           font-weight: 600;
         }
 
-        .role-badge, .tx-type-badge {
+        .role-badge,
+        .tx-type-badge {
           font-size: 0.7rem;
           padding: 0.15rem 0.4rem;
           border-radius: 4px;
@@ -1638,16 +2518,19 @@ export const AdminDashboard: React.FC = () => {
           color: var(--danger);
         }
 
-        .status-badge, .tx-status-badge {
+        .status-badge,
+        .tx-status-badge {
           font-size: 0.75rem;
           font-weight: 600;
         }
 
-        .status-badge.ACTIVE, .tx-status-badge.SUCCESS {
+        .status-badge.ACTIVE,
+        .tx-status-badge.SUCCESS {
           color: var(--success);
         }
 
-        .status-badge.SUSPENDED, .tx-status-badge.CANCELLED {
+        .status-badge.SUSPENDED,
+        .tx-status-badge.CANCELLED {
           color: var(--danger);
         }
 
@@ -1735,22 +2618,115 @@ export const AdminDashboard: React.FC = () => {
           cursor: pointer;
           transition: var(--transition-fast);
         }
-        .report-card:hover,.report-card:focus-visible { border-color:var(--accent-blue); transform:translateY(-1px); outline:none; }
-        .report-open-hint { display:inline-flex;align-items:center;gap:.35rem;color:var(--accent-blue);font-size:.78rem; }
-        .report-preview-modal { width:min(850px,calc(100vw - 2rem));max-height:calc(100vh - 2rem);overflow:auto;padding:1.5rem;border-radius:var(--radius-md); }
-        .report-preview-grid { display:grid;grid-template-columns:140px 1fr;gap:.75rem;margin:1rem 0; }
-        .report-preview-grid>span { color:var(--text-muted); }
-        .report-description-full,.document-content-preview { padding:1rem;border-radius:var(--radius-sm);background:rgba(255,255,255,.04); }
-        .report-description-full p,.document-content-preview p { margin-top:.5rem;color:var(--text-secondary);white-space:pre-wrap;line-height:1.55; }
-        .reported-document-section { margin-top:1rem;padding-top:1rem;border-top:1px solid rgba(255,255,255,.08); }
-        .reported-document-heading { display:flex;align-items:center;gap:.75rem; }
-        .reported-document-heading svg { color:var(--accent-blue);flex-shrink:0; }
-        .reported-file-icon { width:42px;height:42px;border-radius:10px;display:grid;place-items:center;flex:0 0 auto; }
-        .reported-document-heading p { color:var(--text-muted);font-size:.85rem; }
-        .document-metrics { display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0; }
-        .document-metrics span { padding:.35rem .65rem;border-radius:999px;background:rgba(255,255,255,.05);color:var(--text-secondary);font-size:.78rem; }
-        .document-content-preview { max-height:260px;overflow:auto; }
-        .report-preview-loading { min-height:180px;display:flex;align-items:center;justify-content:center;gap:.6rem;color:var(--text-muted); }
+
+        .report-card:hover,
+        .report-card:focus-visible {
+          border-color: var(--accent-blue);
+          transform: translateY(-1px);
+          outline: none;
+        }
+
+        .report-open-hint {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          color: var(--accent-blue);
+          font-size: 0.78rem;
+        }
+
+        .report-preview-modal {
+          width: min(850px, calc(100vw - 2rem));
+          max-height: calc(100vh - 2rem);
+          overflow: auto;
+          padding: 1.5rem;
+          border-radius: var(--radius-md);
+        }
+
+        .report-preview-grid {
+          display: grid;
+          grid-template-columns: 140px 1fr;
+          gap: 0.75rem;
+          margin: 1rem 0;
+        }
+
+        .report-preview-grid > span {
+          color: var(--text-muted);
+        }
+
+        .report-description-full,
+        .document-content-preview {
+          padding: 1rem;
+          border-radius: var(--radius-sm);
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .report-description-full p,
+        .document-content-preview p {
+          margin-top: 0.5rem;
+          color: var(--text-secondary);
+          white-space: pre-wrap;
+          line-height: 1.55;
+        }
+
+        .reported-document-section {
+          margin-top: 1rem;
+          padding-top: 1rem;
+          border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .reported-document-heading {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .reported-document-heading svg {
+          color: var(--accent-blue);
+          flex-shrink: 0;
+        }
+
+        .reported-file-icon {
+          width: 42px;
+          height: 42px;
+          border-radius: 10px;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+        }
+
+        .reported-document-heading p {
+          color: var(--text-muted);
+          font-size: 0.85rem;
+        }
+
+        .document-metrics {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+          margin: 1rem 0;
+        }
+
+        .document-metrics span {
+          padding: 0.35rem 0.65rem;
+          border-radius: 999px;
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-secondary);
+          font-size: 0.78rem;
+        }
+
+        .document-content-preview {
+          max-height: 260px;
+          overflow: auto;
+        }
+
+        .report-preview-loading {
+          min-height: 180px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.6rem;
+          color: var(--text-muted);
+        }
 
         .report-info-header {
           display: flex;
@@ -1833,13 +2809,162 @@ export const AdminDashboard: React.FC = () => {
         }
 
         @keyframes spin {
-          to { transform: rotate(360deg); }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        /* AI Observability Styles */
+        .ai-observability-pane {
+          display: flex;
+          flex-direction: column;
+          gap: 1.25rem;
+        }
+
+        .section-subtitle {
+          color: var(--text-muted);
+          font-size: 0.85rem;
+          margin-top: 0.2rem;
+        }
+
+        .stat-icon.yellow {
+          color: #fbbf24;
+          background: rgba(251, 191, 36, 0.1);
+          border: 1px solid rgba(251, 191, 36, 0.25);
+        }
+
+        .ai-breakdown-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+          gap: 1.25rem;
+        }
+
+        .ai-breakdown-card {
+          padding: 1.25rem 1.5rem;
+          display: flex;
+          flex-direction: column;
+          gap: 0.85rem;
+        }
+
+        .ai-breakdown-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          padding-bottom: 0.75rem;
+        }
+
+        .ai-breakdown-title {
+          display: flex;
+          align-items: center;
+          gap: 0.6rem;
+        }
+
+        .ai-breakdown-title h4 {
+          font-size: 0.95rem;
+          font-weight: 700;
+          margin: 0;
+          color: var(--text-primary);
+        }
+
+        .ai-breakdown-icon.blue {
+          color: #38bdf8;
+        }
+
+        .ai-breakdown-icon.yellow {
+          color: #fbbf24;
+        }
+
+        .mini-table th {
+          padding: 0.55rem 0.75rem;
+          font-size: 0.75rem;
+        }
+
+        .mini-table td {
+          padding: 0.65rem 0.75rem;
+          font-size: 0.82rem;
+        }
+
+        .model-name {
+          color: #38bdf8;
+          font-family: monospace;
+          font-size: 0.85rem;
+        }
+
+        .ai-logs-section {
+          padding: 1.25rem 1.5rem;
+        }
+
+        .ai-logs-header h4 {
+          font-size: 1rem;
+          font-weight: 700;
+          margin: 0 0 0.15rem;
+          color: var(--text-primary);
+        }
+
+        .ai-logs-header p {
+          font-size: 0.8rem;
+          margin: 0 0 1rem;
+        }
+
+        .latency-tag {
+          font-size: 0.76rem;
+          font-weight: 700;
+          padding: 0.15rem 0.45rem;
+          border-radius: 4px;
+          font-family: monospace;
+        }
+
+        .latency-tag.good {
+          background: rgba(52, 211, 153, 0.15);
+          color: #34d399;
+          border: 1px solid rgba(52, 211, 153, 0.25);
+        }
+
+        .latency-tag.medium {
+          background: rgba(251, 191, 36, 0.15);
+          color: #fbbf24;
+          border: 1px solid rgba(251, 191, 36, 0.25);
+        }
+
+        .latency-tag.high {
+          background: rgba(239, 68, 68, 0.15);
+          color: #ef4444;
+          border: 1px solid rgba(239, 68, 68, 0.25);
+        }
+
+        .cost-tag {
+          font-family: monospace;
+          font-size: 0.8rem;
+          color: #34d399;
+          font-weight: 600;
+        }
+
+        @media (max-width: 900px) {
+          .dashboard-activity-grid,
+          .ai-charts-grid {
+            grid-template-columns: 1fr;
+          }
         }
 
         @media (max-width: 768px) {
-          .admin-toolbar { grid-template-columns:1fr; }
-          .report-preview-grid { grid-template-columns:1fr;gap:.35rem; }
-          .report-preview-grid>strong { margin-bottom:.5rem; }
+          .admin-toolbar {
+            flex-direction: column;
+            align-items: stretch;
+          }
+          .search-filters {
+            justify-content: stretch;
+          }
+          .search-input {
+            width: 100%;
+          }
+          .report-preview-grid {
+            grid-template-columns: 1fr;
+            gap: 0.35rem;
+          }
+          .report-preview-grid > strong {
+            margin-bottom: 0.5rem;
+          }
           .admin-layout-grid {
             grid-template-columns: 1fr;
             height: auto;

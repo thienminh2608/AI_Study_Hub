@@ -14,6 +14,7 @@
 **/node_modules/
 **/dist/
 **/.vite/
+**/.npm-cache/
 
 # Environment and secrets
 **/.env
@@ -26,3 +27,10 @@
 **/wwwroot/uploads/*
 !**/wwwroot/uploads/.gitkeep
 *.log
+
+# Local audit documents and generated spreadsheets
+/artifacts/
+/outputs/
+/audits&plans/
+/tmp/
+tmp/

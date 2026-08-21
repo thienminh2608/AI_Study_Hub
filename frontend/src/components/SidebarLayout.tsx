@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { ModerationNoticePopup } from './ModerationNoticePopup';
@@ -8,7 +8,6 @@ import {
   FolderOpen,
   Bot,
   Users,
-  Award,
   User as UserIcon,
   LogOut,
   Coins,
@@ -21,15 +20,32 @@ import {
   Trash2,
   HardDrive,
   Sparkles,
+  Cpu,
+  ChevronRight,
 } from 'lucide-react';
 
 export const SidebarLayout: React.FC = () => {
   const { user, logout } = useAuth();
   const isAdmin = user?.role?.trim().toUpperCase() === 'ADMIN';
   const isModerator = user?.role?.trim().toUpperCase() === 'MODERATOR';
-  const [searchParams] = useSearchParams();
   const location = useLocation();
-  const adminTab = searchParams.get('tab') || 'overview';
+
+  const isCurrentAdminTab = (targetTab: string) => {
+    if (location.pathname !== '/admin') return false;
+    const search = new URLSearchParams(location.search);
+    const currentTab = search.get('tab') || 'overview';
+    if (targetTab === 'reports') {
+      return currentTab === 'reports' || currentTab === 'documents';
+    }
+    if (targetTab === 'report-config') {
+      return (
+        currentTab === 'report-config' ||
+        currentTab === 'system-config' ||
+        currentTab === 'transfer-config'
+      );
+    }
+    return currentTab === targetTab;
+  };
 
   const [quota, setQuota] = useState<{
     usedStorageMb: number;
@@ -63,10 +79,10 @@ export const SidebarLayout: React.FC = () => {
         {/* User Quick Stats Card */}
         {user && (
           <div className="user-stats-card">
-            <NavLink to="/profile" className="account-summary">
+            <NavLink to="/profile" className="account-summary" title="Nhấn để xem hồ sơ">
               <div className="user-info">
                 <p className="username">
-                  <UserIcon size={17} />
+                  <UserIcon size={18} />
                   <span>{user.username}</span>
                 </p>
                 <span
@@ -81,29 +97,24 @@ export const SidebarLayout: React.FC = () => {
                         : 'FREE'}
                 </span>
               </div>
+              {isAdmin && (
+                <div className="admin-status-indicator">
+                  <span className="admin-status-dot"></span>
+                  <span className="admin-role-text">Quản trị viên hệ thống</span>
+                </div>
+              )}
             </NavLink>
             {!isAdmin && !isModerator && (
-              <div className="balance-actions">
-                <div className="user-balance">
-                  <Coins size={16} className="coin-icon" />
-                  <span>{user.balance.toLocaleString()}đ</span>
+              <NavLink to="/wallet" className="user-balance-card" title="Nhấn để xem số dư, nạp tiền và lịch sử giao dịch">
+                <div className="balance-card-main">
+                  <div className="user-balance">
+                    <Coins size={16} className="coin-icon" />
+                    <span>{user.balance.toLocaleString()}đ</span>
+                  </div>
+                  <ChevronRight size={14} className="balance-arrow" />
                 </div>
-                <NavLink to="/wallet?deposit=1" className="quick-deposit-link">
-                  Nạp tiền
-                </NavLink>
-              </div>
-            )}
-            {!isAdmin && !isModerator && (
-              <div className="account-widget-links">
-                <NavLink to="/wallet">
-                  <ReceiptText size={15} />
-                  <span>Lịch sử giao dịch</span>
-                </NavLink>
-                <NavLink to="/premium">
-                  <Award size={15} />
-                  <span>Premium</span>
-                </NavLink>
-              </div>
+                <span className="balance-hint-text">Xem chi tiết</span>
+              </NavLink>
             )}
             {!isAdmin && !isModerator && (
               <div className="storage-widget">
@@ -146,11 +157,6 @@ export const SidebarLayout: React.FC = () => {
                 </div>
               </div>
             )}
-            {isAdmin && (
-              <NavLink to="/profile" className="admin-profile-link">
-                Hồ sơ & bảo mật
-              </NavLink>
-            )}
           </div>
         )}
         <nav className="nav-links">
@@ -158,52 +164,53 @@ export const SidebarLayout: React.FC = () => {
             <>
               <NavLink
                 to="/admin?tab=overview"
-                className={`nav-item ${adminTab === 'overview' ? 'active' : ''}`}
+                className={() => `nav-item ${isCurrentAdminTab('overview') ? 'active' : ''}`}
               >
                 <LayoutDashboard size={20} />
                 <span>Tổng quan dashboard</span>
               </NavLink>
               <NavLink
                 to="/admin?tab=users"
-                className={`nav-item ${adminTab === 'users' ? 'active' : ''}`}
+                className={() => `nav-item ${isCurrentAdminTab('users') ? 'active' : ''}`}
               >
                 <UserCog size={20} />
                 <span>Quản lý tài khoản</span>
               </NavLink>
               <NavLink
                 to="/admin?tab=transactions"
-                className={`nav-item ${adminTab === 'transactions' ? 'active' : ''}`}
+                className={() => `nav-item ${isCurrentAdminTab('transactions') ? 'active' : ''}`}
               >
                 <ReceiptText size={20} />
                 <span>Duyệt giao dịch</span>
               </NavLink>
               <NavLink
                 to="/admin?tab=reports"
-                className={`nav-item ${adminTab === 'reports' || adminTab === 'documents' ? 'active' : ''}`}
+                className={() =>
+                  `nav-item ${
+                    isCurrentAdminTab('reports') ||
+                    isCurrentAdminTab('documents') ||
+                    isCurrentAdminTab('audit-log')
+                      ? 'active'
+                      : ''
+                  }`
+                }
               >
                 <ShieldAlert size={20} />
                 <span>Kiểm duyệt nội dung</span>
               </NavLink>
               <NavLink
                 to="/admin?tab=report-config"
-                className={`nav-item ${adminTab === 'report-config' || adminTab === 'system-config' || adminTab === 'transfer-config' ? 'active' : ''}`}
+                className={() => `nav-item ${isCurrentAdminTab('report-config') ? 'active' : ''}`}
               >
                 <SlidersHorizontal size={20} />
                 <span>Cấu hình hệ thống</span>
               </NavLink>
               <NavLink
-                to="/admin?tab=audit-log"
-                className={`nav-item ${adminTab === 'audit-log' ? 'active' : ''}`}
+                to="/admin?tab=ai-observability"
+                className={() => `nav-item ${isCurrentAdminTab('ai-observability') ? 'active' : ''}`}
               >
-                <Trash2 size={20} />
-                <span>Nhật ký hệ thống (Audit Log)</span>
-              </NavLink>
-              <NavLink
-                to="/chat"
-                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-              >
-                <Bot size={20} />
-                <span>Trợ lý AI</span>
+                <Cpu size={20} />
+                <span>Giám sát AI (Observability)</span>
               </NavLink>
             </>
           ) : isModerator ? (
@@ -292,24 +299,30 @@ export const SidebarLayout: React.FC = () => {
           left: 1rem;
           display: flex;
           flex-direction: column;
-          padding: 1.5rem 1rem;
+          padding: 1.25rem 0.85rem;
           z-index: 100;
           border-radius: var(--radius-lg);
           border: 1px solid var(--border-neon);
+          box-sizing: border-box;
+          overflow: hidden;
         }
 
         .logo-section {
           position: relative;
-          padding-bottom: 1.5rem;
-          margin-bottom: 1.5rem;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          padding-bottom: 1.25rem;
+          margin-bottom: 1.25rem;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          flex-shrink: 0;
         }
 
         .logo-section h2 {
-          font-size: 1.3rem;
-          background: var(--accent-glow);
+          font-size: 1.35rem;
+          font-weight: 700;
+          background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
+          margin: 0;
+          letter-spacing: -0.01em;
         }
 
         .logo-glow {
@@ -323,30 +336,32 @@ export const SidebarLayout: React.FC = () => {
         }
 
         .user-stats-card {
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.05);
+          background: rgba(255, 255, 255, 0.035);
+          border: 1px solid rgba(255, 255, 255, 0.07);
           border-radius: var(--radius-md);
-          padding: 0.75rem 1rem;
-          margin-bottom: 1.5rem;
+          padding: 0.85rem 0.95rem;
+          margin-bottom: 1.25rem;
+          flex-shrink: 0;
+          transition: var(--transition-fast);
         }
 
         .user-info {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 0.5rem;
         }
         .account-summary { display:block; color:inherit; text-decoration:none; }
 
         .username {
           display:flex;
           align-items:center;
-          gap:.4rem;
-          font-weight: 600;
-          font-size: 0.95rem;
+          gap:.45rem;
+          font-weight: 700;
+          font-size: 0.98rem;
           min-width: 0;
           flex: 1 1 auto;
           overflow: hidden;
+          color: var(--text-primary);
         }
 
         .username span {
@@ -355,36 +370,61 @@ export const SidebarLayout: React.FC = () => {
           white-space: nowrap;
         }
 
+        .admin-status-indicator {
+          display: flex;
+          align-items: center;
+          gap: 0.45rem;
+          margin-top: 0.5rem;
+          padding-top: 0.5rem;
+          border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .admin-status-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #10b981;
+          box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+        }
+
+        .admin-role-text {
+          font-size: 0.76rem;
+          color: var(--text-muted);
+          font-weight: 500;
+        }
+
         .badge {
           font-size: 0.7rem;
-          padding: 0.2rem 0.5rem;
-          border-radius: 4px;
-          font-weight: 700;
+          padding: 0.2rem 0.55rem;
+          border-radius: 6px;
+          font-weight: 800;
+          letter-spacing: 0.04em;
           flex-shrink: 0;
           white-space: nowrap;
         }
 
         .badge.free {
-          background: rgba(255, 255, 255, 0.1);
+          background: rgba(255, 255, 255, 0.08);
           color: var(--text-secondary);
+          border: 1px solid rgba(255, 255, 255, 0.12);
         }
 
         .badge.premium {
           background: rgba(157, 78, 221, 0.2);
-          color: var(--accent-purple);
-          border: 1px solid rgba(157, 78, 221, 0.3);
+          color: #c084fc;
+          border: 1px solid rgba(157, 78, 221, 0.35);
         }
 
         .badge.admin {
           background: rgba(0, 180, 216, 0.2);
-          color: var(--accent-blue);
-          border: 1px solid rgba(0, 180, 216, 0.3);
+          color: #38bdf8;
+          border: 1px solid rgba(0, 180, 216, 0.35);
         }
 
         .badge.moderator {
-          background: rgba(245, 158, 11, 0.16);
+          background: rgba(245, 158, 11, 0.18);
           color: #fbbf24;
-          border: 1px solid rgba(245, 158, 11, 0.32);
+          border: 1px solid rgba(245, 158, 11, 0.35);
         }
 
         .user-balance {
@@ -395,12 +435,55 @@ export const SidebarLayout: React.FC = () => {
           color: var(--success);
           font-weight: 600;
         }
-        .balance-actions { display:flex; align-items:center; justify-content:space-between; gap:.55rem; }
-        .quick-deposit-link { flex:0 0 auto; padding:.32rem .55rem; border:1px solid rgba(16,185,129,.35); border-radius:7px; background:rgba(16,185,129,.1); color:var(--success); font-size:.72rem; font-weight:700; text-decoration:none; white-space:nowrap; transition:var(--transition-fast); }
-        .quick-deposit-link:hover,.quick-deposit-link.active { background:rgba(16,185,129,.2); border-color:var(--success); transform:translateY(-1px); }
-        .account-widget-links { display:grid; grid-template-columns:1fr 1fr; gap:.4rem; margin-top:.7rem; padding-top:.65rem; border-top:1px solid rgba(255,255,255,.07); }
-        .account-widget-links a { display:flex; align-items:center; justify-content:center; gap:.35rem; padding:.42rem .3rem; border-radius:7px; color:var(--text-secondary); font-size:.72rem; text-align:center; }
-        .account-widget-links a:hover,.account-widget-links a.active { background:rgba(157,78,221,.12); color:var(--accent-purple); }
+        .user-balance-card {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+          padding: 0.52rem 0.65rem;
+          border-radius: 8px;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.07);
+          text-decoration: none;
+          transition: var(--transition-fast);
+          cursor: pointer;
+        }
+        .user-balance-card:hover, .user-balance-card.active {
+          background: rgba(16, 185, 129, 0.08);
+          border-color: rgba(16, 185, 129, 0.25);
+          transform: translateY(-1px);
+        }
+        .balance-card-main {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .balance-card-main .user-balance {
+          display: flex;
+          align-items: center;
+          gap: 0.45rem;
+          font-weight: 700;
+          font-size: 0.95rem;
+          color: var(--success);
+        }
+        .balance-card-main .coin-icon {
+          color: var(--success);
+        }
+        .balance-arrow {
+          color: var(--text-muted);
+          transition: transform 0.2s ease, color 0.2s ease;
+        }
+        .user-balance-card:hover .balance-arrow {
+          color: var(--success);
+          transform: translateX(2px);
+        }
+        .balance-hint-text {
+          font-size: 0.68rem;
+          color: var(--text-muted);
+          line-height: 1.25;
+        }
+        .user-balance-card:hover .balance-hint-text {
+          color: rgba(255, 255, 255, 0.7);
+        }
 
         .storage-widget {
           margin-top: 0.65rem;
@@ -476,7 +559,23 @@ export const SidebarLayout: React.FC = () => {
           text-decoration: underline;
         }
 
-        .admin-profile-link { display:inline-block; margin-top:.55rem; font-size:.78rem; color:var(--accent-blue); }
+        .user-stats-card {
+          background: rgba(255, 255, 255, 0.035);
+          border: 1px solid rgba(255, 255, 255, 0.07);
+          border-radius: var(--radius-md);
+          padding: 0.85rem 0.95rem;
+          margin-bottom: 1.25rem;
+          flex-shrink: 0;
+          transition: all 0.25s ease;
+          cursor: pointer;
+        }
+
+        .user-stats-card:hover {
+          background: rgba(255, 255, 255, 0.06);
+          border-color: rgba(0, 180, 216, 0.25);
+          transform: translateY(-2px);
+          box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+        }
 
         .coin-icon {
           color: var(--success);
@@ -485,53 +584,97 @@ export const SidebarLayout: React.FC = () => {
         .nav-links {
           display: flex;
           flex-direction: column;
-          gap: 0.5rem;
+          gap: 0.45rem;
           flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          padding-right: 4px;
         }
 
         .nav-item {
           display: flex;
           align-items: center;
-          gap: 0.75rem;
+          gap: 0.8rem;
           padding: 0.75rem 1rem;
-          color: var(--text-secondary);
+          color: #94a3b8;
           border-radius: var(--radius-sm);
           font-weight: 500;
-          transition: var(--transition-fast);
+          font-size: 0.92rem;
+          border: 1px solid transparent;
+          border-left: 3.5px solid transparent;
+          transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+          flex-shrink: 0;
+          text-decoration: none;
+          position: relative;
+        }
+
+        .nav-item svg {
+          color: inherit;
+          transition: transform 0.22s ease, color 0.22s ease, filter 0.22s ease;
+          flex-shrink: 0;
         }
 
         .nav-item:hover {
-          color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.03);
-          transform: translateX(4px);
+          color: #ffffff;
+          background: rgba(157, 78, 221, 0.1);
+          border-color: rgba(157, 78, 221, 0.25);
+          border-left-color: rgba(192, 132, 252, 0.5);
+          transform: translateX(5px);
+          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+        }
+
+        .nav-item:hover svg {
+          color: #c084fc;
+          transform: scale(1.12);
+          filter: drop-shadow(0 0 6px rgba(192, 132, 252, 0.4));
         }
 
         .nav-item.active {
-          color: var(--text-primary);
-          background: rgba(157, 78, 221, 0.12);
-          border-left: 3px solid var(--accent-purple);
-          box-shadow: inset 5px 0 10px rgba(157, 78, 221, 0.05);
+          color: #ffffff;
+          font-weight: 600;
+          background: rgba(157, 78, 221, 0.18);
+          border-color: rgba(157, 78, 221, 0.3);
+          border-left: 3.5px solid #c084fc;
+          box-shadow: inset 8px 0 16px rgba(157, 78, 221, 0.1), 0 4px 16px rgba(157, 78, 221, 0.12);
+        }
+
+        .nav-item.active svg {
+          color: #c084fc;
+          filter: drop-shadow(0 0 6px rgba(192, 132, 252, 0.5));
         }
 
         .logout-btn {
           display: flex;
           align-items: center;
           gap: 0.75rem;
-          padding: 0.75rem 1rem;
-          color: var(--danger);
-          background: transparent;
-          border: none;
+          padding: 0.75rem 1.1rem;
+          color: #f87171;
+          background: rgba(239, 68, 68, 0.08);
+          border: 1px solid rgba(239, 68, 68, 0.22);
           cursor: pointer;
-          font-weight: 500;
-          font-size: 1rem;
-          border-radius: var(--radius-sm);
-          transition: var(--transition-fast);
-          margin-top: 1rem;
+          font-weight: 600;
+          font-size: 0.92rem;
+          border-radius: 10px;
+          transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+          margin-top: 0.85rem;
+          flex-shrink: 0;
+        }
+
+        .logout-btn svg {
+          transition: transform 0.22s ease, filter 0.22s ease;
         }
 
         .logout-btn:hover {
-          background: rgba(239, 68, 68, 0.08);
-          transform: translateX(4px);
+          background: rgba(239, 68, 68, 0.2);
+          border-color: rgba(239, 68, 68, 0.45);
+          color: #ffffff;
+          transform: translateX(5px);
+          box-shadow: 0 4px 16px rgba(239, 68, 68, 0.2);
+        }
+
+        .logout-btn:hover svg {
+          transform: scale(1.12) translateX(2px);
+          filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.6));
         }
 
         .main-content {

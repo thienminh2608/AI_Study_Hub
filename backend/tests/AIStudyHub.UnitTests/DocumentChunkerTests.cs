@@ -33,6 +33,16 @@ public class DocumentChunkerTests
         Assert.Contains("a) Phương pháp", headings!);
     }
 
+    [Fact]
+    public void Chunk_Pins_DocumentVersionId_To_Generated_Chunks()
+    {
+        int versionId = 99;
+        var chunks = DocumentChunker.Chunk(1, "Chương 1. Giới thiệu tổng quan hệ thống.", DateTime.UtcNow, null, versionId);
+
+        Assert.Single(chunks);
+        Assert.Equal(versionId, chunks[0].DocumentVersionId);
+    }
+
     private static bool HasSharedWords(string first, string second)
     {
         var tail = first.Split(' ', StringSplitOptions.RemoveEmptyEntries).TakeLast(10).ToHashSet();

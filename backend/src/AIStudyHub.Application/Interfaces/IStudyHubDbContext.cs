@@ -88,10 +88,23 @@ public interface IStudyHubDbContext
     DbSet<AuditLog> AuditLogs { get; set; }
     DbSet<BalanceLedger> BalanceLedgers { get; set; }
     DbSet<SubscriptionHistory> SubscriptionHistories { get; set; }
-
+    DbSet<DocumentProcessingJob> DocumentProcessingJobs { get; set; }
+    DbSet<AiUsage> AiUsages { get; set; }
+    DbSet<SubjectCategory> SubjectCategories { get; set; }
+    DbSet<ChatMessageCitation> ChatMessageCitations { get; set; }
+    DbSet<RefreshTokenSession> RefreshTokenSessions { get; set; }
+    DbSet<AuthOtpChallenge> AuthOtpChallenges { get; set; }
+    DbSet<PasswordResetGrant> PasswordResetGrants { get; set; }
+    DbSet<PaymentWebhookEvent> PaymentWebhookEvents { get; set; }
+    DbSet<PaymentReconciliationCase> PaymentReconciliationCases { get; set; }
+    DbSet<AuthOtpRateLimit> AuthOtpRateLimits { get; set; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     DatabaseFacade Database
+    {
+        get;
+    }
+    Microsoft.EntityFrameworkCore.ChangeTracking.ChangeTracker ChangeTracker
     {
         get;
     }

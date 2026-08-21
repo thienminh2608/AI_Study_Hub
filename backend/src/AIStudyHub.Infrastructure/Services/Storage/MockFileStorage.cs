@@ -41,6 +41,13 @@ public class MockFileStorage : IFileStorage
         return _memoryFiles.ContainsKey(relativePath);
     }
 
+    public Stream OpenReadStream(string relativePath)
+    {
+        if (!_memoryFiles.TryGetValue(relativePath, out var data))
+            throw new FileNotFoundException("File not found on storage.", relativePath);
+        return new MemoryStream(data, writable: false);
+    }
+
     // Diagnostic helper for unit tests
     public byte[]? GetFileData(string relativePath)
     {

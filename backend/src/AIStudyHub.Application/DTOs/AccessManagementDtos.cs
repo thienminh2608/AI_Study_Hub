@@ -31,6 +31,11 @@ public class ItemAccessSettingsDto
     public int OwnerUserId { get; set; }
     public string OwnerName { get; set; } = null!;
     public string GeneralAccess { get; set; } = "RESTRICTED"; // RESTRICTED, LINK, PUBLIC
+    public string? ModerationStatus { get; set; } // NOT_REQUESTED, PENDING_REVIEW, APPROVED, REJECTED, RESTRICTED
+    public string? RequestedVisibility { get; set; }
+    public string? SharingPermission { get; set; }
+    public string? ModerationNote { get; set; }
+    public DateTime? ModerationSubmittedAt { get; set; }
     public bool IsInherited { get; set; }
     public int? ParentFolderId { get; set; }
     public List<UserShareDto> Shares { get; set; } = new();

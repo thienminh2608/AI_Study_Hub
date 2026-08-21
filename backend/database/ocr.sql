@@ -1,6 +1,10 @@
 -- Run this script to update the database schema for OCR-related fields in the document_extracted_text table and create the document_ocr_regions table if they do not already exist.
 -- This script checks for the existence of the specified columns and table before attempting to create them, ensuring that it can be run multiple times without causing errors.
 -- Add new columns to the document_extracted_text table if they do not already exist
+IF COL_LENGTH('documents', 'extraction_coverage_percent') IS NULL
+    ALTER TABLE documents ADD extraction_coverage_percent float NULL;
+GO
+
 IF COL_LENGTH('document_extracted_text', 'total_pages') IS NULL
     ALTER TABLE document_extracted_text ADD total_pages int NOT NULL CONSTRAINT DF_document_extracted_text_total_pages DEFAULT 0;
 IF COL_LENGTH('document_extracted_text', 'readable_pages') IS NULL

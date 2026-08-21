@@ -19,4 +19,16 @@ public class TestClock : IClock
         Now = Now.AddHours(hours);
         UtcNow = UtcNow.AddHours(hours);
     }
+
+    public void AdvanceMinutes(int minutes)
+    {
+        Now = Now.AddMinutes(minutes);
+        UtcNow = UtcNow.AddMinutes(minutes);
+    }
+
+    public void AdvanceSeconds(int seconds)
+    {
+        Now = Now.AddSeconds(seconds);
+        UtcNow = UtcNow.AddSeconds(seconds);
+    }
 }

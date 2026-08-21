@@ -49,6 +49,9 @@ public class DocumentResponseDto
     {
         get; set;
     }
+    public string GeneralAccess { get; set; } = "RESTRICTED";
+    public bool IsShareLinkRevoked { get; set; }
+    public DateTime? ShareLinkExpiresAt { get; set; }
     public decimal? TotalReportScore
     {
         get; set;
@@ -251,6 +254,10 @@ public class DocumentReportResponseDto
         get; set;
     }
     public DateTime? RestrictedAt
+    {
+        get; set;
+    }
+    public int? ReportedVersionId
     {
         get; set;
     }

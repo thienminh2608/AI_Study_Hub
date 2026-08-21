@@ -64,7 +64,7 @@ public class FolderService : IFolderService
         string cleanName = dto.FolderName.Trim();
         if (string.IsNullOrWhiteSpace(cleanName))
             throw new ArgumentException("Tên thư mục không được để trống.");
-        if (dto.ParentFolderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == dto.ParentFolderId && f.UserId == userId))
+        if (dto.ParentFolderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == dto.ParentFolderId && f.UserId == userId && !f.IsDeleted))
             throw new UnauthorizedAccessException("Thư mục cha không hợp lệ.");
         bool hasDuplicate = await CheckDuplicateFolderNameAsync(userId, cleanName, dto.ParentFolderId);
         if (hasDuplicate)
@@ -170,7 +170,7 @@ public class FolderService : IFolderService
 
     public async Task<bool> CheckDuplicateFolderNameAsync(int userId, string folderName, int? parentFolderId)
     {
-        var query = _dbContext.Folders.Where(f => f.UserId == userId && f.FolderName == folderName);
+        var query = _dbContext.Folders.Where(f => f.UserId == userId && f.FolderName == folderName && !f.IsDeleted);
         if (parentFolderId.HasValue)
         {
             query = query.Where(f => f.ParentFolderId == parentFolderId.Value);

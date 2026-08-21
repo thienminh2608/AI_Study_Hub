@@ -71,9 +71,11 @@ public sealed class ChunkBenchmarkTests(ITestOutputHelper output)
         Seed(db);
         await db.SaveChangesAsync();
         using var storage = new TempStorage();
-        var service = new DocumentService(db, storage, new TestClock());
+        var queue = new FakeDocumentProcessingQueue();
+        var service = new DocumentService(db, storage, new TestClock(), queue, new AIStudyHub.Infrastructure.Services.Gemini.MockGeminiService(), null!);
         var sw = Stopwatch.StartNew();
-        await service.UploadDocumentAsync(1, null, "benchmark.txt", "txt", bytes.Length, new MemoryStream(bytes));
+        var docDto = await service.UploadDocumentAsync(1, null, "benchmark.txt", "txt", bytes.Length, new MemoryStream(bytes));
+        await service.ProcessExtractionAsync(docDto.DocumentId);
         sw.Stop();
         var upload = sw.Elapsed.TotalMilliseconds;
         db.ChangeTracker.Clear();
@@ -129,10 +131,21 @@ public sealed class ChunkBenchmarkTests(ITestOutputHelper output)
         public void MoveFile(string source, string destination) => File.Move(GetPhysicalPath(source), GetPhysicalPath(destination), true);
         public bool FileExists(string path) => File.Exists(GetPhysicalPath(path));
         public string GetPhysicalPath(string path) => Path.Combine(root, path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+        public Stream OpenReadStream(string path) => new FileStream(GetPhysicalPath(path), FileMode.Open, FileAccess.Read, FileShare.Read);
         public void Dispose()
         {
             if (Directory.Exists(root))
                 Directory.Delete(root, true);
         }
+    }
+
+    private sealed class FakeDocumentProcessingQueue : IDocumentProcessingQueue
+    {
+        public Task<DocumentProcessingJob> EnqueueJobAsync(int documentId, int? versionId = null) =>
+            Task.FromResult(new DocumentProcessingJob { DocumentId = documentId, Status = "QUEUED" });
+        public Task<DocumentProcessingJob?> ClaimNextJobAsync(string workerId, CancellationToken cancellationToken) =>
+            Task.FromResult<DocumentProcessingJob?>(null);
+        public Task CompleteJobAsync(int jobId) => Task.CompletedTask;
+        public Task FailJobAsync(int jobId, string errorMessage) => Task.CompletedTask;
     }
 }

@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { api, type DocumentVersion } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
-import { X, Upload, History, RotateCcw, FileText, Loader } from 'lucide-react';
+import { X, Upload, History, RotateCcw, FileText, Loader, Trash2 } from 'lucide-react';
 import { formatDateTime } from '../utils/dateTime';
 
 interface DocumentVersionHistoryModalProps {
@@ -23,8 +23,10 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
   const [fileInput, setFileInput] = useState<File | null>(null);
   const [summaryInput, setSummaryInput] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.versions.getVersionHistory(documentId);
@@ -34,13 +36,13 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
     } finally {
       setLoading(false);
     }
-  };
+  }, [documentId, notify]);
 
   useEffect(() => {
     if (isOpen) {
       fetchHistory();
     }
-  }, [isOpen, documentId]);
+  }, [isOpen, fetchHistory]);
 
   if (!isOpen) return null;
 
@@ -49,17 +51,32 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
     if (!fileInput) return;
 
     setUploading(true);
+    setUploadPercent(0);
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      await api.versions.uploadNewVersion(documentId, fileInput, summaryInput);
+      await api.versions.uploadNewVersion(
+        documentId,
+        fileInput,
+        summaryInput,
+        (pct) => setUploadPercent(pct),
+        controller.signal,
+      );
       notify('Tải lên phiên bản mới thành công!', 'success');
       setFileInput(null);
       setSummaryInput('');
       await fetchHistory();
       if (onVersionChanged) onVersionChanged();
     } catch (err: any) {
-      notify(err.message || 'Lỗi tải phiên bản mới.', 'error');
+      if (controller.signal.aborted) {
+        notify('Đã hủy tải lên phiên bản mới.', 'info');
+      } else {
+        notify(err.message || 'Lỗi tải phiên bản mới.', 'error');
+      }
     } finally {
       setUploading(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -80,6 +97,26 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
       if (onVersionChanged) onVersionChanged();
     } catch (err: any) {
       notify(err.message || 'Lỗi khôi phục phiên bản.', 'error');
+    }
+  };
+
+  const handleDeleteVersion = async (versionId: number, versionNumber: number) => {
+    if (
+      !(await confirm({
+        title: `Xóa phiên bản v${versionNumber}`,
+        message: `Bạn có chắc chắn muốn xóa vĩnh viễn phiên bản v${versionNumber} này không?`,
+        confirmLabel: 'Xóa phiên bản',
+      }))
+    )
+      return;
+
+    try {
+      await api.versions.deleteVersion(documentId, versionId);
+      notify(`Đã xóa phiên bản v${versionNumber} thành công!`, 'success');
+      await fetchHistory();
+      if (onVersionChanged) onVersionChanged();
+    } catch (err: any) {
+      notify(err.message || 'Lỗi xóa phiên bản.', 'error');
     }
   };
 
@@ -115,13 +152,33 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
               onChange={(e) => setSummaryInput(e.target.value)}
               className="version-text-input"
             />
-            <button
-              type="submit"
-              disabled={!fileInput || uploading}
-              className="submit-version-btn"
-            >
-              {uploading ? 'Đang tải lên...' : 'Tải lên phiên bản mới'}
-            </button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                type="submit"
+                disabled={!fileInput || uploading}
+                className="submit-version-btn"
+                style={{ flex: 1 }}
+              >
+                {uploading ? `Đang tải lên (${uploadPercent}%)...` : 'Tải lên phiên bản mới'}
+              </button>
+              {uploading && uploadPercent < 100 && (
+                <button
+                  type="button"
+                  onClick={() => abortControllerRef.current?.abort()}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    color: '#fca5a5',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Hủy
+                </button>
+              )}
+            </div>
           </form>
 
           {/* History timeline list */}
@@ -154,13 +211,24 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
                     </div>
 
                     {!v.isCurrent && (
-                      <button
-                        onClick={() => handleRestoreVersion(v.versionId)}
-                        className="restore-version-btn"
-                      >
-                        <RotateCcw size={13} />
-                        <span>Khôi phục</span>
-                      </button>
+                      <div className="version-item-actions">
+                        <button
+                          onClick={() => handleRestoreVersion(v.versionId)}
+                          className="restore-version-btn"
+                          title="Khôi phục phiên bản này"
+                        >
+                          <RotateCcw size={13} />
+                          <span>Khôi phục</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteVersion(v.versionId, v.versionNumber)}
+                          className="delete-version-btn"
+                          title="Xóa phiên bản này"
+                        >
+                          <Trash2 size={13} />
+                          <span>Xóa</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -393,6 +461,12 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
           color: var(--text-muted);
         }
 
+        .version-item-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+        }
+
         .restore-version-btn {
           display: inline-flex;
           align-items: center;
@@ -405,6 +479,33 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
           font-size: 0.78rem;
           font-weight: 600;
           cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .restore-version-btn:hover {
+          background: rgba(255, 255, 255, 0.15);
+          color: #fff;
+        }
+
+        .delete-version-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3rem;
+          background: rgba(239, 68, 68, 0.12);
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          color: #fca5a5;
+          padding: 0.35rem 0.65rem;
+          border-radius: 6px;
+          font-size: 0.78rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .delete-version-btn:hover {
+          background: rgba(239, 68, 68, 0.25);
+          color: #fff;
+          border-color: #ef4444;
         }
 
         .version-modal-footer {

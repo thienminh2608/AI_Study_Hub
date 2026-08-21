@@ -15,16 +15,23 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        // 1. Configure Database Connection (SQL Server)
-        services.AddDbContext<StudyHubDbContext>(options =>
-            options.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
+        // 1. Configure Database Connection (SQL Server or Test In-Memory Provider)
+        bool isTesting = configuration.GetValue<bool>("Testing:UseInMemoryDb")
+                      || "Testing".Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), StringComparison.OrdinalIgnoreCase)
+                      || "Testing".Equals(configuration["Environment"], StringComparison.OrdinalIgnoreCase);
+        if (!isTesting)
+        {
+            services.AddDbContext<StudyHubDbContext>(options =>
+                options.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
+        }
 
         // Register the DB interface to resolve the same instance
         services.AddScoped<IStudyHubDbContext>(provider => provider.GetRequiredService<StudyHubDbContext>());
 
-        // 2. Register File Storage, System Clock
+        // 2. Register File Storage, System Clock, Ledger Service
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<IFileStorage, LocalFileStorage>();
+        services.AddScoped<IBalanceLedgerService, BalanceLedgerService>();
         services.AddHttpClient<IOcrService, HttpOcrService>(client =>
         {
             client.Timeout = TimeSpan.FromSeconds(configuration.GetValue("Ocr:TimeoutSeconds", 120));
@@ -58,6 +65,10 @@ public static class DependencyInjection
 
         // 6. Register Hosted background service for renewal schedules
         services.AddHostedService<SubscriptionRenewalScheduler>();
+
+        // 7. Register PayOS Service and Payment Reconciliation
+        services.AddHttpClient<IPayOsService, PayOsService>();
+        services.AddHostedService<PaymentReconciliationHostedService>();
 
         return services;
     }

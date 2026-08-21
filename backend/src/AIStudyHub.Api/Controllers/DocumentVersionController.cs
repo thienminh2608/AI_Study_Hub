@@ -51,6 +51,13 @@ public class DocumentVersionController : ControllerBase
         await _versionService.RestoreVersionAsync(documentId, versionId, GetCurrentUserId());
         return Ok(new { message = "Version restored successfully" });
     }
+
+    [HttpDelete("{versionId}")]
+    public async Task<IActionResult> DeleteVersion(int documentId, int versionId)
+    {
+        await _versionService.DeleteVersionAsync(documentId, versionId, GetCurrentUserId());
+        return Ok(new { message = "Đã xóa phiên bản thành công" });
+    }
 }
 
 public class UploadVersionRequest

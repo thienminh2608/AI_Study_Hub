@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { api } from '../services/api';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { api, type SubjectTreeNode } from '../services/api';
 import {
   Folder,
   FolderOpen,
@@ -14,15 +14,14 @@ import {
   Clock3,
   X,
   Share2,
-  Star,
-  ArrowUpDown,
   History,
-  Shield,
   LayoutGrid,
   List,
   CheckSquare,
   Square,
   Download,
+  Eye,
+  Users,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { FileTypeIcon } from '../components/FileTypeIcon';
@@ -52,10 +51,14 @@ interface DocumentItem {
   viewCount?: number;
   bookmarkCount?: number;
   subject?: string;
+  uploaderName?: string;
   requiresAppeal?: boolean;
   publicReviewBlocked?: boolean;
   appealStatus?: string;
 }
+
+const flattenSubjectNodes = (nodes: SubjectTreeNode[]): SubjectTreeNode[] =>
+  nodes.flatMap((node) => [node, ...flattenSubjectNodes(node.children || [])]);
 
 const getCleanTitle = (title: string, ext?: string) => {
   if (!title) return '';
@@ -98,20 +101,8 @@ export const Dashboard: React.FC = () => {
   });
   const [audienceDetail, setAudienceDetail] = useState<any | null>(null);
   const [showPendingReviews, setShowPendingReviews] = useState(false);
-  const [pendingNameDirection, setPendingNameDirection] = useState<'asc' | 'desc'>('asc');
-  const [shareTarget, setShareTarget] = useState<DocumentItem | null>(null);
-  const [friends, setFriends] = useState<any[]>([]);
-  const [sharedUserIds, setSharedUserIds] = useState<Set<number>>(new Set());
-  const [shareDraftUserIds, setShareDraftUserIds] = useState<Set<number>>(new Set());
-  const [favoriteFriendIds, setFavoriteFriendIds] = useState<Set<number>>(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem('favorite-share-friends') ?? '[]'));
-    } catch {
-      return new Set();
-    }
-  });
-  const [friendNameDirection, setFriendNameDirection] = useState<'asc' | 'desc'>('asc');
-  const [savingShares, setSavingShares] = useState(false);
+  const [pendingSortKey, setPendingSortKey] = useState('title');
+  const [pendingSortDirection, setPendingSortDirection] = useState<'asc' | 'desc'>('asc');
   const [sharedWithMe, setSharedWithMe] = useState<DocumentItem[]>([]);
 
   // Modals & Forms
@@ -120,7 +111,10 @@ export const Dashboard: React.FC = () => {
 
   // Upload States
   const [uploading, setUploading] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [uploadProgress, setUploadProgress] = useState('');
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
+  const pollingTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const [uploadDraft, setUploadDraft] = useState<{
     file: File;
     title: string;
@@ -137,12 +131,116 @@ export const Dashboard: React.FC = () => {
   const [accessModalItem, setAccessModalItem] = useState<{ type: 'document' | 'folder'; id: number } | null>(null);
   const [versionModalDocId, setVersionModalDocId] = useState<number | null>(null);
 
+  // Subject Categories
+  const [approvedSubjects, setApprovedSubjects] = useState<string[]>([
+    'Toán học', 'Vật lý', 'Hóa học', 'Sinh học', 'Ngữ văn', 'Tiếng Anh', 'Tin học', 'Kinh tế', 'Kỹ năng mềm', 'Triết học', 'Lịch sử', 'Địa lý', 'Khác'
+  ]);
+  const [subjectTree, setSubjectTree] = useState<SubjectTreeNode[]>([]);
+  const [selectedRootSubjectId, setSelectedRootSubjectId] = useState<number | null>(null);
+  const [customSubjectInput, setCustomSubjectInput] = useState('');
+  const selectedUploadRoot = subjectTree.find((node) => node.subjectId === selectedRootSubjectId) ?? null;
+  const uploadChildSubjects = selectedUploadRoot ? flattenSubjectNodes(selectedUploadRoot.children || []) : [];
+
   // Task 16: List/Grid View & Bulk Actions
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (localStorage.getItem('dashboard-view-mode') as 'grid' | 'list') || 'grid';
   });
   const [selectedDocIds, setSelectedDocIds] = useState<Set<number>>(new Set());
   const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [draggedDocIds, setDraggedDocIds] = useState<number[]>([]);
+  const [dragOverFolderId, setDragOverFolderId] = useState<number | null>(null);
+  const [docSortKey, setDocSortKey] = useState<string>('createdAt');
+  const [docSortDirection, setDocSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [sharedSortKey, setSharedSortKey] = useState<string>('title');
+  const [sharedSortDirection, setSharedSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  const toggleDocSort = (key: string) => {
+    if (docSortKey === key) {
+      setDocSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setDocSortKey(key);
+      setDocSortDirection('asc');
+    }
+  };
+
+  const sortedDocuments = React.useMemo(() => {
+    const list = [...documents];
+    if (!docSortKey) return list;
+    return list.sort((a, b) => {
+      let av: any = (a as any)[docSortKey] ?? '';
+      let bv: any = (b as any)[docSortKey] ?? '';
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return docSortDirection === 'asc' ? av - bv : bv - av;
+      }
+      const keyLower = docSortKey.toLowerCase();
+      if (keyLower.includes('at') || keyLower.includes('date') || keyLower.includes('time')) {
+        const at = new Date(av || 0).getTime();
+        const bt = new Date(bv || 0).getTime();
+        return docSortDirection === 'asc' ? at - bt : bt - at;
+      }
+      return docSortDirection === 'asc'
+        ? String(av).localeCompare(String(bv), 'vi')
+        : String(bv).localeCompare(String(av), 'vi');
+    });
+  }, [documents, docSortKey, docSortDirection]);
+  const sortedSharedDocuments = React.useMemo(() => [...sharedWithMe].sort((a, b) => {
+    const av: any = (a as any)[sharedSortKey] ?? '';
+    const bv: any = (b as any)[sharedSortKey] ?? '';
+    const result = typeof av === 'number' && typeof bv === 'number'
+      ? av - bv
+      : String(av).localeCompare(String(bv), 'vi', { numeric: true });
+    return sharedSortDirection === 'asc' ? result : -result;
+  }), [sharedWithMe, sharedSortKey, sharedSortDirection]);
+  const sortedPendingReviews = React.useMemo(() => [...(analytics.pendingReviewDocuments ?? [])].sort((a: any, b: any) => {
+    const value = (item: any) => pendingSortKey === 'status'
+      ? item.moderationStatus || item.status || ''
+      : item[pendingSortKey] ?? '';
+    const av = value(a);
+    const bv = value(b);
+    const result = /At$/.test(pendingSortKey)
+      ? new Date(av || 0).getTime() - new Date(bv || 0).getTime()
+      : String(av).localeCompare(String(bv), 'vi', { numeric: true });
+    return pendingSortDirection === 'asc' ? result : -result;
+  }), [analytics.pendingReviewDocuments, pendingSortKey, pendingSortDirection]);
+
+  const renderDocSortHeader = (key: string, label: string) => (
+    <button
+      type="button"
+      onClick={() => toggleDocSort(key)}
+      style={{
+        background: 'none',
+        border: 'none',
+        color: docSortKey === key ? 'var(--accent-blue)' : 'inherit',
+        fontWeight: docSortKey === key ? 700 : 'inherit',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.25rem',
+        fontSize: 'inherit',
+        textTransform: 'inherit',
+        padding: 0,
+      }}
+    >
+      <span>{label}</span>
+      <span>{docSortKey === key ? (docSortDirection === 'asc' ? ' ↑' : ' ↓') : ' ↕'}</span>
+    </button>
+  );
+  const renderSharedSortHeader = (key: string, label: string) => (
+    <button type="button" className="dashboard-sort-header" onClick={() => {
+      if (sharedSortKey === key) setSharedSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
+      else { setSharedSortKey(key); setSharedSortDirection('asc'); }
+    }}>
+      {label} {sharedSortKey === key ? (sharedSortDirection === 'asc' ? '↑' : '↓') : '↕'}
+    </button>
+  );
+  const renderPendingSortHeader = (key: string, label: string) => (
+    <button type="button" onClick={() => {
+      if (pendingSortKey === key) setPendingSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
+      else { setPendingSortKey(key); setPendingSortDirection('asc'); }
+    }}>
+      {label} {pendingSortKey === key ? (pendingSortDirection === 'asc' ? '↑' : '↓') : '↕'}
+    </button>
+  );
 
   const toggleViewMode = (mode: 'grid' | 'list') => {
     setViewMode(mode);
@@ -210,8 +308,64 @@ export const Dashboard: React.FC = () => {
   const [askingDocumentId, setAskingDocumentId] = useState<number | null>(null);
   const [deleteDocumentTarget, setDeleteDocumentTarget] = useState<DocumentItem | null>(null);
 
+  // Background Polling for AI Processing State
+  const pollDocumentStatus = useCallback((docId: number) => {
+    if (pollingTimersRef.current.has(docId)) return;
+
+    let delay = 2000;
+    const maxDelay = 10000;
+    const startTime = Date.now();
+    const maxDuration = 120000; // 2 minutes timeout
+
+    const checkStatus = async () => {
+      if (Date.now() - startTime > maxDuration) {
+        pollingTimersRef.current.delete(docId);
+        return;
+      }
+
+      try {
+        const details = await api.document.getById(docId);
+        const status = details.aiParsingStatus;
+
+        if (status === 'READY') {
+          setDocuments((prev) =>
+            prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: 'READY' } : d)),
+          );
+          notify(`Tài liệu "${details.title}" đã được bóc tách và sẵn sàng cho AI!`, 'success');
+          pollingTimersRef.current.delete(docId);
+          return;
+        }
+
+        if (status === 'FAILED') {
+          setDocuments((prev) =>
+            prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: 'FAILED' } : d)),
+          );
+          notify(`Xử lý nội dung AI cho tài liệu "${details.title}" thất bại.`, 'error');
+          pollingTimersRef.current.delete(docId);
+          return;
+        }
+
+        // Non-terminal: update active status in list
+        setDocuments((prev) =>
+          prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: status } : d)),
+        );
+
+        // Schedule next poll with backoff
+        delay = Math.min(delay * 1.5, maxDelay);
+        const timer = setTimeout(checkStatus, delay);
+        pollingTimersRef.current.set(docId, timer);
+      } catch {
+        // If 401/403/404 or connection loss, stop polling
+        pollingTimersRef.current.delete(docId);
+      }
+    };
+
+    const initialTimer = setTimeout(checkStatus, delay);
+    pollingTimersRef.current.set(docId, initialTimer);
+  }, [notify]);
+
   // Load Folder Content
-  const loadFolderContent = async () => {
+  const loadFolderContent = useCallback(async () => {
     setLoading(true);
     try {
       // 1. Fetch child folders and documents
@@ -219,6 +373,15 @@ export const Dashboard: React.FC = () => {
       const docsData = await api.document.getUserDocuments(currentFolderId);
       setSubFolders(foldersData);
       setDocuments(docsData as any);
+
+      // Auto-resume background polling for any non-terminal documents after reload
+      if (Array.isArray(docsData)) {
+        docsData.forEach((d: any) => {
+          if (['QUEUED', 'PENDING', 'PROCESSING', 'CHUNKING'].includes(d.aiParsingStatus)) {
+            pollDocumentStatus(d.documentId);
+          }
+        });
+      }
 
       // 2. Fetch all folders (for Sidebar Tree)
       const allFoldersData = await api.folder.getAllFolders();
@@ -248,13 +411,77 @@ export const Dashboard: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentFolderId, notify, pollDocumentStatus]);
 
-  // Folder navigation is the sole trigger; the loader reads the latest state from this render.
-  // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     loadFolderContent();
-  }, [currentFolderId]);
+  }, [loadFolderContent]);
+
+  const startDocumentDrag = (event: React.DragEvent, documentId: number) => {
+    const ids = selectedDocIds.has(documentId) ? Array.from(selectedDocIds) : [documentId];
+    setDraggedDocIds(ids);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-ai-study-hub-document-ids', JSON.stringify(ids));
+    event.dataTransfer.setData('text/plain', String(documentId));
+  };
+
+  const dropDocumentsIntoFolder = async (event: React.DragEvent, folder?: FolderItem) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOverFolderId(null);
+    let ids = draggedDocIds;
+    try {
+      const payload = event.dataTransfer.getData('application/x-ai-study-hub-document-ids');
+      if (payload) ids = JSON.parse(payload);
+    } catch {
+      // Use the in-memory drag payload when browser dataTransfer parsing fails.
+    }
+    if (!ids.length) return;
+    if ((folder?.folderId ?? undefined) === currentFolderId) {
+      notify('Tài liệu đã nằm trong thư mục này.', 'info');
+      setDraggedDocIds([]);
+      return;
+    }
+    setBulkProcessing(true);
+    try {
+      await api.documentExtra.bulkMove(ids, folder?.folderId ?? null);
+      setSelectedDocIds(new Set());
+      notify(`Đã chuyển ${ids.length} tài liệu vào ${folder ? `thư mục “${folder.folderName}”` : 'thư mục gốc'}.`, 'success');
+      await loadFolderContent();
+    } catch (err: any) {
+      notify(err.message || 'Không thể chuyển tài liệu vào thư mục.', 'error');
+    } finally {
+      setBulkProcessing(false);
+      setDraggedDocIds([]);
+    }
+  };
+
+  // Cleanup active polling timers and abort ongoing uploads on unmount
+  useEffect(() => {
+    const activeTimers = pollingTimersRef.current;
+    return () => {
+      activeTimers.forEach((timer) => clearTimeout(timer));
+      activeTimers.clear();
+      if (uploadAbortControllerRef.current) {
+        uploadAbortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    Promise.all([api.subjects.getApproved(), api.subjects.getTree('APPROVED')]).then(([list, tree]) => {
+      if (list && list.length > 0) {
+        const names = list.map((s) => s.name);
+        if (!names.includes('Khác')) names.push('Khác');
+        setApprovedSubjects(names);
+      }
+      if (Array.isArray(tree)) {
+        setSubjectTree(tree);
+        const other = tree.find((node) => node.name === 'Khác');
+        setSelectedRootSubjectId((current) => current ?? other?.subjectId ?? tree[0]?.subjectId ?? null);
+      }
+    }).catch(() => {});
+  }, []);
 
   // Folder CRUD
   const handleCreateFolder = async (e: React.FormEvent) => {
@@ -301,6 +528,8 @@ export const Dashboard: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     const title = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+    setCustomSubjectInput('');
+    setSelectedRootSubjectId(subjectTree.find((node) => node.name === 'Khác')?.subjectId ?? subjectTree[0]?.subjectId ?? null);
     setUploadDraft({ file, title, subject: 'Khác', sharingPermission: 'PRIVATE' });
     e.target.value = '';
   };
@@ -310,11 +539,26 @@ export const Dashboard: React.FC = () => {
     if (!uploadDraft || !uploadDraft.title.trim() || !uploadDraft.subject.trim()) return;
     const { file, subject, sharingPermission } = uploadDraft;
     const finalTitle = uploadDraft.title.trim();
+
     setUploading(true);
-    setUploadProgress('Đang tải file lên máy chủ...');
+    setUploadPercent(0);
+    setUploadProgress('Đang tải file lên máy chủ (0%)...');
+
+    const controller = new AbortController();
+    uploadAbortControllerRef.current = controller;
+
     try {
       const fileExt = file.name.split('.').pop() || '';
-      const response = await api.document.upload(file, currentFolderId);
+      const response = await api.document.upload(
+        file,
+        currentFolderId,
+        (pct) => {
+          setUploadPercent(pct);
+          setUploadProgress(`Đang tải file lên máy chủ (${pct}%)...`);
+        },
+        controller.signal,
+      );
+
       const duplicate = documents.find(
         (d) =>
           d.title.trim().toLocaleLowerCase('vi') === finalTitle.toLocaleLowerCase('vi') &&
@@ -334,7 +578,7 @@ export const Dashboard: React.FC = () => {
         setShowCollisionModal(true);
         setUploading(false);
       } else {
-        setUploadProgress('Đang xử lý nội dung văn bản...');
+        setUploadProgress('Đang xếp hàng xử lý AI...');
         await api.document.confirm(
           response.documentId,
           finalTitle,
@@ -342,12 +586,20 @@ export const Dashboard: React.FC = () => {
           sharingPermission,
           currentFolderId,
         );
-        loadFolderContent();
+        notify(`Đã tải lên tài liệu "${finalTitle}". Hệ thống đang xử lý văn bản ở chế độ nền.`, 'success');
+        await loadFolderContent();
+        pollDocumentStatus(response.documentId);
         setUploading(false);
       }
     } catch (err: any) {
-      notify(err.message || 'Lỗi tải tài liệu.', 'error');
+      if (controller.signal.aborted) {
+        notify('Đã hủy tải lên tài liệu.', 'info');
+      } else {
+        notify(err.message || 'Lỗi tải tài liệu.', 'error');
+      }
       setUploading(false);
+    } finally {
+      uploadAbortControllerRef.current = null;
     }
   };
 
@@ -422,8 +674,11 @@ export const Dashboard: React.FC = () => {
     if (askingDocumentId) return;
     setAskingDocumentId(doc.documentId);
     try {
-      const session = await api.chat.createSession({ sessionName: doc.title });
-      navigate(`/chat?sessionId=${session.sessionId}&documentId=${doc.documentId}`);
+      const session = await api.chat.createSession({
+        sessionName: doc.title,
+        documentId: doc.documentId,
+      });
+      navigate(`/chat?sessionId=${session.sessionId}`);
     } catch (err: any) {
       notify(err.message || 'Không thể tạo phiên Hỏi AI.', 'error');
     } finally {
@@ -437,8 +692,12 @@ export const Dashboard: React.FC = () => {
     return list.map((f) => (
       <div key={f.folderId} style={{ paddingLeft: `${depth * 12}px` }}>
         <button
-          className={`tree-node ${currentFolderId === f.folderId ? 'active' : ''}`}
+          className={`tree-node ${currentFolderId === f.folderId ? 'active' : ''} ${dragOverFolderId === f.folderId ? 'document-drop-target' : ''}`}
           onClick={() => setCurrentFolderId(f.folderId)}
+          onDragEnter={(event) => { event.preventDefault(); setDragOverFolderId(f.folderId); }}
+          onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+          onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverFolderId(null); }}
+          onDrop={(event) => dropDocumentsIntoFolder(event, f)}
         >
           <Folder size={16} />
           <span>{f.folderName}</span>
@@ -446,56 +705,6 @@ export const Dashboard: React.FC = () => {
         {renderFolderTree(f.folderId, depth + 1)}
       </div>
     ));
-  };
-
-  const openShare = async (document: DocumentItem) => {
-    const [friendItems, shares] = await Promise.all([
-      api.friendship.getFriends(),
-      api.document.getShares(document.documentId),
-    ]);
-    setFriends(friendItems);
-    const existing = new Set<number>(shares.map((item: any) => item.sharedWithUserId));
-    setSharedUserIds(existing);
-    setShareDraftUserIds(new Set(existing));
-    setShareTarget(document);
-  };
-
-  const toggleShareDraft = (friendUserId: number) => {
-    setShareDraftUserIds((current) => {
-      const next = new Set(current);
-      if (next.has(friendUserId)) next.delete(friendUserId);
-      else next.add(friendUserId);
-      return next;
-    });
-  };
-
-  const toggleFavoriteFriend = (friendUserId: number) => {
-    setFavoriteFriendIds((current) => {
-      const next = new Set(current);
-      if (next.has(friendUserId)) next.delete(friendUserId);
-      else next.add(friendUserId);
-      localStorage.setItem('favorite-share-friends', JSON.stringify([...next]));
-      return next;
-    });
-  };
-
-  const confirmShares = async () => {
-    if (!shareTarget) return;
-    setSavingShares(true);
-    try {
-      const additions = [...shareDraftUserIds].filter((id) => !sharedUserIds.has(id));
-      const removals = [...sharedUserIds].filter((id) => !shareDraftUserIds.has(id));
-      await Promise.all([
-        ...additions.map((id) => api.document.shareWithFriend(shareTarget.documentId, id)),
-        ...removals.map((id) => api.document.removeShare(shareTarget.documentId, id)),
-      ]);
-      notify('Đã cập nhật danh sách bạn bè được chia sẻ.', 'success');
-      setShareTarget(null);
-    } catch (err: any) {
-      notify(err.message || 'Không thể cập nhật chia sẻ tài liệu.', 'error');
-    } finally {
-      setSavingShares(false);
-    }
   };
 
   return (
@@ -562,7 +771,14 @@ export const Dashboard: React.FC = () => {
         {/* Left Tree Explorer Bar */}
         <aside className="tree-explorer glass-panel">
           <h3>Thư mục của tôi</h3>
-          <button className="tree-node root-node" onClick={() => setCurrentFolderId(undefined)}>
+          <button
+            className={`tree-node root-node ${dragOverFolderId === -1 ? 'document-drop-target' : ''}`}
+            onClick={() => setCurrentFolderId(undefined)}
+            onDragEnter={(event) => { event.preventDefault(); setDragOverFolderId(-1); }}
+            onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverFolderId(null); }}
+            onDrop={(event) => dropDocumentsIntoFolder(event)}
+          >
             <FolderOpen size={16} />
             <span>Root /</span>
           </button>
@@ -678,9 +894,35 @@ export const Dashboard: React.FC = () => {
 
           {/* Loader bar for uploads */}
           {uploading && (
-            <div className="upload-loader glass-card">
-              <Loader size={20} className="spin" />
-              <span>{uploadProgress}</span>
+            <div
+              className="upload-loader glass-card"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Loader size={20} className="spin" />
+                <span>{uploadProgress}</span>
+              </div>
+              {uploadPercent < 100 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => uploadAbortControllerRef.current?.abort()}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    color: '#ef4444',
+                    borderColor: 'rgba(239, 68, 68, 0.3)',
+                    background: 'rgba(239, 68, 68, 0.1)',
+                  }}
+                >
+                  Hủy tải lên
+                </button>
+              )}
             </div>
           )}
 
@@ -694,12 +936,21 @@ export const Dashboard: React.FC = () => {
           ) : (
             <div className="explorer-grid">
               {/* Folder Header & Grid */}
-              {currentFolderId === undefined && subFolders.length > 0 && (
+              {subFolders.length > 0 && (
                 <div className="section-block">
                   <h4>Thư mục ({subFolders.length})</h4>
                   <div className="grid-layout">
                     {subFolders.map((folder) => (
-                      <div key={folder.folderId} className="item-card folder-card glass-card">
+                      <div
+                        key={folder.folderId}
+                        className={`item-card folder-card glass-card ${dragOverFolderId === folder.folderId ? 'document-drop-target' : ''}`}
+                        onDragEnter={(event) => { event.preventDefault(); setDragOverFolderId(folder.folderId); }}
+                        onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+                        onDragLeave={(event) => {
+                          if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverFolderId(null);
+                        }}
+                        onDrop={(event) => dropDocumentsIntoFolder(event, folder)}
+                      >
                         <div
                           onClick={() => setCurrentFolderId(folder.folderId)}
                           className="item-info"
@@ -714,9 +965,9 @@ export const Dashboard: React.FC = () => {
                               setAccessModalItem({ type: 'folder', id: folder.folderId });
                             }}
                             className="action-btn"
-                            title="Quản lý quyền truy cập thư mục (Manage Access)"
+                            title="Chia sẻ & Quản lý quyền thư mục"
                           >
-                            <Shield size={16} />
+                            <Share2 size={16} />
                           </button>
                           <button
                             onClick={(e) => {
@@ -754,19 +1005,26 @@ export const Dashboard: React.FC = () => {
                                 )}
                               </button>
                             </th>
-                            <th style={{ padding: '0.75rem' }}>Tài liệu</th>
-                            <th style={{ padding: '0.75rem' }}>Môn học</th>
-                            <th style={{ padding: '0.75rem' }}>Dung lượng</th>
-                            <th style={{ padding: '0.75rem' }}>Trạng thái AI</th>
-                            <th style={{ padding: '0.75rem' }}>Ngày tạo</th>
+                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('title', 'Tài liệu')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('subject', 'Môn học')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('fileSizeMb', 'Dung lượng')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('aiParsingStatus', 'Trạng thái AI')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('createdAt', 'Ngày tạo')}</th>
                             <th style={{ padding: '0.75rem', textAlign: 'right' }}>Thao tác</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {documents.map((doc) => {
+                          {sortedDocuments.map((doc) => {
                             const isSelected = selectedDocIds.has(doc.documentId);
                             return (
-                              <tr key={doc.documentId} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent' }}>
+                              <tr
+                                key={doc.documentId}
+                                draggable={!bulkProcessing}
+                                onDragStart={(event) => startDocumentDrag(event, doc.documentId)}
+                                onDragEnd={() => { setDraggedDocIds([]); setDragOverFolderId(null); }}
+                                className="draggable-document"
+                                style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent' }}
+                              >
                                 <td style={{ padding: '0.75rem', textAlign: 'center' }}>
                                   <button onClick={() => toggleSelectDoc(doc.documentId)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}>
                                     {isSelected ? <CheckSquare size={16} style={{ color: '#60a5fa' }} /> : <Square size={16} style={{ color: '#64748b' }} />}
@@ -784,9 +1042,8 @@ export const Dashboard: React.FC = () => {
                                 <td style={{ padding: '0.75rem', color: '#94a3b8', fontSize: '0.8rem' }}>{doc.createdAt ? formatDateTime(doc.createdAt) : '-'}</td>
                                 <td style={{ padding: '0.75rem', textAlign: 'right' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem' }}>
-                                    <button onClick={(e) => { e.stopPropagation(); setAccessModalItem({ type: 'document', id: doc.documentId }); }} className="action-btn" title="Quản lý quyền truy cập"><Shield size={15} /></button>
+                                    <button onClick={(e) => { e.stopPropagation(); setAccessModalItem({ type: 'document', id: doc.documentId }); }} className="action-btn" title="Chia sẻ & Quản lý quyền"><Share2 size={15} /></button>
                                     <button onClick={(e) => { e.stopPropagation(); setVersionModalDocId(doc.documentId); }} className="action-btn" title="Lịch sử phiên bản"><History size={15} /></button>
-                                    <button onClick={() => openShare(doc)} className="action-btn" title="Chia sẻ cho bạn bè"><Share2 size={15} /></button>
                                     <button onClick={() => handleAskAi(doc)} className="action-btn ask-ai-btn" title="Hỏi AI" disabled={askingDocumentId === doc.documentId}>{askingDocumentId === doc.documentId ? <Loader className="spin" size={15} /> : <Bot size={15} />}</button>
                                     <button onClick={() => setDeleteDocumentTarget(doc)} className="delete-item-btn" title="Xóa tài liệu"><Trash2 size={15} /></button>
                                   </div>
@@ -799,10 +1056,17 @@ export const Dashboard: React.FC = () => {
                     </div>
                   ) : (
                     <div className="grid-layout">
-                      {documents.map((doc) => {
+                      {sortedDocuments.map((doc) => {
                         const isSelected = selectedDocIds.has(doc.documentId);
                         return (
-                          <div key={doc.documentId} className={`item-card doc-card glass-card ${isSelected ? 'selected-card' : ''}`} style={isSelected ? { border: '1px solid #60a5fa', background: 'rgba(59, 130, 246, 0.08)' } : {}}>
+                          <div
+                            key={doc.documentId}
+                            draggable={!bulkProcessing}
+                            onDragStart={(event) => startDocumentDrag(event, doc.documentId)}
+                            onDragEnd={() => { setDraggedDocIds([]); setDragOverFolderId(null); }}
+                            className={`item-card doc-card glass-card draggable-document ${isSelected ? 'selected-card' : ''}`}
+                            style={isSelected ? { border: '1px solid #60a5fa', background: 'rgba(59, 130, 246, 0.08)' } : {}}
+                          >
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -852,9 +1116,9 @@ export const Dashboard: React.FC = () => {
                                   setAccessModalItem({ type: 'document', id: doc.documentId });
                                 }}
                                 className="action-btn"
-                                title="Quản lý quyền truy cập (Manage Access)"
+                                title="Chia sẻ & Quản lý quyền (Share & Access)"
                               >
-                                <Shield size={16} />
+                                <Share2 size={16} />
                               </button>
                               <button
                                 onClick={(e) => {
@@ -865,13 +1129,6 @@ export const Dashboard: React.FC = () => {
                                 title="Lịch sử phiên bản (Versioning)"
                               >
                                 <History size={16} />
-                              </button>
-                              <button
-                                onClick={() => openShare(doc)}
-                                className="action-btn"
-                                title="Chia sẻ cho bạn bè"
-                              >
-                                <Share2 size={16} />
                               </button>
                               <button
                                 onClick={() => handleAskAi(doc)}
@@ -904,31 +1161,140 @@ export const Dashboard: React.FC = () => {
               {currentFolderId === undefined && sharedWithMe.length > 0 && (
                 <div className="section-block" style={{ marginTop: '1.5rem' }}>
                   <h4>Được bạn bè chia sẻ ({sharedWithMe.length})</h4>
-                  <div className="grid-layout">
-                    {sharedWithMe.map((doc) => (
-                      <div
-                        key={`shared-${doc.documentId}`}
-                        className="item-card doc-card glass-card"
-                      >
+
+                  {viewMode === 'list' ? (
+                    <div className="glass-card overflow-hidden my-3" style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                        <thead>
+                          <tr style={{ background: 'rgba(15, 23, 42, 0.7)', color: '#94a3b8', borderBottom: '1px solid rgba(255,255,255,0.1)', fontSize: '0.8rem', textTransform: 'uppercase' }}>
+                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('title', 'Tài liệu')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('uploaderName', 'Người chia sẻ')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('subject', 'Môn học')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('fileSizeMb', 'Dung lượng')}</th>
+                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('aiParsingStatus', 'Trạng thái AI')}</th>
+                            <th style={{ padding: '0.75rem', textAlign: 'right' }}>Thao tác</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortedSharedDocuments.map((doc) => (
+                            <tr key={`shared-list-${doc.documentId}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                              <td style={{ padding: '0.75rem', fontWeight: 500 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => navigate(`/document/${doc.documentId}`)}>
+                                  <FileTypeIcon extension={doc.fileExtension} size={22} />
+                                  <span style={{ textDecoration: 'underline' }}>{getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}</span>
+                                </div>
+                              </td>
+                              <td style={{ padding: '0.75rem', color: 'var(--accent-blue)', fontSize: '0.85rem' }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                  <Users size={14} /> {doc.uploaderName || 'Bạn bè'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.subject || 'Khác'}</td>
+                              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.fileSizeMb ? doc.fileSizeMb.toFixed(2) : '0.00'} MB</td>
+                              <td style={{ padding: '0.75rem' }}>
+                                <span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', background: 'rgba(51, 65, 85, 0.6)', color: '#cbd5e1' }}>
+                                  {doc.aiParsingStatus || 'READY'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem' }}>
+                                  <button onClick={() => handleAskAi(doc)} className="action-btn ask-ai-btn" title="Hỏi AI về tài liệu" disabled={askingDocumentId === doc.documentId}>
+                                    {askingDocumentId === doc.documentId ? <Loader className="spin" size={15} /> : <Bot size={15} />}
+                                  </button>
+                                  <button onClick={(e) => { e.stopPropagation(); setVersionModalDocId(doc.documentId); }} className="action-btn" title="Lịch sử phiên bản">
+                                    <History size={15} />
+                                  </button>
+                                  {doc.cloudStorageUrl && (
+                                    <button onClick={(e) => { e.stopPropagation(); window.open(doc.cloudStorageUrl, '_blank'); }} className="action-btn" title="Tải xuống tài liệu">
+                                      <Download size={15} />
+                                    </button>
+                                  )}
+                                  <button onClick={() => navigate(`/document/${doc.documentId}`)} className="action-btn" title="Xem chi tiết tài liệu">
+                                    <Eye size={15} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="grid-layout">
+                      {sortedSharedDocuments.map((doc) => (
                         <div
-                          onClick={() => navigate(`/document/${doc.documentId}`)}
-                          className="item-info"
+                          key={`shared-${doc.documentId}`}
+                          className="item-card doc-card glass-card"
                         >
-                          <FileTypeIcon
-                            extension={doc.fileExtension}
-                            size={28}
-                            className="doc-icon"
-                          />
-                          <div className="doc-metadata">
-                            <span className="item-title" title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}>
-                              {getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}
-                            </span>
-                            <span className="doc-size">Tài liệu được chia sẻ</span>
+                          <div
+                            onClick={() => navigate(`/document/${doc.documentId}`)}
+                            className="item-info"
+                          >
+                            <FileTypeIcon
+                              extension={doc.fileExtension}
+                              size={28}
+                              className="doc-icon"
+                            />
+                            <div className="doc-metadata">
+                              <span className="item-title" title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}>
+                                {getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}
+                              </span>
+                              <span className="doc-size">
+                                {doc.subject || 'Khác'} • {(doc.fileSizeMb || 0).toFixed(2)} MB •{' '}
+                                {doc.aiParsingStatus || 'READY'}
+                              </span>
+                              <span className="shared-badge">
+                                <Users size={12} /> {doc.uploaderName ? `Chia sẻ bởi ${doc.uploaderName}` : 'Được bạn bè chia sẻ'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="card-actions">
+                            <button
+                              onClick={() => handleAskAi(doc)}
+                              className="action-btn ask-ai-btn"
+                              title="Hỏi AI về tài liệu"
+                              disabled={askingDocumentId === doc.documentId}
+                            >
+                              {askingDocumentId === doc.documentId ? (
+                                <Loader className="spin" size={16} />
+                              ) : (
+                                <Bot size={16} />
+                              )}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setVersionModalDocId(doc.documentId);
+                              }}
+                              className="action-btn"
+                              title="Lịch sử phiên bản (Versioning)"
+                            >
+                              <History size={16} />
+                            </button>
+                            {doc.cloudStorageUrl && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.open(doc.cloudStorageUrl, '_blank');
+                                }}
+                                className="action-btn"
+                                title="Tải xuống tài liệu"
+                              >
+                                <Download size={16} />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => navigate(`/document/${doc.documentId}`)}
+                              className="action-btn"
+                              title="Xem chi tiết tài liệu"
+                            >
+                              <Eye size={16} />
+                            </button>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1002,28 +1368,60 @@ export const Dashboard: React.FC = () => {
                 />
               </label>
               <label>
-                Môn học
+                Môn học chính
                 <select
                   className="input-control"
-                  value={uploadDraft.subject}
-                  onChange={(e) => setUploadDraft({ ...uploadDraft, subject: e.target.value })}
+                  value={selectedRootSubjectId ?? ''}
+                  onChange={(e) => {
+                    const root = subjectTree.find((node) => node.subjectId === Number(e.target.value));
+                    setSelectedRootSubjectId(root?.subjectId ?? null);
+                    if (root) setUploadDraft({ ...uploadDraft, subject: root.name });
+                  }}
                 >
-                  {[
-                    'Toán học',
-                    'Vật lý',
-                    'Hóa học',
-                    'Sinh học',
-                    'Ngữ văn',
-                    'Tiếng Anh',
-                    'Tin học',
-                    'Kinh tế',
-                    'Kỹ năng mềm',
-                    'Khác',
-                  ].map((subject) => (
-                    <option key={subject}>{subject}</option>
+                  {subjectTree.map((root) => (
+                    <option key={root.subjectId} value={root.subjectId}>{root.name}</option>
                   ))}
                 </select>
               </label>
+              {uploadChildSubjects.length > 0 && selectedUploadRoot && (
+                <label>
+                  Chuyên mục môn học
+                  <select
+                    className="input-control"
+                    value={uploadChildSubjects.some((child) => child.name === uploadDraft.subject) ? uploadDraft.subject : ''}
+                    onChange={(e) => setUploadDraft({ ...uploadDraft, subject: e.target.value || selectedUploadRoot.name })}
+                  >
+                    <option value="">Không có chuyên mục</option>
+                    {uploadChildSubjects.map((child) => (
+                      <option key={child.subjectId} value={child.name}>
+                        {'— '.repeat(Math.max(0, child.depth - selectedUploadRoot.depth - 1))}{child.name}
+                      </option>
+                    ))}
+                  </select>
+                  <small style={{ color: 'var(--text-muted)' }}>
+                    Chỉ dùng để phân loại; tài liệu vẫn được lưu trong folder bạn đã chọn.
+                  </small>
+                </label>
+              )}
+              {(selectedUploadRoot?.name === 'Khác' || !approvedSubjects.includes(uploadDraft.subject)) && (
+                <label style={{ marginTop: '0.4rem' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    Nhập tên môn học khác <small style={{ color: 'var(--text-muted)' }}>(Hệ thống sẽ đối soát hoặc gửi kiểm duyệt nếu mới)</small>
+                  </span>
+                  <input
+                    type="text"
+                    className="input-control"
+                    placeholder="Ví dụ: Đại số tuyến tính, Trí tuệ nhân tạo..."
+                    value={customSubjectInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCustomSubjectInput(val);
+                      setUploadDraft({ ...uploadDraft, subject: val.trim() || 'Khác' });
+                    }}
+                    maxLength={100}
+                  />
+                </label>
+              )}
               <fieldset className="sharing-options">
                 <legend>Quyền truy cập</legend>
                 <label className={uploadDraft.sharingPermission === 'PRIVATE' ? 'selected' : ''}>
@@ -1156,27 +1554,14 @@ export const Dashboard: React.FC = () => {
               <table className="pending-review-table">
                 <thead>
                   <tr>
-                    <th>
-                      <button
-                        onClick={() =>
-                          setPendingNameDirection((v) => (v === 'asc' ? 'desc' : 'asc'))
-                        }
-                      >
-                        Tên tài liệu {pendingNameDirection === 'asc' ? '↑' : '↓'}
-                      </button>
-                    </th>
-                    <th>Trạng thái</th>
-                    <th>Ngày yêu cầu</th>
-                    <th>Ngày xét duyệt</th>
+                    <th>{renderPendingSortHeader('title', 'Tên tài liệu')}</th>
+                    <th>{renderPendingSortHeader('status', 'Trạng thái')}</th>
+                    <th>{renderPendingSortHeader('moderationSubmittedAt', 'Ngày yêu cầu')}</th>
+                    <th>{renderPendingSortHeader('moderatedAt', 'Ngày xét duyệt')}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[...(analytics.pendingReviewDocuments ?? [])]
-                    .sort((a: any, b: any) => {
-                      const result = String(a.title).localeCompare(String(b.title), 'vi');
-                      return pendingNameDirection === 'asc' ? result : -result;
-                    })
-                    .map((doc: any) => (
+                  {sortedPendingReviews.map((doc: any) => (
                       <tr key={doc.documentId}>
                         <td>
                           {doc.title}.{doc.fileExtension}
@@ -1195,100 +1580,6 @@ export const Dashboard: React.FC = () => {
                   <p>Không có tài liệu đang chờ xét duyệt.</p>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {shareTarget && (
-        <div className="modal-overlay" onMouseDown={() => setShareTarget(null)}>
-          <div
-            className="modal-box share-modal glass-panel"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <button className="modal-close" onClick={() => setShareTarget(null)}>
-              <X size={20} />
-            </button>
-            <h3>Chia sẻ tài liệu cho bạn bè</h3>
-            <p>
-              {shareTarget.title}.{shareTarget.fileExtension}
-            </p>
-            <div className="share-toolbar">
-              <span>
-                Đã chọn {shareDraftUserIds.size}/{friends.length} người
-              </span>
-              <button
-                type="button"
-                onClick={() =>
-                  setFriendNameDirection((value) => (value === 'asc' ? 'desc' : 'asc'))
-                }
-              >
-                <ArrowUpDown size={15} /> Tên {friendNameDirection === 'asc' ? 'A–Z' : 'Z–A'}
-              </button>
-            </div>
-            <div className="share-friend-list">
-              {[...friends]
-                .sort((a, b) => {
-                  const favoriteDiff =
-                    Number(favoriteFriendIds.has(b.userId)) -
-                    Number(favoriteFriendIds.has(a.userId));
-                  if (favoriteDiff) return favoriteDiff;
-                  const result = String(a.username).localeCompare(String(b.username), 'vi');
-                  return friendNameDirection === 'asc' ? result : -result;
-                })
-                .map((friend) => (
-                  <label key={friend.userId}>
-                    <button
-                      type="button"
-                      className={`favorite-friend ${favoriteFriendIds.has(friend.userId) ? 'active' : ''}`}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        toggleFavoriteFriend(friend.userId);
-                      }}
-                      title="Ghim bạn bè để chọn nhanh lần sau"
-                      aria-label={`Ghim ${friend.username}`}
-                    >
-                      <Star
-                        size={18}
-                        fill={favoriteFriendIds.has(friend.userId) ? 'currentColor' : 'none'}
-                      />
-                    </button>
-                    <span>
-                      <strong>{friend.username}</strong>
-                      <small>{friend.email}</small>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={shareDraftUserIds.has(friend.userId)}
-                      onChange={() => toggleShareDraft(friend.userId)}
-                    />
-                  </label>
-                ))}
-              {!friends.length && <p>Bạn chưa có bạn bè để chia sẻ tài liệu.</p>}
-            </div>
-            <div className="modal-actions share-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setShareTarget(null)}
-                disabled={savingShares}
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={confirmShares}
-                disabled={savingShares || !friends.length}
-              >
-                {savingShares ? (
-                  <>
-                    <Loader className="spin" size={16} /> Đang gửi...
-                  </>
-                ) : (
-                  'Xác nhận gửi'
-                )}
-              </button>
             </div>
           </div>
         </div>
@@ -1344,6 +1635,19 @@ export const Dashboard: React.FC = () => {
           flex-direction:column;
           gap:1rem;
         }
+
+        .draggable-document { cursor: grab; }
+        .dashboard-sort-header { border:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;cursor:pointer;padding:0; }
+        .dashboard-sort-header:hover { color:var(--accent-blue); }
+        .draggable-document:active { cursor: grabbing; opacity: .72; }
+        .folder-card.document-drop-target {
+          border-color: var(--accent-blue) !important;
+          background: rgba(0, 180, 216, .14) !important;
+          box-shadow: 0 0 0 3px rgba(0, 180, 216, .12), 0 12px 30px rgba(0, 0, 0, .25);
+          transform: translateY(-2px) scale(1.01);
+        }
+        .folder-card.document-drop-target .folder-icon { color: var(--accent-blue); }
+        .tree-node.document-drop-target { color:var(--accent-blue);background:rgba(0,180,216,.16);box-shadow:inset 0 0 0 1px rgba(0,180,216,.5); }
 
         .user-analytics{padding:1.2rem;min-width:0}.analytics-heading{display:flex;justify-content:space-between;align-items:center;gap:1rem}.analytics-heading p{color:var(--text-muted)}.analytics-heading>span{color:var(--accent-blue);font-weight:700}.analytics-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin:1rem 0}.analytics-stats div{padding:.8rem;border-radius:var(--radius-sm);background:rgba(255,255,255,.04);display:flex;flex-direction:column}.analytics-stats strong{font-size:1.35rem}.analytics-stats span,.analytics-documents small{color:var(--text-muted)}.analytics-documents{display:flex;gap:.6rem;overflow-x:scroll;overscroll-behavior-x:contain;padding:.15rem 0 .65rem;scrollbar-color:var(--accent-blue) rgba(255,255,255,.06)}.analytics-documents button{flex:0 0 290px;min-width:290px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:var(--text-primary);padding:.7rem;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:space-between;text-align:left;gap:.75rem}.analytics-documents button span{display:flex;flex-direction:column;min-width:0}.analytics-documents strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:145px}.analytics-file-icon{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto}.audience-modal{max-width:650px;max-height:80vh;overflow:auto}.audience-row{display:flex;justify-content:space-between;gap:1rem;padding:.7rem 0;border-bottom:1px solid rgba(255,255,255,.06)}.audience-row span{display:flex;flex-direction:column}.audience-row small{color:var(--text-muted)}
 
@@ -1565,6 +1869,20 @@ export const Dashboard: React.FC = () => {
         }
 
         .appeal-required-badge{display:inline-flex;align-self:flex-start;margin-top:.4rem;padding:.25rem .5rem;border:1px solid rgba(245,158,11,.35);border-radius:999px;background:rgba(245,158,11,.12);color:#fbbf24;font-size:.68rem;font-weight:800}
+        .shared-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          color: var(--accent-blue);
+          font-size: 0.72rem;
+          font-weight: 500;
+          margin-top: 0.35rem;
+          background: rgba(0, 180, 216, 0.08);
+          border: 1px solid rgba(0, 180, 216, 0.2);
+          padding: 0.15rem 0.5rem;
+          border-radius: 6px;
+          width: fit-content;
+        }
 
         .doc-card .card-actions {
           display: flex;

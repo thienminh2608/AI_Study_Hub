@@ -129,12 +129,29 @@ public class ChatBotController : ControllerBase
     {
         try
         {
-            var result = await _chatService.SetAttachedDocumentAsync(GetCurrentUserId(), sessionId, dto.DocumentId);
+            var result = await _chatService.SetAttachedDocumentAsync(GetCurrentUserId(), sessionId, dto.DocumentId, dto.DocumentVersionId);
             return result == null ? NotFound(new { message = "Không tìm thấy phiên chat." }) : Ok(result);
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("citations/{citationId}/resolve")]
+    public async Task<IActionResult> ResolveCitation(long citationId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            int userId = GetCurrentUserId();
+            var result = await _chatService.ResolveCitationAsync(userId, citationId, cancellationToken);
+            return result == null 
+                ? NotFound(new { message = "Không tìm thấy trích dẫn hoặc bạn không có quyền truy cập." }) 
+                : Ok(result);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = ex.Message });
         }
     }
 
@@ -169,11 +186,22 @@ public class ChatBotController : ControllerBase
                 citations = result.Citations
             });
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Hết lượt câu hỏi", StringComparison.OrdinalIgnoreCase))
         {
             return StatusCode(StatusCodes.Status429TooManyRequests, new
             {
-                message = ex.Message
+                message = ex.Message,
+                code = "AI_QUOTA_EXHAUSTED",
+                retryable = false
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError, new
+            {
+                message = ex.Message,
+                code = "AI_PROCESSING_ERROR",
+                retryable = false
             });
         }
         catch (ArgumentException ex)
@@ -195,6 +223,18 @@ public class ChatBotController : ControllerBase
             return StatusCode(StatusCodes.Status504GatewayTimeout, new
             {
                 message = ex.Message
+            });
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
+                                              (int?)ex.StatusCode >= 500)
+        {
+            Response.Headers.RetryAfter = "5";
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                message = "Dịch vụ AI đang quá tải tạm thời. Vui lòng nhấn Thử lại sau vài giây.",
+                code = "AI_PROVIDER_UNAVAILABLE",
+                retryable = true,
+                retryAfterSeconds = 5
             });
         }
         catch (Exception ex)

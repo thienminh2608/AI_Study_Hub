@@ -16,11 +16,22 @@ public class TransactionController : ControllerBase
 {
     private readonly ITransactionService _transactionService;
     private readonly IStudyHubDbContext _db;
+    private readonly IPayOsService _payOsService;
+    private readonly IClock _clock;
+    private readonly IConfiguration _configuration;
 
-    public TransactionController(ITransactionService transactionService, IStudyHubDbContext db)
+    public TransactionController(
+        ITransactionService transactionService,
+        IStudyHubDbContext db,
+        IPayOsService payOsService,
+        IClock clock,
+        IConfiguration configuration)
     {
         _transactionService = transactionService;
         _db = db;
+        _payOsService = payOsService;
+        _clock = clock;
+        _configuration = configuration;
     }
 
     [HttpGet("transfer-config")]
@@ -203,4 +214,227 @@ public class TransactionController : ControllerBase
             return StatusCode(500, new { message = ex.Message });
         }
     }
+
+    [HttpPost("payos/create-link")]
+    public async Task<IActionResult> CreatePayOsPaymentLink([FromBody] CreatePayOsPaymentLinkDto dto)
+    {
+        var userId = GetCurrentUserId();
+        if (dto.Amount < 2000 || dto.Amount % 1 != 0)
+        {
+            return BadRequest(new { message = "Số tiền nạp tối thiểu là 2,000 VND và phải là số nguyên." });
+        }
+
+        long amountLong = (long)dto.Amount;
+        var frontendBaseUrl = _configuration["Frontend:BaseUrl"] ?? "http://localhost:5173";
+
+        // Generate cryptographically secure random 64-bit PayOS orderCode (within safe range [100000, 9007199254740991])
+        Domain.Entities.Transaction? transaction = null;
+        long orderCode = 0;
+
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            // Range: 100_000 to 9_000_000_000_000_000
+            byte[] bytes = new byte[8];
+            System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+            long rawLong = BitConverter.ToInt64(bytes, 0) & 0x7FFFFFFFFFFFFFFFL;
+            orderCode = 100000L + (rawLong % 9000000000000000L);
+
+            var candidate = new Domain.Entities.Transaction
+            {
+                UserId = userId,
+                Amount = amountLong,
+                Type = "DEPOSIT",
+                Status = "CREATING",
+                PayOsOrderCode = orderCode,
+                StartedAt = _clock.Now,
+                RequiresManualReview = false
+            };
+
+            try
+            {
+                _db.Transactions.Add(candidate);
+                await _db.SaveChangesAsync();
+                transaction = candidate;
+                break;
+            }
+            catch (DbUpdateException)
+            {
+                _db.ChangeTracker.Clear();
+            }
+        }
+
+        if (transaction == null)
+        {
+            return StatusCode(500, new { message = "Không thể khởi tạo mã đơn hàng duy nhất. Vui lòng thử lại." });
+        }
+
+        var user = await _db.Users.FindAsync(userId);
+
+        try
+        {
+            var payOsRequest = new CreatePaymentLinkRequestDto
+            {
+                OrderCode = orderCode,
+                Amount = amountLong,
+                Description = $"Nap vi {orderCode}",
+                BuyerName = user?.Username ?? "Student",
+                BuyerEmail = user?.Email ?? "",
+                ReturnUrl = $"{frontendBaseUrl}/payment/success?orderCode={orderCode}",
+                CancelUrl = $"{frontendBaseUrl}/payment/cancel?orderCode={orderCode}"
+            };
+
+            var payOsRes = await _payOsService.CreatePaymentLinkAsync(payOsRequest, HttpContext.RequestAborted);
+
+            transaction.PaymentLinkId = payOsRes.PaymentLinkId;
+            transaction.Status = "PENDING";
+            await _db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                transactionId = transaction.TransactionId,
+                orderCode = orderCode,
+                checkoutUrl = payOsRes.CheckoutUrl,
+                qrCode = payOsRes.QrCode,
+                amount = amountLong,
+                status = transaction.Status
+            });
+        }
+        catch (Exception ex)
+        {
+            transaction.Status = "CREATE_FAILED";
+            transaction.FailureReason = ex.Message;
+            await _db.SaveChangesAsync();
+            return StatusCode(500, new { message = $"Không thể tạo link thanh toán PayOS: {ex.Message}" });
+        }
+    }
+
+    [HttpPost("payos/retry/{transactionId}")]
+    public async Task<IActionResult> RetryPayOsPaymentLink(int transactionId)
+    {
+        var userId = GetCurrentUserId();
+
+        // Conditional claim CREATE_FAILED -> CREATING
+        var claimed = await _db.Transactions
+            .Where(t => t.TransactionId == transactionId && t.UserId == userId && t.Status == "CREATE_FAILED")
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.Status, "CREATING"), HttpContext.RequestAborted);
+
+        if (claimed != 1)
+        {
+            return BadRequest(new { message = "Giao dịch không tồn tại hoặc không ở trạng thái có thể thử lại." });
+        }
+
+        var transaction = await _db.Transactions.FindAsync(transactionId);
+        if (transaction == null || transaction.PayOsOrderCode == null)
+        {
+            return NotFound(new { message = "Không tìm thấy thông tin giao dịch." });
+        }
+
+        long orderCode = transaction.PayOsOrderCode.Value;
+        var frontendBaseUrl = _configuration["Frontend:BaseUrl"] ?? "http://localhost:5173";
+        var user = await _db.Users.FindAsync(userId);
+
+        try
+        {
+            // 1. Query PayOS first in case payment link was already created during previous timeout
+            var existingInfo = await _payOsService.GetPaymentRequestAsync(orderCode, HttpContext.RequestAborted);
+            if (existingInfo != null && !string.IsNullOrWhiteSpace(existingInfo.Status))
+            {
+                string? validCheckoutUrl = !string.IsNullOrWhiteSpace(existingInfo.CheckoutUrl)
+                    ? existingInfo.CheckoutUrl
+                    : (!string.IsNullOrWhiteSpace(existingInfo.Id)
+                        ? $"https://pay.payos.vn/web/{existingInfo.Id}"
+                        : (!string.IsNullOrWhiteSpace(transaction.PaymentLinkId)
+                            ? $"https://pay.payos.vn/web/{transaction.PaymentLinkId}"
+                            : null));
+
+                if (!string.IsNullOrWhiteSpace(validCheckoutUrl))
+                {
+                    transaction.Status = "PENDING";
+                    if (!string.IsNullOrWhiteSpace(existingInfo.Id))
+                    {
+                        transaction.PaymentLinkId = existingInfo.Id;
+                    }
+                    await _db.SaveChangesAsync();
+
+                    return Ok(new
+                    {
+                        transactionId = transaction.TransactionId,
+                        orderCode = orderCode,
+                        checkoutUrl = validCheckoutUrl,
+                        amount = transaction.Amount,
+                        status = transaction.Status
+                    });
+                }
+            }
+
+            // 2. Call create link with reused orderCode
+            var payOsRequest = new CreatePaymentLinkRequestDto
+            {
+                OrderCode = orderCode,
+                Amount = transaction.Amount,
+                Description = $"Nap vi {orderCode}",
+                BuyerName = user?.Username ?? "Student",
+                BuyerEmail = user?.Email ?? "",
+                ReturnUrl = $"{frontendBaseUrl}/payment/success?orderCode={orderCode}",
+                CancelUrl = $"{frontendBaseUrl}/payment/cancel?orderCode={orderCode}"
+            };
+
+            var payOsRes = await _payOsService.CreatePaymentLinkAsync(payOsRequest, HttpContext.RequestAborted);
+
+            transaction.PaymentLinkId = payOsRes.PaymentLinkId;
+            transaction.Status = "PENDING";
+            await _db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                transactionId = transaction.TransactionId,
+                orderCode = orderCode,
+                checkoutUrl = payOsRes.CheckoutUrl,
+                qrCode = payOsRes.QrCode,
+                amount = transaction.Amount,
+                status = transaction.Status
+            });
+        }
+        catch (Exception ex)
+        {
+            transaction.Status = "CREATE_FAILED";
+            transaction.FailureReason = ex.Message;
+            await _db.SaveChangesAsync();
+            return StatusCode(500, new { message = $"Thử lại tạo link PayOS thất bại: {ex.Message}" });
+        }
+    }
+
+    [HttpGet("payos/{orderCode}/status")]
+    public async Task<IActionResult> GetPayOsOrderStatus(long orderCode)
+    {
+        var userId = GetCurrentUserId();
+        var tx = await _db.Transactions.FirstOrDefaultAsync(t => t.PayOsOrderCode == orderCode);
+        if (tx == null)
+        {
+            return NotFound(new { message = "Không tìm thấy giao dịch." });
+        }
+
+        var roleClaim = User.FindFirst(ClaimTypes.Role)?.Value;
+        if (tx.UserId != userId && roleClaim != "ADMIN")
+        {
+            return Forbid();
+        }
+
+        return Ok(new
+        {
+            transactionId = tx.TransactionId,
+            orderCode = tx.PayOsOrderCode,
+            amount = tx.Amount,
+            status = tx.Status,
+            completedAt = tx.CompletedAt,
+            requiresManualReview = tx.RequiresManualReview
+        });
+    }
 }
+
+public class CreatePayOsPaymentLinkDto
+{
+    public decimal Amount { get; set; }
+}
+
+

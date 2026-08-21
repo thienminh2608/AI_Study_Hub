@@ -16,4 +16,7 @@ public class DocumentVersion
 
     public virtual Document Document { get; set; } = null!;
     public virtual User CreatedByUser { get; set; } = null!;
+    public virtual ICollection<DocumentChunk> DocumentChunks { get; set; } = new List<DocumentChunk>();
+    public virtual ICollection<DocumentExtractedText> DocumentExtractedTexts { get; set; } = new List<DocumentExtractedText>();
+    public virtual ICollection<ChatMessageCitation> ChatMessageCitations { get; set; } = new List<ChatMessageCitation>();
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Bell,
@@ -29,24 +29,25 @@ export const Notifications: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  useEffect(() => {
-    api.document.getModerationNotices().then((data) => {
-      setItems(data);
-      const noticeId = location.state?.noticeId;
-      const reportId = Number(searchParams.get('reportId'));
-      const target = data.find((item: any) =>
-        noticeId ? item.noticeId === noticeId : reportId ? item.reportId === reportId : false,
-      );
-      if (target) open(target);
-    });
-  }, []);
-  const open = async (n: any) => {
+  const open = useCallback(async (n: any) => {
     if (!n.isRead) {
       await api.document.readModerationNotice(n.noticeId);
       setItems((x) => x.map((i) => (i.noticeId === n.noticeId ? { ...i, isRead: true } : i)));
     }
     setSelected({ ...n, isRead: true });
-  };
+  }, []);
+
+  useEffect(() => {
+    const noticeId = location.state?.noticeId;
+    const reportId = Number(searchParams.get('reportId'));
+    api.document.getModerationNotices().then((data) => {
+      setItems(data);
+      const target = data.find((item: any) =>
+        noticeId ? item.noticeId === noticeId : reportId ? item.reportId === reportId : false,
+      );
+      if (target) open(target);
+    });
+  }, [location.state?.noticeId, searchParams, open]);
   const readAll = async () => {
     await api.document.readAllModerationNotices();
     setItems((x) => x.map((i) => ({ ...i, isRead: true })));

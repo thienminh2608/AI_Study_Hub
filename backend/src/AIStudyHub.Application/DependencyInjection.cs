@@ -17,6 +17,10 @@ public static class DependencyInjection
         services.AddScoped<IPermissionService, PermissionService>();
         services.AddScoped<ITrashService, TrashService>();
         services.AddScoped<IVersionService, VersionService>();
+        services.AddScoped<ISubjectService, SubjectService>();
+        services.AddScoped<IPaymentCompletionService, PaymentCompletionService>();
+        services.AddScoped<ISubscriptionPurchaseService, SubscriptionPurchaseService>();
+        services.AddScoped<IAdminAnalyticsService, AdminAnalyticsService>();
 
         return services;
     }

@@ -48,13 +48,14 @@ public partial class Document
     public DateTime? UpdatedAt { get; set; }
 
     public virtual ICollection<Bookmark> Bookmarks { get; set; } = new List<Bookmark>();
-    public virtual DocumentExtractedText? DocumentExtractedText { get; set; }
+    public virtual ICollection<DocumentExtractedText> DocumentExtractedTexts { get; set; } = new List<DocumentExtractedText>();
     public virtual ICollection<DocumentOcrRegion> DocumentOcrRegions { get; set; } = new List<DocumentOcrRegion>();
     public virtual ICollection<DocumentChunk> DocumentChunks { get; set; } = new List<DocumentChunk>();
     public virtual ICollection<DocumentReport> DocumentReports { get; set; } = new List<DocumentReport>();
     public virtual ICollection<DocumentActivity> DocumentActivities { get; set; } = new List<DocumentActivity>();
     public virtual ICollection<DocumentShare> DocumentShares { get; set; } = new List<DocumentShare>();
     public virtual ICollection<DocumentVersion> DocumentVersions { get; set; } = new List<DocumentVersion>();
+    public virtual ICollection<ChatMessageCitation> ChatMessageCitations { get; set; } = new List<ChatMessageCitation>();
     public virtual Folder? Folder { get; set; }
     public virtual User User { get; set; } = null!;
 }

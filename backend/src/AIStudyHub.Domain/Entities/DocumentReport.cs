@@ -76,16 +76,16 @@ public partial class DocumentReport
         get; set;
     }
 
-    public int? ResolvedByAdminId
-    {
-        get; set;
-    }
+    public int? ResolvedByAdminId { get; set; }
+    public int? ReportedVersionId { get; set; }
 
     public virtual Document Document { get; set; } = null!;
+    public virtual DocumentVersion? ReportedVersion { get; set; }
 
     public virtual ReportReasonConfig ReasonCodeNavigation { get; set; } = null!;
 
     public virtual User Reporter { get; set; } = null!;
+    public virtual User? AssignedModerator { get; set; }
 
     public virtual User? ResolvedByAdmin
     {

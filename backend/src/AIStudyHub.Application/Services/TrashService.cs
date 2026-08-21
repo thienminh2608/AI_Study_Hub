@@ -83,6 +83,13 @@ public class TrashService : ITrashService
         if (doc == null) return;
         if (doc.UserId != userId) throw new UnauthorizedAccessException("Only document owner can permanently delete item");
 
+        bool hasReportsOrAppeals = await _db.DocumentReports.AnyAsync(r => r.DocumentId == documentId)
+            || await _db.ModerationAppeals.AnyAsync(a => a.Report.DocumentId == documentId);
+        if (hasReportsOrAppeals)
+        {
+            throw new InvalidOperationException("Không thể xóa vĩnh viễn tài liệu này do có báo cáo hoặc khiếu nại liên quan cần bảo lưu dữ liệu kiểm duyệt.");
+        }
+
         if (!string.IsNullOrWhiteSpace(doc.CloudStorageUrl))
         {
             _fileStorage.DeleteFile(doc.CloudStorageUrl.TrimStart('/'));

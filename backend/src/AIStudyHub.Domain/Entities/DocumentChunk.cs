@@ -6,14 +6,9 @@ public class DocumentChunk
     {
         get; set;
     }
-    public int DocumentId
-    {
-        get; set;
-    }
-    public int ChunkIndex
-    {
-        get; set;
-    }
+    public int DocumentId { get; set; }
+    public int? DocumentVersionId { get; set; }
+    public int ChunkIndex { get; set; }
     public string? HeadingPath
     {
         get; set;
@@ -42,4 +37,6 @@ public class DocumentChunk
     }
 
     public virtual Document Document { get; set; } = null!;
+    public virtual DocumentVersion? DocumentVersion { get; set; }
+    public virtual ICollection<ChatMessageCitation> ChatMessageCitations { get; set; } = new List<ChatMessageCitation>();
 }

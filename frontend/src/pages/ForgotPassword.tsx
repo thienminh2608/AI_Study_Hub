@@ -6,6 +6,7 @@ import { Mail, Lock, Key, Loader } from 'lucide-react';
 export const ForgotPassword: React.FC = () => {
   const [step, setStep] = useState<1 | 2>(1); // Step 1: Send OTP, Step 2: Verify and Reset
   const [email, setEmail] = useState('');
+  const [challengeId, setChallengeId] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -27,8 +28,11 @@ export const ForgotPassword: React.FC = () => {
 
     setSubmitting(true);
     try {
-      await api.auth.forgotPassword(email);
-      setSuccess('Mã OTP đã được gửi về email của bạn. Vui lòng kiểm tra.');
+      const res = await api.auth.forgotPassword(email);
+      if (res?.challengeId) {
+        setChallengeId(res.challengeId);
+      }
+      setSuccess(res?.message || 'Mã OTP đã được gửi về email của bạn. Vui lòng kiểm tra.');
       setTimeout(() => {
         setStep(2);
         setSuccess('');
@@ -57,10 +61,13 @@ export const ForgotPassword: React.FC = () => {
 
     setSubmitting(true);
     try {
-      // 1. Verify OTP first
-      await api.auth.verifyOtp({ email, otp });
-      // 2. Reset password
-      await api.auth.resetPassword({ email, otp, newPassword });
+      // 1. Verify OTP to get one-time reset grant token
+      const verifyRes = await api.auth.verifyOtp({ email, otp, challengeId });
+      if (!verifyRes?.resetGrantToken) {
+        throw new Error(verifyRes?.message || 'Xác thực OTP thất bại.');
+      }
+      // 2. Reset password with grant token
+      await api.auth.resetPassword({ email, resetGrantToken: verifyRes.resetGrantToken, newPassword });
       setSuccess('Đặt lại mật khẩu thành công! Đang chuyển hướng về trang đăng nhập...');
       setTimeout(() => {
         navigate('/login');

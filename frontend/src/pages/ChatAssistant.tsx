@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api } from '../services/api';
+import { api, ApiRequestError } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
 import {
   Bot,
-  Send,
   Trash2,
   Pin,
   Plus,
@@ -14,6 +13,7 @@ import {
   BookOpen,
   Calendar,
   Link as LinkIcon,
+  RotateCcw,
   X,
 } from 'lucide-react';
 
@@ -32,6 +32,7 @@ interface ChatMessage {
   messageContent: string;
   display: boolean;
   createdAt: string;
+  citations?: ChatCitation[];
 }
 
 interface ChatDocument {
@@ -41,11 +42,21 @@ interface ChatDocument {
 }
 
 interface ChatCitation {
-  chunkId: number;
+  citationId?: number;
+  messageId?: number;
+  chunkId?: number | null;
   documentId: number;
+  documentVersionId?: number;
+  documentTitle?: string;
+  versionNumber?: number;
+  fileExtension?: string;
+  pageNumber?: number | null;
   page?: number | null;
-  startOffset: number;
-  endOffset: number;
+  startOffset?: number | null;
+  endOffset?: number | null;
+  headingPath?: string | null;
+  snippet?: string;
+  createdAt?: string;
 }
 
 export const ChatAssistant: React.FC = () => {
@@ -56,6 +67,7 @@ export const ChatAssistant: React.FC = () => {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeCitation, setActiveCitation] = useState<ChatCitation | null>(null);
 
   // Forms & inputs
   const [newSessionTitle, setNewSessionTitle] = useState('');
@@ -70,11 +82,12 @@ export const ChatAssistant: React.FC = () => {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [agentAction, setAgentAction] = useState<string | null>(null); // Displays AI Agent running loops
+  const [retryableMessageId, setRetryableMessageId] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Load Sessions
-  const loadSessions = async () => {
+  const loadSessions = useCallback(async () => {
     try {
       const data = await api.chat.getSessions();
       setSessions(data);
@@ -84,10 +97,10 @@ export const ChatAssistant: React.FC = () => {
     } finally {
       setLoadingSessions(false);
     }
-  };
+  }, []);
 
   // Load Messages for current session
-  const loadMessages = async (sessionId: number) => {
+  const loadMessages = useCallback(async (sessionId: number) => {
     setLoadingMessages(true);
     try {
       const data = await api.chat.getMessages(sessionId);
@@ -99,7 +112,7 @@ export const ChatAssistant: React.FC = () => {
     } finally {
       setLoadingMessages(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const requestedSessionId = Number(searchParams.get('sessionId'));
@@ -129,7 +142,7 @@ export const ChatAssistant: React.FC = () => {
           setSearchParams({}, { replace: true });
       })
       .catch((err) => console.error('Error loading documents for chat:', err));
-  }, []);
+  }, [searchParams, setSearchParams, loadSessions]);
 
   useEffect(() => {
     if (currentSessionId) {
@@ -139,7 +152,7 @@ export const ChatAssistant: React.FC = () => {
     } else {
       setMessages([]);
     }
-  }, [currentSessionId]);
+  }, [currentSessionId, sessions, loadMessages]);
 
   useEffect(() => {
     // Scroll to bottom on new messages
@@ -197,24 +210,21 @@ export const ChatAssistant: React.FC = () => {
     }
   };
 
-  // Send Message & Simulation of Agent Loop
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputMessage.trim() || !currentSessionId || sending) return;
-
-    const userMsgText = inputMessage.trim();
-    setInputMessage('');
+  const sendQuestion = async (userMsgText: string, retryMessageId?: number) => {
+    if (!userMsgText.trim() || !currentSessionId || sending) return;
     setSending(true);
 
-    // 1. Instantly append user message to local state
-    const tempUserMsg: ChatMessage = {
-      messageId: Date.now(),
-      sender: 'USER',
-      messageContent: userMsgText,
-      display: true,
-      createdAt: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, tempUserMsg]);
+    if (!retryMessageId) {
+      setInputMessage('');
+      const tempUserMsg: ChatMessage = {
+        messageId: Date.now(),
+        sender: 'USER',
+        messageContent: userMsgText,
+        display: true,
+        createdAt: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, tempUserMsg]);
+    }
 
     // 2. Loop indicator simulator
     // In our backend, Gemini agent runs a loop. We can simulate or show status updates based on typical agent flows
@@ -225,12 +235,14 @@ export const ChatAssistant: React.FC = () => {
       const result = await api.chat.askQuestion(currentSessionId, {
         messageContent: userMsgText,
         documentId: selectedDocumentId ?? undefined,
+        retryMessageId,
       });
       await loadSessions();
 
       // Clear action and refresh message list
       setAgentAction(null);
       const refreshed = await loadMessages(currentSessionId);
+      setRetryableMessageId(null);
       if (result?.citations?.length) {
         const lastBotMessage = [...refreshed].reverse().find((m) => m.sender === 'BOT');
         if (lastBotMessage) {
@@ -242,12 +254,26 @@ export const ChatAssistant: React.FC = () => {
       }
     } catch (err: any) {
       setAgentAction(null);
-      notify(err.message || 'Gặp lỗi trong quá trình giao tiếp với AI.', 'error');
       // Refresh to make sure UI matches backend state
-      await loadMessages(currentSessionId);
+      const refreshed = await loadMessages(currentSessionId);
+      const isRetryable = err instanceof ApiRequestError && err.retryable;
+      const lastUserMessage = [...refreshed].reverse().find((m) => m.sender === 'USER');
+      setRetryableMessageId(isRetryable ? (lastUserMessage?.messageId ?? null) : null);
+      notify(
+        err instanceof ApiRequestError && err.code === 'AI_QUOTA_EXHAUSTED'
+          ? err.message
+          : (err.message || 'Gặp lỗi trong quá trình giao tiếp với AI.'),
+        'error',
+      );
     } finally {
       setSending(false);
     }
+  };
+
+  // Send Message & Simulation of Agent Loop
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendQuestion(inputMessage.trim());
   };
 
   const stripSourceSuffix = (text: string) => text.replace(/\n\nNguồn:.*$/s, '');
@@ -424,6 +450,8 @@ export const ChatAssistant: React.FC = () => {
                       if (!m.display) return null;
 
                       const isBot = m.sender === 'BOT';
+                      const isUnansweredQuestion =
+                        !isBot && m.messageId === retryableMessageId && !agentAction;
                       return (
                         <div
                           key={m.messageId}
@@ -432,30 +460,49 @@ export const ChatAssistant: React.FC = () => {
                           {isBot && <Bot size={28} className="chat-avatar bot" />}
                           <div className={`message-bubble glass-card ${isBot ? 'bot' : 'user'}`}>
                             {renderMessageContent(
-                              citationsByMessageId[m.messageId]?.length
+                              (m.citations?.length || citationsByMessageId[m.messageId]?.length)
                                 ? stripSourceSuffix(m.messageContent)
                                 : m.messageContent,
                             )}
-                            {citationsByMessageId[m.messageId]?.length ? (
+                            {((m.citations && m.citations.length > 0) || citationsByMessageId[m.messageId]?.length) ? (
                               <div className="message-citations">
-                                {citationsByMessageId[m.messageId].map((citation) => (
+                                {(m.citations && m.citations.length > 0 ? m.citations : citationsByMessageId[m.messageId]).map((citation, cIdx) => (
                                   <button
-                                    key={citation.chunkId}
+                                    key={citation.citationId ?? citation.chunkId ?? cIdx}
                                     type="button"
                                     className="citation-chip"
-                                    onClick={() =>
-                                      navigate(
-                                        `/document/${citation.documentId}?chunk=${citation.chunkId}&start=${citation.startOffset}&end=${citation.endOffset}` +
-                                          (citation.page ? `&page=${citation.page}` : ''),
-                                      )
-                                    }
+                                    onClick={() => {
+                                      if (citation.citationId) {
+                                        navigate(`/document/${citation.documentId}?citation=${citation.citationId}`);
+                                      } else if (citation.snippet) {
+                                        setActiveCitation(citation);
+                                      } else {
+                                        navigate(
+                                          `/document/${citation.documentId}?chunk=${citation.chunkId}&start=${citation.startOffset}&end=${citation.endOffset}` +
+                                            (citation.pageNumber || citation.page ? `&page=${citation.pageNumber || citation.page}` : ''),
+                                        );
+                                      }
+                                    }}
                                   >
                                     <LinkIcon size={12} />
-                                    {citation.page ? `Trang ${citation.page}` : `Chunk ${citation.chunkId}`}
+                                    {citation.pageNumber || citation.page
+                                      ? `Trang ${citation.pageNumber || citation.page}`
+                                      : (citation.chunkId ? `Chunk ${citation.chunkId}` : 'Trích dẫn')}
                                   </button>
                                 ))}
                               </div>
                             ) : null}
+                            {isUnansweredQuestion && (
+                              <button
+                                type="button"
+                                className="retry-message-btn"
+                                disabled={sending}
+                                onClick={() => sendQuestion(m.messageContent, m.messageId)}
+                              >
+                                {sending ? <Loader size={13} className="spin" /> : <RotateCcw size={13} />}
+                                Thử lại câu hỏi
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -516,8 +563,25 @@ export const ChatAssistant: React.FC = () => {
                   type="submit"
                   className="btn-primary send-btn"
                   disabled={sending || !inputMessage.trim()}
+                  aria-label="Gửi câu hỏi cho AI"
+                  title="Gửi câu hỏi"
                 >
-                  {sending ? <Loader className="spin" size={18} /> : <Send size={18} />}
+                  {sending ? (
+                    <Loader className="spin" size={20} />
+                  ) : (
+                    <svg
+                      className="send-icon"
+                      viewBox="0 0 24 24"
+                      width="22"
+                      height="22"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path d="M4 12 20 4l-6.6 16-2.2-6.2L4 12Z" />
+                      <path d="m11.2 13.8 4.6-4.6" />
+                    </svg>
+                  )}
+                  <span className="sr-only">Gửi câu hỏi</span>
                 </button>
               </form>
             </>
@@ -584,6 +648,88 @@ export const ChatAssistant: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Citation Snapshot Details */}
+      {activeCitation && (
+        <div className="modal-overlay" onMouseDown={() => setActiveCitation(null)}>
+          <div
+            className="modal-box create-session-modal glass-panel animate-slide-up"
+            style={{ maxWidth: '600px' }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className="create-session-close"
+              onClick={() => setActiveCitation(null)}
+              aria-label="Đóng"
+            >
+              <X size={20} />
+            </button>
+            <span className="create-session-icon">
+              <BookOpen size={22} />
+            </span>
+            <small>TRÍCH DẪN TÀI LIỆU (BẢN GHI BẤT BIẾN)</small>
+            <h3 style={{ wordBreak: 'break-word' }}>
+              {activeCitation.documentTitle || 'Tài liệu'} (v{activeCitation.versionNumber ?? 1})
+            </h3>
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+              {activeCitation.pageNumber ? `Trang ${activeCitation.pageNumber} • ` : ''}
+              {activeCitation.chunkId ? `Chunk #${activeCitation.chunkId} • ` : ''}
+              Định dạng: {activeCitation.fileExtension?.toUpperCase() || 'TXT'}
+            </p>
+
+            {activeCitation.snippet && (
+              <div
+                style={{
+                  background: 'rgba(0,0,0,0.3)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  margin: '1rem 0',
+                  maxHeight: '220px',
+                  overflowY: 'auto',
+                  fontSize: '0.9rem',
+                  lineHeight: '1.5',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {activeCitation.snippet}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() => setActiveCitation(null)}
+                className="btn-secondary"
+              >
+                Đóng
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  const docId = activeCitation.documentId;
+                  const cId = activeCitation.chunkId;
+                  const start = activeCitation.startOffset ?? 0;
+                  const end = activeCitation.endOffset ?? 0;
+                  const page = activeCitation.pageNumber ?? activeCitation.page;
+                  setActiveCitation(null);
+                  if (activeCitation.citationId) {
+                    navigate(`/document/${docId}?citation=${activeCitation.citationId}`);
+                  } else {
+                    navigate(
+                      `/document/${docId}?chunk=${cId ?? ''}&start=${start}&end=${end}` +
+                        (page ? `&page=${page}` : ''),
+                    );
+                  }
+                }}
+              >
+                Mở tài liệu
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -863,6 +1009,29 @@ export const ChatAssistant: React.FC = () => {
           background: rgba(0, 180, 216, 0.16);
         }
 
+        .retry-message-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          margin-top: 0.65rem;
+          padding: 0.35rem 0.7rem;
+          border-radius: 999px;
+          border: 1px solid rgba(251, 191, 36, 0.35);
+          background: rgba(251, 191, 36, 0.08);
+          color: #fbbf24;
+          font-size: 0.78rem;
+          cursor: pointer;
+        }
+
+        .retry-message-btn:hover:not(:disabled) {
+          background: rgba(251, 191, 36, 0.16);
+        }
+
+        .retry-message-btn:disabled {
+          cursor: not-allowed;
+          opacity: 0.65;
+        }
+
         .agent-status-card {
           align-self: center;
           display: inline-flex;
@@ -904,12 +1073,59 @@ export const ChatAssistant: React.FC = () => {
 
         .send-btn {
           width: 48px;
+          min-width: 48px;
           height: 48px;
           border-radius: var(--radius-md);
           display: flex;
           justify-content: center;
           align-items: center;
           flex-shrink: 0;
+          border: 1px solid rgba(56, 189, 248, 0.65);
+          background: linear-gradient(135deg, #0284c7, #2563eb);
+          color: #ffffff;
+          box-shadow: 0 6px 18px rgba(37, 99, 235, 0.28);
+        }
+
+        .send-btn svg {
+          display: block;
+          width: 22px !important;
+          height: 22px !important;
+          flex: 0 0 22px;
+          stroke: #ffffff !important;
+          stroke-width: 2.4;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+          fill: none;
+          opacity: 1 !important;
+          visibility: visible !important;
+          pointer-events: none;
+        }
+
+        .send-btn .send-icon path:first-child {
+          fill: rgba(255, 255, 255, 0.16);
+        }
+
+        .send-btn:disabled {
+          background: rgba(71, 85, 105, 0.55);
+          border-color: rgba(148, 163, 184, 0.25);
+          color: #cbd5e1;
+          box-shadow: none;
+        }
+
+        .send-btn:disabled svg {
+          stroke: #e2e8f0 !important;
+        }
+
+        .sr-only {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
         }
 
         .empty-chat-state {

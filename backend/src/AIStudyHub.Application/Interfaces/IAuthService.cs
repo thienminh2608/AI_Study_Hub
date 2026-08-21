@@ -7,11 +7,13 @@ namespace AIStudyHub.Application.Interfaces;
 public interface IAuthService
 {
     Task<AuthResponseDto?> RegisterAsync(RegisterDto dto);
-    Task<AuthResponseDto?> LoginAsync(LoginDto dto);
-    Task<AuthResponseDto?> RefreshAsync(string refreshToken);
-    Task<bool> SendForgotPasswordOtpAsync(string email);
-    Task<bool> VerifyOtpAsync(VerifyOtpDto dto);
+    Task<AuthResponseDto?> LoginAsync(LoginDto dto, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResponseDto?> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
+    Task<bool> LogoutAsync(string? refreshToken, string? ipAddress = null);
+    Task<SendOtpResponseDto> SendForgotPasswordOtpAsync(string email);
+    Task<VerifyOtpResponseDto> VerifyOtpAsync(VerifyOtpDto dto);
     Task<bool> ResetPasswordAsync(ResetPasswordDto dto);
+    Task<bool> RevokeAllUserSessionsAsync(int userId, string reason);
     Task<UserBalanceDto?> GetUserBalanceAndTierAsync(int userId);
     Task<UserBalanceDto?> UpdateUsernameAsync(int userId, string username);
 }

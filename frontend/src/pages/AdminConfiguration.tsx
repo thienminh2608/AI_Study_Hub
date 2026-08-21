@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink } from 'react-router-dom';
 import { formatDateTime } from '../utils/dateTime';
@@ -9,11 +9,15 @@ import {
   Eye,
   FileText,
   HardDrive,
+  Pencil,
+  Plus,
+  Trash2,
   UserRound,
   X,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 type AdminConfigTab = 'documents' | 'report-config' | 'system-config' | 'transfer-config';
 
@@ -23,6 +27,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 1000);
   const [status, setStatus] = useState('ALL');
   const [sortKey, setSortKey] = useState('title');
   const [direction, setDirection] = useState<'asc' | 'desc'>('asc');
@@ -34,6 +39,15 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
   const pageSize = 8;
 
   const [newReason, setNewReason] = useState({
+    reasonCode: '',
+    severityLevel: 'MEDIUM',
+    baseScore: 1,
+    autoFlagThreshold: 3,
+    description: '',
+  });
+  const [showReasonModal, setShowReasonModal] = useState(false);
+  const [editingReasonCode, setEditingReasonCode] = useState<string | null>(null);
+  const emptyReason = () => ({
     reasonCode: '',
     severityLevel: 'MEDIUM',
     baseScore: 1,
@@ -58,12 +72,11 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
     </button>
   );
 
-  const load = async () => {
-    setLoading(true);
+  const load = useCallback(async () => {
     setError('');
     try {
       if (tab === 'documents') {
-        const data = await api.admin.getDocuments(page, pageSize, query, status);
+        const data = await api.admin.getDocuments(page, pageSize, debouncedQuery, status);
         setItems(data.items);
         setTotalCount(data.totalCount);
       } else {
@@ -80,28 +93,29 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
     } finally {
       setLoading(false);
     }
-  };
+  }, [tab, page, pageSize, debouncedQuery, status]);
 
   useEffect(() => {
+    setLoading(true);
     setPage(1);
     setQuery('');
     setStatus('ALL');
     setDirection('asc');
     setSortKey(tab === 'documents' ? 'title' : tab === 'report-config' ? 'reasonCode' : 'tierName');
+    setShowReasonModal(false);
+    setEditingReasonCode(null);
   }, [tab]);
 
   useEffect(() => {
     load();
-  }, [tab, page, query, status]);
+  }, [load]);
 
   const visible = useMemo(
     () => {
-      if (tab === 'documents') {
-        return items.map((item, index) => ({ ...item, __index: index }));
-      }
       return items
         .map((item, index) => ({ ...item, __index: index }))
         .filter((item) => {
+          if (tab === 'documents') return true;
           const matchesQuery =
             !query.trim() ||
             JSON.stringify(item)
@@ -119,7 +133,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
           return direction === 'asc' ? result : -result;
         });
     },
-    [items, query, status, sortKey, direction, tab],
+    [items, query, sortKey, direction, tab],
   );
 
   const change = (index: number, key: string, value: string | number | boolean) =>
@@ -145,17 +159,35 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
       notify('Đã xóa tài liệu.', 'success');
     }
   };
-  const addReason = async (event: React.FormEvent) => {
+  const saveReason = async (event: React.FormEvent) => {
     event.preventDefault();
-    await api.admin.createReportReason(newReason);
+    try {
+      if (editingReasonCode) await api.admin.updateReportReason(editingReasonCode, newReason);
+      else await api.admin.createReportReason(newReason);
+      notify(editingReasonCode ? 'Đã cập nhật quy tắc báo cáo.' : 'Đã thêm quy tắc báo cáo.', 'success');
+      setShowReasonModal(false);
+      setEditingReasonCode(null);
+      setNewReason(emptyReason());
+      await load();
+    } catch (err: any) {
+      notify(err.message || 'Không thể lưu quy tắc báo cáo.', 'error');
+    }
+  };
+  const openNewReason = () => {
+    setEditingReasonCode(null);
+    setNewReason(emptyReason());
+    setShowReasonModal(true);
+  };
+  const openEditReason = (reason: any) => {
+    setEditingReasonCode(reason.reasonCode);
     setNewReason({
-      reasonCode: '',
-      severityLevel: 'MEDIUM',
-      baseScore: 1,
-      autoFlagThreshold: 3,
-      description: '',
+      reasonCode: reason.reasonCode,
+      severityLevel: reason.severityLevel,
+      baseScore: Number(reason.baseScore || 0),
+      autoFlagThreshold: Number(reason.autoFlagThreshold || 1),
+      description: reason.description || '',
     });
-    await load();
+    setShowReasonModal(true);
   };
   const removeReason = async (code: string) => {
     if (
@@ -314,6 +346,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
             <NavLink className="active" to="/admin?tab=documents">
               Tài liệu
             </NavLink>
+            <NavLink to="/admin?tab=audit-log">Nhật ký hệ thống</NavLink>
           </>
         ) : (
           <>
@@ -340,7 +373,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
             ? 'Cấu hình quy tắc báo cáo'
             : 'Cấu hình gói dịch vụ'}
       </h3>
-      <div className="admin-toolbar">
+      <div className={`admin-toolbar ${tab === 'report-config' ? 'report-rule-toolbar' : ''}`}>
         <input
           className="input-control"
           placeholder={
@@ -364,7 +397,7 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
             <option value="PRIVATE">Riêng tư</option>
           </select>
         )}
-        {tab !== 'documents' && (
+        {tab === 'system-config' && (
           <>
             <select
               className="input-control"
@@ -475,97 +508,82 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
 
       {tab === 'report-config' && (
         <>
-          <form className="new-reason-form glass-card" onSubmit={addReason}>
-            <strong>Thêm lý do</strong>
-            <input
-              className="input-control"
-              required
-              placeholder="Mã lý do"
-              value={newReason.reasonCode}
-              onChange={(e) =>
-                setNewReason({ ...newReason, reasonCode: e.target.value.toUpperCase() })
-              }
-            />
-            <select
-              className="input-control"
-              value={newReason.severityLevel}
-              onChange={(e) => setNewReason({ ...newReason, severityLevel: e.target.value })}
-            >
-              <option>LOW</option>
-              <option>MEDIUM</option>
-              <option>HIGH</option>
-            </select>
-            <input
-              className="input-control"
-              type="number"
-              min="0"
-              value={newReason.baseScore}
-              onChange={(e) => setNewReason({ ...newReason, baseScore: Number(e.target.value) })}
-            />
-            <input
-              className="input-control"
-              type="number"
-              min="1"
-              value={newReason.autoFlagThreshold}
-              onChange={(e) =>
-                setNewReason({ ...newReason, autoFlagThreshold: Number(e.target.value) })
-              }
-            />
-            <input
-              className="input-control"
-              placeholder="Mô tả"
-              value={newReason.description}
-              onChange={(e) => setNewReason({ ...newReason, description: e.target.value })}
-            />
-            <button className="btn-primary">Thêm</button>
-          </form>
-          <div className="admin-config-list">
-            {visible.map((reason) => (
-              <div className="admin-config-form" key={reason.reasonCode}>
-                <strong>{reason.reasonCode}</strong>
-                <input
-                  className="input-control"
-                  value={reason.severityLevel}
-                  onChange={(e) => change(reason.__index, 'severityLevel', e.target.value)}
-                />
-                <input
-                  className="input-control"
-                  type="number"
-                  value={reason.baseScore}
-                  onChange={(e) => change(reason.__index, 'baseScore', Number(e.target.value))}
-                />
-                <input
-                  className="input-control"
-                  type="number"
-                  value={reason.autoFlagThreshold}
-                  onChange={(e) =>
-                    change(reason.__index, 'autoFlagThreshold', Number(e.target.value))
-                  }
-                />
-                <input
-                  className="input-control wide"
-                  value={reason.description ?? ''}
-                  onChange={(e) => change(reason.__index, 'description', e.target.value)}
-                />
-                <button
-                  className="btn-primary"
-                  onClick={async () => {
-                    await api.admin.updateReportReason(reason.reasonCode, items[reason.__index]);
-                    await load();
-                  }}
-                >
-                  Lưu
-                </button>
-                <button
-                  className="btn-secondary danger"
-                  onClick={() => removeReason(reason.reasonCode)}
-                >
-                  Xóa
-                </button>
-              </div>
-            ))}
+          <div className="report-rule-actions">
+            <button type="button" className="btn-primary" onClick={openNewReason}>
+              <Plus size={16} /> Thêm quy tắc
+            </button>
+          </div>
+          <div className="table-scroll">
+            <table className="admin-table report-rule-table">
+              <thead>
+                <tr>
+                  <th>{sortHeader('reasonCode', 'Mã lý do')}</th>
+                  <th>{sortHeader('severityLevel', 'Mức độ')}</th>
+                  <th>{sortHeader('baseScore', 'Điểm cơ sở')}</th>
+                  <th>{sortHeader('autoFlagThreshold', 'Ngưỡng tự động')}</th>
+                  <th>{sortHeader('description', 'Mô tả')}</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((reason) => (
+                  <tr key={reason.reasonCode}>
+                    <td><strong>{reason.reasonCode}</strong></td>
+                    <td><span className={`severity-badge ${reason.severityLevel}`}>{reason.severityLevel}</span></td>
+                    <td>{reason.baseScore}</td>
+                    <td>{reason.autoFlagThreshold}</td>
+                    <td>{reason.description || '—'}</td>
+                    <td>
+                      <div className="report-rule-row-actions">
+                        <button type="button" className="btn-secondary" onClick={() => openEditReason(reason)}>
+                          <Pencil size={15} /> Sửa
+                        </button>
+                        <button type="button" className="btn-secondary danger" onClick={() => removeReason(reason.reasonCode)}>
+                          <Trash2 size={15} /> Xóa
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </>
+      )}
+
+      {showReasonModal && createPortal(
+        <div className="modal-overlay" onMouseDown={() => setShowReasonModal(false)}>
+          <form className="modal-box glass-panel report-rule-modal" onSubmit={saveReason} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="report-rule-modal-heading">
+              <div>
+                <h3>{editingReasonCode ? 'Chỉnh sửa quy tắc báo cáo' : 'Thêm quy tắc báo cáo'}</h3>
+                <p>Thiết lập mã, mức độ và ngưỡng tự động xử lý báo cáo.</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setShowReasonModal(false)} aria-label="Đóng"><X size={20} /></button>
+            </div>
+            <label>Mã lý do
+              <input className="input-control" required disabled={Boolean(editingReasonCode)} value={newReason.reasonCode} onChange={(e) => setNewReason({ ...newReason, reasonCode: e.target.value.toUpperCase() })} />
+            </label>
+            <label>Mức độ
+              <select className="input-control" value={newReason.severityLevel} onChange={(e) => setNewReason({ ...newReason, severityLevel: e.target.value })}>
+                <option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option>
+              </select>
+            </label>
+            <label>Điểm cơ sở
+              <input className="input-control" type="number" min="0" value={newReason.baseScore} onChange={(e) => setNewReason({ ...newReason, baseScore: Number(e.target.value) })} />
+            </label>
+            <label>Ngưỡng tự động
+              <input className="input-control" type="number" min="1" value={newReason.autoFlagThreshold} onChange={(e) => setNewReason({ ...newReason, autoFlagThreshold: Number(e.target.value) })} />
+            </label>
+            <label className="wide">Mô tả
+              <textarea className="input-control" rows={4} value={newReason.description} onChange={(e) => setNewReason({ ...newReason, description: e.target.value })} />
+            </label>
+            <div className="modal-actions wide">
+              <button type="button" className="btn-secondary" onClick={() => setShowReasonModal(false)}>Hủy</button>
+              <button type="submit" className="btn-primary">{editingReasonCode ? 'Lưu thay đổi' : 'Thêm quy tắc'}</button>
+            </div>
+          </form>
+        </div>, document.body,
       )}
 
       {tab === 'system-config' && (
@@ -721,7 +739,8 @@ export const AdminConfiguration: React.FC<{ tab: AdminConfigTab }> = ({ tab }) =
           document.body,
         )}
 
-      <style>{`.admin-config-page{display:flex;flex-direction:column;gap:1.2rem;height:100%;overflow:auto}.admin-section-tabs{display:flex;gap:.5rem;border-bottom:1px solid rgba(255,255,255,.08)}.admin-section-tabs a{padding:.7rem 1rem;color:var(--text-muted)}.admin-section-tabs a.active{color:var(--text-primary);border-bottom:2px solid var(--accent-purple)}.admin-toolbar{display:grid;grid-template-columns:minmax(180px,1fr) repeat(3,minmax(120px,180px));gap:.7rem}.admin-config-list{display:flex;flex-direction:column;gap:.65rem}.admin-config-row{display:grid;grid-template-columns:minmax(220px,1fr) auto repeat(3,auto);align-items:center;gap:.7rem;padding:1rem;border-bottom:1px solid rgba(255,255,255,.06)}.admin-config-row>div{display:flex;flex-direction:column;gap:.3rem}.admin-config-row small{color:var(--text-muted)}.config-status.PUBLIC{color:var(--success)}.danger{color:var(--danger)!important}.admin-config-form,.new-reason-form{display:grid;grid-template-columns:110px 110px 85px 85px minmax(160px,1fr) auto auto;gap:.6rem;align-items:center;padding:.8rem}.tier-config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem}.tier-config-card{padding:1.2rem;display:flex;flex-direction:column;gap:.8rem}.tier-config-card label{display:flex;flex-direction:column;gap:.35rem}.document-detail-modal{position:relative;width:min(760px,calc(100vw - 2rem));max-height:85vh;overflow:auto;padding:1.5rem}.modal-close{position:absolute;right:1rem;top:1rem;background:none;border:0;color:var(--text-primary)}.detail-grid{display:grid;grid-template-columns:130px 1fr;gap:.6rem;margin:1rem 0}.detail-grid span{color:var(--text-muted)}.description{white-space:pre-wrap;max-height:160px;overflow:auto;color:var(--text-secondary)}.audience-list>div{display:flex;justify-content:space-between;gap:1rem;padding:.7rem 0;border-bottom:1px solid rgba(255,255,255,.06)}.audience-list span{display:flex;flex-direction:column}.audience-list span:last-child{text-align:right}@media(max-width:900px){.admin-toolbar,.admin-config-row,.admin-config-form,.new-reason-form{grid-template-columns:1fr}.wide{grid-column:auto}.admin-config-row{align-items:stretch}.detail-grid{grid-template-columns:1fr}.audience-list>div{flex-direction:column}.audience-list span:last-child{text-align:left}}`}</style>
+      <style>{`.admin-config-page{display:flex;flex-direction:column;gap:1.2rem;height:100%;overflow:auto}.admin-section-tabs{display:flex;gap:.5rem;border-bottom:1px solid rgba(255,255,255,.08)}.admin-section-tabs a{padding:.7rem 1rem;color:var(--text-muted)}.admin-section-tabs a.active{color:var(--text-primary);border-bottom:2px solid var(--accent-purple)}.admin-toolbar{display:grid;grid-template-columns:minmax(180px,1fr) repeat(3,minmax(120px,180px));gap:.7rem}.admin-config-list{display:flex;flex-direction:column;gap:.65rem}.admin-config-row{display:grid;grid-template-columns:minmax(220px,1fr) auto repeat(3,auto);align-items:center;gap:.7rem;padding:1rem;border-bottom:1px solid rgba(255,255,255,.06)}.admin-config-row>div{display:flex;flex-direction:column;gap:.3rem}.admin-config-row small{color:var(--text-muted)}.config-status.PUBLIC{color:var(--success)}.danger{color:var(--danger)!important}.admin-config-form,.new-reason-form{display:grid;grid-template-columns:110px 110px 85px 85px minmax(160px,1fr) auto auto;gap:.6rem;align-items:center;padding:.8rem}.report-rule-actions{display:flex;justify-content:flex-end}.report-rule-actions button,.report-rule-row-actions button{display:inline-flex;align-items:center;gap:.4rem}.report-rule-row-actions{display:flex;gap:.45rem;white-space:nowrap}.report-rule-table td{vertical-align:middle}.severity-badge{display:inline-flex;padding:.25rem .55rem;border-radius:999px;font-size:.75rem;font-weight:800}.severity-badge.LOW{color:#34d399;background:rgba(52,211,153,.12)}.severity-badge.MEDIUM{color:#fbbf24;background:rgba(251,191,36,.12)}.severity-badge.HIGH{color:#fb7185;background:rgba(251,113,133,.12)}.report-rule-modal{position:relative;width:min(680px,calc(100vw - 2rem));display:grid;grid-template-columns:1fr 1fr;gap:1rem;padding:1.5rem}.report-rule-modal label{display:flex;flex-direction:column;gap:.4rem;color:var(--text-secondary)}.report-rule-modal .wide,.report-rule-modal-heading{grid-column:1/-1}.report-rule-modal-heading{display:flex;justify-content:space-between;gap:1rem}.report-rule-modal-heading p{margin-top:.25rem;color:var(--text-muted)}.report-rule-modal .modal-close{position:static;flex:0 0 auto}.report-rule-modal textarea{resize:vertical}.report-rule-modal .modal-actions{display:flex;justify-content:flex-end;gap:.6rem}.tier-config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem}.tier-config-card{padding:1.2rem;display:flex;flex-direction:column;gap:.8rem}.tier-config-card label{display:flex;flex-direction:column;gap:.35rem}.document-detail-modal{position:relative;width:min(760px,calc(100vw - 2rem));max-height:85vh;overflow:auto;padding:1.5rem}.modal-close{position:absolute;right:1rem;top:1rem;background:none;border:0;color:var(--text-primary)}.detail-grid{display:grid;grid-template-columns:130px 1fr;gap:.6rem;margin:1rem 0}.detail-grid span{color:var(--text-muted)}.description{white-space:pre-wrap;max-height:160px;overflow:auto;color:var(--text-secondary)}.audience-list>div{display:flex;justify-content:space-between;gap:1rem;padding:.7rem 0;border-bottom:1px solid rgba(255,255,255,.06)}.audience-list span{display:flex;flex-direction:column}.audience-list span:last-child{text-align:right}@media(max-width:900px){.admin-toolbar,.admin-config-row,.admin-config-form,.new-reason-form{grid-template-columns:1fr}.wide{grid-column:auto}.admin-config-row{align-items:stretch}.detail-grid{grid-template-columns:1fr}.audience-list>div{flex-direction:column}.audience-list span:last-child{text-align:left}}@media(max-width:650px){.report-rule-modal{grid-template-columns:1fr}.report-rule-modal .wide,.report-rule-modal-heading{grid-column:auto}}`}</style>
+      <style>{`.admin-toolbar.report-rule-toolbar{grid-template-columns:1fr}`}</style>
       <style>{`
       .document-modal-overlay{padding:1rem}
       .document-detail-modal{position:relative;width:min(880px,calc(100vw - 2rem));max-height:calc(100vh - 2rem);overflow:auto;padding:0;border-radius:18px}

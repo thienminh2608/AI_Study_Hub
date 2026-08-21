@@ -18,16 +18,29 @@ namespace AIStudyHub.Api.Controllers;
 public class DocumentController : ControllerBase
 {
     private readonly IDocumentService _documentService;
+    private readonly IPermissionService _permissionService;
     private readonly IFileStorage _fileStorage;
     private readonly IStudyHubDbContext _db;
     private readonly IDocumentProcessingQueue _queue;
+    private readonly IClock _clock;
+    private readonly ILogger<DocumentController> _logger;
 
-    public DocumentController(IDocumentService documentService, IFileStorage fileStorage, IStudyHubDbContext db, IDocumentProcessingQueue queue)
+    public DocumentController(
+        IDocumentService documentService,
+        IPermissionService permissionService,
+        IFileStorage fileStorage,
+        IStudyHubDbContext db,
+        IDocumentProcessingQueue queue,
+        IClock clock,
+        ILogger<DocumentController> logger)
     {
         _documentService = documentService;
+        _permissionService = permissionService;
         _fileStorage = fileStorage;
         _db = db;
         _queue = queue;
+        _clock = clock;
+        _logger = logger;
     }
 
     private int GetCurrentUserId()
@@ -39,9 +52,6 @@ public class DocumentController : ControllerBase
         }
         return userId;
     }
-
-    private Task<bool> IsSharedWithAsync(int documentId, int userId) =>
-        _db.DocumentShares.AnyAsync(s => s.DocumentId == documentId && s.SharedWithUserId == userId);
 
     [HttpPost("upload")]
     public async Task<IActionResult> Upload(IFormFile file, [FromQuery] int? folderId)
@@ -64,15 +74,33 @@ public class DocumentController : ControllerBase
             var docDto = await _documentService.UploadDocumentAsync(userId, folderId, originalFileName, fileExtension, file.Length, stream);
             return Ok(docDto);
         }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex, "Upload argument error: {Message}", ex.Message);
+            return BadRequest(new
+            {
+                message = ex.Message
+            });
+        }
         catch (InvalidOperationException ex)
         {
+            _logger.LogWarning(ex, "Upload invalid operation: {Message}", ex.Message);
             return BadRequest(new
+            {
+                message = ex.Message
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning(ex, "Upload unauthorized: {Message}", ex.Message);
+            return StatusCode(403, new
             {
                 message = ex.Message
             });
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Unhandled exception during document upload: {Message}", ex.Message);
             return StatusCode(500, new
             {
                 message = $"Lỗi upload: {ex.Message}"
@@ -87,7 +115,7 @@ public class DocumentController : ControllerBase
         {
             int userId = GetCurrentUserId();
             var doc = await _documentService.ConfirmDocumentAsync(userId, documentId, title, subject, sharingPermission, folderId);
-            _queue.EnqueueDocument(doc.DocumentId);
+            await _queue.EnqueueJobAsync(doc.DocumentId);
             return Ok(doc);
         }
         catch (Exception ex)
@@ -194,18 +222,24 @@ public class DocumentController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("public/paged")]
-    public async Task<IActionResult> GetPublicDocumentsPaged([FromQuery] int page = 1, [FromQuery] int pageSize = 12, [FromQuery] string? search = null,
-        [FromQuery] string? extensions = null, [FromQuery] string? sortBy = null, [FromQuery] string? sortDirection = null)
+    public async Task<IActionResult> GetPublicDocumentsPaged(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 12,
+        [FromQuery] string? search = null,
+        [FromQuery] string? subject = null,
+        [FromQuery] string? extensions = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDirection = null)
     {
         var extensionList = string.IsNullOrWhiteSpace(extensions)
             ? null
             : extensions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-        var paged = await _documentService.GetPublicDocumentsPagedAsync(page, pageSize, search, extensionList, sortBy, sortDirection);
+        var paged = await _documentService.GetPublicDocumentsPagedAsync(page, pageSize, search, subject, extensionList, sortBy, sortDirection);
         return Ok(paged);
     }
 
     [HttpGet("{id}")]
-    public async Task<IActionResult> GetDocumentById(int id)
+    public async Task<IActionResult> GetDocumentById(int id, [FromQuery] string? token = null)
     {
         var doc = await _documentService.GetDocumentByIdAsync(id);
         if (doc == null)
@@ -216,9 +250,8 @@ public class DocumentController : ControllerBase
             });
         }
 
-        // Access check
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+        if (!await _permissionService.CanViewDocumentAsync(id, userId, token))
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
@@ -228,6 +261,66 @@ public class DocumentController : ControllerBase
 
         doc.ViewCount = await _documentService.IncrementViewCountAsync(id, userId);
         return Ok(doc);
+    }
+
+    [HttpGet("{id}/version/{versionId}/extracted-text")]
+    public async Task<IActionResult> GetExtractedTextByVersion(int id, int versionId, [FromQuery] string? token = null)
+    {
+        int userId = GetCurrentUserId();
+        if (!await _permissionService.CanViewDocumentAsync(id, userId, token))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "Bạn không có quyền truy cập tài liệu này."
+            });
+        }
+
+        var chunks = await _db.DocumentChunks.AsNoTracking()
+            .Where(c => c.DocumentId == id && c.DocumentVersionId == versionId)
+            .OrderBy(c => c.ChunkIndex)
+            .Select(c => new
+            {
+                chunkId = c.ChunkId,
+                chunkIndex = c.ChunkIndex,
+                pageNumber = c.PageNumber,
+                headingPath = c.HeadingPath,
+                startOffset = c.StartOffset,
+                endOffset = c.EndOffset,
+                text = c.Text
+            })
+            .ToListAsync();
+
+        if (chunks.Count == 0)
+        {
+            var isVer1 = await _db.DocumentVersions.AnyAsync(v => v.VersionId == versionId && v.DocumentId == id && v.VersionNumber == 1);
+            if (isVer1)
+            {
+                chunks = await _db.DocumentChunks.AsNoTracking()
+                    .Where(c => c.DocumentId == id && c.DocumentVersionId == null)
+                    .OrderBy(c => c.ChunkIndex)
+                    .Select(c => new
+                    {
+                        chunkId = c.ChunkId,
+                        chunkIndex = c.ChunkIndex,
+                        pageNumber = c.PageNumber,
+                        headingPath = c.HeadingPath,
+                        startOffset = c.StartOffset,
+                        endOffset = c.EndOffset,
+                        text = c.Text
+                    })
+                    .ToListAsync();
+            }
+        }
+
+        string fullText = string.Join("\n\n", chunks.Select(c => c.text));
+
+        return Ok(new
+        {
+            documentId = id,
+            documentVersionId = versionId,
+            fullText,
+            chunks
+        });
     }
 
     [HttpDelete("{id}")]
@@ -249,7 +342,7 @@ public class DocumentController : ControllerBase
     }
 
     [HttpGet("{id}/text")]
-    public async Task<IActionResult> GetExtractedText(int id)
+    public async Task<IActionResult> GetExtractedText(int id, [FromQuery] string? token = null)
     {
         var doc = await _documentService.GetDocumentByIdAsync(id);
         if (doc == null)
@@ -261,7 +354,7 @@ public class DocumentController : ControllerBase
         }
 
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+        if (!await _permissionService.CanViewDocumentAsync(id, userId, token))
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
@@ -278,7 +371,7 @@ public class DocumentController : ControllerBase
     }
 
     [HttpGet("{id}/download")]
-    public async Task<IActionResult> DownloadDocument(int id)
+    public async Task<IActionResult> DownloadDocument(int id, [FromQuery] string? token = null)
     {
         var doc = await _documentService.GetDocumentByIdAsync(id);
         if (doc == null)
@@ -288,7 +381,7 @@ public class DocumentController : ControllerBase
             });
 
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+        if (!await _permissionService.CanDownloadDocumentAsync(id, userId, token))
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
                 message = "Bạn không có quyền tải tài liệu này."
@@ -302,8 +395,8 @@ public class DocumentController : ControllerBase
             });
 
         await _documentService.IncrementDownloadCountAsync(id, userId);
+        var fileName = $"{doc.Title}.{doc.FileExtension}";
         var extension = doc.FileExtension.TrimStart('.').ToLowerInvariant();
-        var fileName = $"{doc.Title}.{extension}";
         var contentType = extension switch
         {
             "pdf" => "application/pdf",
@@ -312,13 +405,18 @@ public class DocumentController : ControllerBase
             "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "txt" => "text/plain; charset=utf-8",
             "md" => "text/markdown; charset=utf-8",
+            "png" => "image/png",
+            "jpg" or "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
             _ => "application/octet-stream"
         };
         return PhysicalFile(_fileStorage.GetPhysicalPath(relativePath), contentType, fileName, enableRangeProcessing: true);
     }
 
     [HttpGet("{id}/raw")]
-    public async Task<IActionResult> GetRawFile(int id)
+    public async Task<IActionResult> GetRawFile(int id, [FromQuery] string? token = null)
     {
         var doc = await _documentService.GetDocumentByIdAsync(id);
         if (doc == null)
@@ -328,7 +426,7 @@ public class DocumentController : ControllerBase
             });
 
         int userId = GetCurrentUserId();
-        if (doc.UserId != userId && doc.SharingPermission != "PUBLIC" && !await IsSharedWithAsync(id, userId) && !User.IsInRole("MODERATOR") && !User.IsInRole("ADMIN"))
+        if (!await _permissionService.CanViewDocumentAsync(id, userId, token))
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
                 message = "Bạn không có quyền xem tài liệu này."
@@ -350,6 +448,93 @@ public class DocumentController : ControllerBase
             "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "txt" => "text/plain; charset=utf-8",
             "md" => "text/markdown; charset=utf-8",
+            "png" => "image/png",
+            "jpg" or "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            _ => "application/octet-stream"
+        };
+        return PhysicalFile(_fileStorage.GetPhysicalPath(relativePath), contentType, enableRangeProcessing: true);
+    }
+
+    [AllowAnonymous]
+    [HttpGet("shared/{token}")]
+    public async Task<IActionResult> GetSharedDocumentByToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return BadRequest(new { message = "Mã liên kết không hợp lệ." });
+
+        var docEntity = await _db.Documents.AsNoTracking().FirstOrDefaultAsync(d => d.ShareLinkToken == token && !d.IsDeleted);
+        if (docEntity == null)
+            return NotFound(new { message = "Không tìm thấy tài liệu chia sẻ hoặc liên kết đã bị xóa." });
+
+        if (docEntity.GeneralAccess != "LINK" || docEntity.IsShareLinkRevoked || (docEntity.ShareLinkExpiresAt.HasValue && docEntity.ShareLinkExpiresAt.Value < DateTime.UtcNow))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Liên kết chia sẻ này đã hết hạn hoặc bị thu hồi quyền truy cập." });
+        }
+
+        var doc = await _documentService.GetDocumentByIdAsync(docEntity.DocumentId);
+        if (doc == null)
+            return NotFound(new { message = "Không tìm thấy tài liệu." });
+
+        int userId = GetCurrentUserId();
+        doc.ViewCount = await _documentService.IncrementViewCountAsync(doc.DocumentId, userId);
+        return Ok(doc);
+    }
+
+    [AllowAnonymous]
+    [HttpGet("shared/{token}/text")]
+    public async Task<IActionResult> GetSharedExtractedTextByToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return BadRequest(new { message = "Mã liên kết không hợp lệ." });
+
+        var docEntity = await _db.Documents.AsNoTracking().FirstOrDefaultAsync(d => d.ShareLinkToken == token && !d.IsDeleted);
+        if (docEntity == null || docEntity.GeneralAccess != "LINK" || docEntity.IsShareLinkRevoked || (docEntity.ShareLinkExpiresAt.HasValue && docEntity.ShareLinkExpiresAt.Value < DateTime.UtcNow))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Không có quyền truy cập nội dung tài liệu này." });
+        }
+
+        string? text = await _documentService.GetExtractedTextAsync(docEntity.DocumentId);
+        return Ok(new
+        {
+            documentId = docEntity.DocumentId,
+            extractedText = text ?? ""
+        });
+    }
+
+    [AllowAnonymous]
+    [HttpGet("shared/{token}/raw")]
+    public async Task<IActionResult> GetSharedRawFileByToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return BadRequest(new { message = "Mã liên kết không hợp lệ." });
+
+        var docEntity = await _db.Documents.AsNoTracking().FirstOrDefaultAsync(d => d.ShareLinkToken == token && !d.IsDeleted);
+        if (docEntity == null || docEntity.GeneralAccess != "LINK" || docEntity.IsShareLinkRevoked || (docEntity.ShareLinkExpiresAt.HasValue && docEntity.ShareLinkExpiresAt.Value < DateTime.UtcNow))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Không có quyền truy cập tệp tài liệu này." });
+        }
+
+        var relativePath = docEntity.CloudStorageUrl.TrimStart('/');
+        if (!_fileStorage.FileExists(relativePath))
+            return NotFound(new { message = "Không tìm thấy file gốc trên máy chủ." });
+
+        var extension = docEntity.FileExtension.TrimStart('.').ToLowerInvariant();
+        var contentType = extension switch
+        {
+            "pdf" => "application/pdf",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "txt" => "text/plain; charset=utf-8",
+            "md" => "text/markdown; charset=utf-8",
+            "png" => "image/png",
+            "jpg" or "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
             _ => "application/octet-stream"
         };
         return PhysicalFile(_fileStorage.GetPhysicalPath(relativePath), contentType, enableRangeProcessing: true);
@@ -362,13 +547,15 @@ public class DocumentController : ControllerBase
     public async Task<IActionResult> SharedWithMe()
     {
         var userId = GetCurrentUserId();
-        var ids = await _db.DocumentShares.AsNoTracking().Where(s => s.SharedWithUserId == userId)
-            .OrderByDescending(s => s.CreatedAt).Select(s => s.DocumentId).ToListAsync();
+        var sharedDocIds = await _permissionService.GetSharedDocumentIdsAsync(userId);
         var result = new List<DocumentResponseDto>();
-        foreach (var id in ids)
+        foreach (var id in sharedDocIds)
         {
             var document = await _documentService.GetDocumentByIdAsync(id);
-            if (document != null) result.Add(document);
+            if (document != null && document.UserId != userId)
+            {
+                result.Add(document);
+            }
         }
         return Ok(result);
     }
@@ -377,7 +564,7 @@ public class DocumentController : ControllerBase
     public async Task<IActionResult> Shares(int id)
     {
         var userId = GetCurrentUserId();
-        if (!await _db.Documents.AnyAsync(d => d.DocumentId == id && d.UserId == userId)) return Forbid();
+        if (!await _permissionService.CanManageDocumentAccessAsync(id, userId)) return Forbid();
         return Ok(await _db.DocumentShares.AsNoTracking().Where(s => s.DocumentId == id)
             .Select(s => new { s.SharedWithUserId, s.SharedWithUser.Username, s.SharedWithUser.Email, s.CreatedAt }).ToListAsync());
     }
@@ -386,14 +573,15 @@ public class DocumentController : ControllerBase
     public async Task<IActionResult> ShareWithFriend(int id, int friendUserId)
     {
         var userId = GetCurrentUserId();
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.DocumentId == id && d.UserId == userId);
+        if (!await _permissionService.CanManageDocumentAccessAsync(id, userId)) return Forbid();
+        var document = await _db.Documents.FirstOrDefaultAsync(d => d.DocumentId == id);
         if (document == null) return NotFound(new { message = "Không tìm thấy tài liệu." });
         var areFriends = await _db.Friendships.AnyAsync(f => f.Status == "ACCEPTED" &&
             ((f.RequesterId == userId && f.AddresseeId == friendUserId) || (f.RequesterId == friendUserId && f.AddresseeId == userId)));
         if (!areFriends) return BadRequest(new { message = "Chỉ có thể chia sẻ tài liệu cho bạn bè." });
         if (!await _db.DocumentShares.AnyAsync(s => s.DocumentId == id && s.SharedWithUserId == friendUserId))
         {
-            _db.DocumentShares.Add(new DocumentShare { DocumentId = id, OwnerUserId = userId, SharedWithUserId = friendUserId, CreatedAt = DateTime.Now });
+            _db.DocumentShares.Add(new DocumentShare { DocumentId = id, OwnerUserId = document.UserId, SharedWithUserId = friendUserId, CreatedAt = DateTime.Now });
             _db.ModerationNotices.Add(new ModerationNotice { UserId = friendUserId, DocumentId = id, RelatedUserId = userId,
                 Type = "DOCUMENT_SHARED", Title = "Bạn nhận được một tài liệu", Message = $"Một người bạn đã chia sẻ tài liệu “{document.Title}” với bạn.",
                 ActionUrl = $"/document/{id}", IsRead = false, CreatedAt = DateTime.Now });
@@ -406,7 +594,8 @@ public class DocumentController : ControllerBase
     public async Task<IActionResult> RemoveShare(int id, int friendUserId)
     {
         var userId = GetCurrentUserId();
-        var share = await _db.DocumentShares.FirstOrDefaultAsync(s => s.DocumentId == id && s.OwnerUserId == userId && s.SharedWithUserId == friendUserId);
+        if (!await _permissionService.CanManageDocumentAccessAsync(id, userId)) return Forbid();
+        var share = await _db.DocumentShares.FirstOrDefaultAsync(s => s.DocumentId == id && s.SharedWithUserId == friendUserId);
         if (share == null) return NotFound();
         _db.DocumentShares.Remove(share);
         await _db.SaveChangesAsync();
@@ -420,7 +609,7 @@ public class DocumentController : ControllerBase
         if (detail == null)
             return NotFound();
         var userId = GetCurrentUserId();
-        return detail.Document.UserId == userId || User.IsInRole("ADMIN") || User.IsInRole("MODERATOR") ? Ok(detail) : Forbid();
+        return await _permissionService.CanManageDocumentAccessAsync(id, userId) ? Ok(detail) : Forbid();
     }
 
     [HttpPost("report")]
@@ -451,7 +640,16 @@ public class DocumentController : ControllerBase
             {
                 message = "Không thể gửi giải trình."
             });
-        var appeal = new ModerationAppeal { ReportId = reportId, SubmittedByUserId = userId, Explanation = dto.Explanation.Trim(), EvidenceUrl = dto.EvidenceUrl?.Trim(), Status = "PENDING", CreatedAt = DateTime.Now };
+
+        if (!report.ResolvedAt.HasValue || _clock.UtcNow > report.ResolvedAt.Value.AddDays(14))
+        {
+            return BadRequest(new
+            {
+                message = "Đã hết thời hạn khiếu nại (14 ngày kể từ khi quyết định xử lý được ban hành)."
+            });
+        }
+
+        var appeal = new ModerationAppeal { ReportId = reportId, SubmittedByUserId = userId, Explanation = dto.Explanation.Trim(), EvidenceUrl = dto.EvidenceUrl?.Trim(), Status = "PENDING", CreatedAt = _clock.UtcNow };
         _db.ModerationAppeals.Add(appeal);
         report.Status = "APPEALED";
         await _db.SaveChangesAsync();
@@ -466,7 +664,7 @@ public class DocumentController : ControllerBase
             Message = $"Người đăng vừa gửi giải trình cho tài liệu “{report.Document.Title}”.",
             ActionUrl = $"/moderator?tab=appeals&appealId={appeal.AppealId}",
             IsRead = false,
-            CreatedAt = DateTime.Now
+            CreatedAt = _clock.UtcNow
         }));
         await _db.SaveChangesAsync();
         return Ok(new
@@ -479,8 +677,10 @@ public class DocumentController : ControllerBase
     public async Task<IActionResult> AppealableReport(int documentId)
     {
         var userId = GetCurrentUserId();
+        var fourteenDaysAgo = _clock.UtcNow.AddDays(-14);
         var reportId = await _db.DocumentReports.AsNoTracking().Where(r => r.DocumentId == documentId && r.Document.UserId == userId &&
-            (r.Status == "VIOLATION_CONFIRMED" || r.Status == "ACTION_TAKEN" || r.Status == "ACTIONED"))
+            (r.Status == "VIOLATION_CONFIRMED" || r.Status == "ACTION_TAKEN" || r.Status == "ACTIONED") &&
+            r.ResolvedAt.HasValue && r.ResolvedAt.Value >= fourteenDaysAgo)
             .OrderByDescending(r => r.ResolvedAt).Select(r => (int?)r.ReportId).FirstOrDefaultAsync();
         return Ok(new
         {
@@ -595,6 +795,44 @@ public class DocumentController : ControllerBase
         return Ok(new { message = "Extraction retry initiated" });
     }
 
+    [HttpPut("{id}/metadata")]
+    public async Task<IActionResult> UpdateMetadata(int id, [FromBody] UpdateDocumentMetadataRequest request)
+    {
+        var userId = GetCurrentUserId();
+        if (!await _permissionService.CanManageDocumentAccessAsync(id, userId))
+            return Forbid();
+
+        var document = await _db.Documents.FirstOrDefaultAsync(d => d.DocumentId == id && !d.IsDeleted);
+        if (document == null)
+            return NotFound(new { message = "Không tìm thấy tài liệu." });
+
+        var title = (request.Title ?? string.Empty).Trim();
+        var extensionSuffix = $".{document.FileExtension}";
+        if (title.EndsWith(extensionSuffix, StringComparison.OrdinalIgnoreCase))
+            title = title[..^extensionSuffix.Length].Trim();
+
+        if (string.IsNullOrWhiteSpace(title) || title.Length > 255)
+            return BadRequest(new { message = "Tên tài liệu phải có từ 1 đến 255 ký tự." });
+
+        var subject = (request.Subject ?? string.Empty).Trim();
+        var resolvedSubject = await _db.SubjectCategories.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Name == subject && (s.Status == "APPROVED" || s.Status == "PENDING"));
+        if (resolvedSubject == null)
+            return BadRequest(new { message = "Môn học hoặc chuyên mục đã chọn không hợp lệ." });
+
+        var duplicateTitle = await _db.Documents.AsNoTracking().AnyAsync(d =>
+            d.DocumentId != id && d.UserId == document.UserId && d.FolderId == document.FolderId &&
+            !d.IsDeleted && d.Title == title && d.FileExtension == document.FileExtension);
+        if (duplicateTitle)
+            return Conflict(new { message = "Trong thư mục này đã có tài liệu cùng tên và định dạng." });
+
+        document.Title = title;
+        document.Subject = resolvedSubject.Name;
+        await _db.SaveChangesAsync();
+
+        return Ok(await _documentService.GetDocumentByIdAsync(id));
+    }
+
     [HttpGet("storage-quota")]
     public async Task<IActionResult> GetStorageQuota()
     {
@@ -642,6 +880,12 @@ public class BulkMoveRequest
 {
     public List<int> DocumentIds { get; set; } = new();
     public int? TargetFolderId { get; set; }
+}
+
+public class UpdateDocumentMetadataRequest
+{
+    public string Title { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
 }
 
 public class AppealDto

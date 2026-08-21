@@ -10,4 +10,5 @@ public interface IFileStorage
     void MoveFile(string sourceRelativePath, string destRelativePath);
     bool FileExists(string relativePath);
     string GetPhysicalPath(string relativePath);
+    Stream OpenReadStream(string relativePath);
 }

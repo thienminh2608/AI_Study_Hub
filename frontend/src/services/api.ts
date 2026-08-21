@@ -8,6 +8,20 @@ export interface PagedResult<T> {
   hasPreviousPage: boolean;
 }
 
+export class ApiRequestError extends Error {
+  status: number;
+  code?: string;
+  retryable: boolean;
+
+  constructor(message: string, status: number, code?: string, retryable = false) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
 export interface UserShare {
   shareId: number;
   userId: number;
@@ -76,6 +90,50 @@ export interface StorageQuota {
   aiPromptLimitPerDay: number;
 }
 
+export interface SubjectItem {
+  subjectId: number;
+  name: string;
+  normalizedName?: string;
+  parentSubjectId?: number | null;
+  depth?: number;
+  sortOrder?: number;
+  status: 'APPROVED' | 'PENDING' | 'REJECTED';
+  requestedByUserId?: number;
+  requestedByUsername?: string;
+  approvedByUserId?: number;
+  approvedByUsername?: string;
+  rejectionReason?: string;
+  documentCount?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface SubjectTreeNode {
+  subjectId: number;
+  name: string;
+  normalizedName: string;
+  parentSubjectId?: number | null;
+  depth: number;
+  sortOrder: number;
+  status: 'APPROVED' | 'PENDING' | 'REJECTED';
+  documentCount: number;
+  children: SubjectTreeNode[];
+}
+
+const isOtherSubject = (name: string) =>
+  name.trim().localeCompare('Khác', 'vi', { sensitivity: 'base' }) === 0;
+
+const placeOtherSubjectLast = <T extends { name: string }>(items: T[]): T[] =>
+  [...items].sort((left, right) => Number(isOtherSubject(left.name)) - Number(isOtherSubject(right.name)));
+
+const placeOtherSubjectLastInTree = (items: SubjectTreeNode[]): SubjectTreeNode[] =>
+  placeOtherSubjectLast(
+    items.map((item) => ({
+      ...item,
+      children: placeOtherSubjectLastInTree(item.children || []),
+    })),
+  );
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5065/api';
 
 const getAccessToken = () => localStorage.getItem('token') || sessionStorage.getItem('token');
@@ -134,9 +192,13 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
 
   if (!response.ok) {
     let errorMessage = 'Đã xảy ra lỗi kết nối.';
+    let errorCode: string | undefined;
+    let retryable = false;
     try {
       const errorJson = await response.json();
       errorMessage = errorJson.message || errorMessage;
+      errorCode = errorJson.code;
+      retryable = errorJson.retryable === true;
     } catch {
       // Ignored
     }
@@ -148,7 +210,7 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
       window.dispatchEvent(new Event('auth-status-changed'));
     }
 
-    throw new Error(errorMessage);
+    throw new ApiRequestError(errorMessage, response.status, errorCode, retryable);
   }
 
   // Handle empty or 204 No Content responses
@@ -172,6 +234,108 @@ async function download(path: string): Promise<Blob> {
   return response.blob();
 }
 
+async function uploadWithProgress<T>(
+  path: string,
+  formData: FormData,
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal,
+  retried = false,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(new Error('Tải lên đã bị hủy.'));
+    }
+
+    const xhr = new XMLHttpRequest();
+    const token = getAccessToken();
+
+    xhr.open('POST', `${API_BASE_URL}${path}`);
+
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const percent = Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100)));
+          onProgress(percent);
+        }
+      };
+    }
+
+    const onAbort = () => {
+      xhr.abort();
+      reject(new Error('Tải lên đã bị hủy.'));
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    xhr.onload = async () => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+
+      if (xhr.status === 401 && !retried && !signal?.aborted) {
+        const renewedToken = await renewAccessToken();
+        if (renewedToken) {
+          try {
+            const retryResult = await uploadWithProgress<T>(path, formData, onProgress, signal, true);
+            return resolve(retryResult);
+          } catch (retryErr) {
+            return reject(retryErr);
+          }
+        }
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const resText = xhr.responseText;
+          const json = resText ? JSON.parse(resText) : {};
+          resolve(json as T);
+        } catch {
+          resolve({} as T);
+        }
+      } else {
+        let errorMessage = 'Đã xảy ra lỗi khi tải lên.';
+        try {
+          const errorJson = JSON.parse(xhr.responseText);
+          errorMessage = errorJson.message || errorMessage;
+        } catch {
+          // ignore
+        }
+
+        if (xhr.status === 401) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('refreshToken');
+          sessionStorage.removeItem('token');
+          window.dispatchEvent(new Event('auth-status-changed'));
+        }
+
+        reject(new Error(errorMessage));
+      }
+    };
+
+    xhr.onerror = () => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      reject(new Error('Lỗi kết nối mạng khi tải lên.'));
+    };
+
+    xhr.onabort = () => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      reject(new Error('Tải lên đã bị hủy.'));
+    };
+
+    xhr.send(formData);
+  });
+}
+
 export const api = {
   // Authentication
   auth: {
@@ -184,6 +348,23 @@ export const api = {
       request<any>('/auth/verify-otp', { method: 'POST', body: JSON.stringify(dto) }),
     resetPassword: (dto: any) =>
       request<any>('/auth/reset-password', { method: 'POST', body: JSON.stringify(dto) }),
+    logout: async () => {
+      const refreshToken = localStorage.getItem('refreshToken') || sessionStorage.getItem('refreshToken');
+      try {
+        await request<any>('/auth/logout', {
+          method: 'POST',
+          body: JSON.stringify({ refreshToken }),
+        });
+      } catch {
+        // ignore logout errors
+      } finally {
+        localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
+        sessionStorage.removeItem('token');
+        sessionStorage.removeItem('refreshToken');
+        window.dispatchEvent(new Event('auth-status-changed'));
+      }
+    },
     getMe: () => request<any>('/auth/me', { method: 'GET' }),
     updateUsername: (username: string) =>
       request<any>('/auth/profile/username', { method: 'PUT', body: JSON.stringify({ username }) }),
@@ -193,11 +374,16 @@ export const api = {
 
   // Documents
   document: {
-    upload: (file: File, folderId?: number) => {
+    upload: (
+      file: File,
+      folderId?: number,
+      onProgress?: (percent: number) => void,
+      signal?: AbortSignal,
+    ) => {
       const formData = new FormData();
       formData.append('file', file);
       const url = folderId ? `/document/upload?folderId=${folderId}` : '/document/upload';
-      return request<any>(url, { method: 'POST', body: formData });
+      return uploadWithProgress<any>(url, formData, onProgress, signal);
     },
     confirm: (
       documentId: number,
@@ -255,10 +441,37 @@ export const api = {
     getAnalytics: () => request<any>('/document/analytics', { method: 'GET' }),
     getAudience: (id: number) => request<any>(`/document/${id}/audience`, { method: 'GET' }),
     getById: (id: number) => request<any>(`/document/${id}`, { method: 'GET' }),
+    updateMetadata: (id: number, title: string, subject: string) =>
+      request<any>(`/document/${id}/metadata`, {
+        method: 'PUT',
+        body: JSON.stringify({ title, subject }),
+      }),
+    getByShareToken: (token: string) => request<any>(`/document/shared/${token}`, { method: 'GET' }),
     delete: (id: number) => request<any>(`/document/${id}`, { method: 'DELETE' }),
     getText: (id: number) => request<any>(`/document/${id}/text`, { method: 'GET' }),
+    getTextByVersion: (id: number, versionId: number) =>
+      request<{
+        documentId: number;
+        versionId: number;
+        versionNumber: number;
+        fullText: string;
+        chunks: Array<{
+          chunkId: number;
+          chunkIndex: number;
+          pageNumber?: number;
+          headingPath?: string;
+          startOffset: number;
+          endOffset: number;
+          text: string;
+        }>;
+      }>(`/document/${id}/version/${versionId}/extracted-text`, { method: 'GET' }),
+    getTextByShareToken: (token: string) =>
+      request<{ documentId: number; extractedText: string }>(`/document/shared/${token}/text`, {
+        method: 'GET',
+      }),
     download: (id: number) => download(`/document/${id}/download`),
     getRawFile: (id: number) => download(`/document/${id}/raw`),
+    getRawFileByShareToken: (token: string) => download(`/document/shared/${token}/raw`),
     report: (dto: any) =>
       request<any>('/document/report', { method: 'POST', body: JSON.stringify(dto) }),
     appeal: (reportId: number, dto: any) =>
@@ -294,6 +507,33 @@ export const api = {
         body: JSON.stringify({ note }),
       }),
     getReports: () => request<any[]>('/moderation/reports', { method: 'GET' }),
+    getReportRawEvidence: (reportId: number) =>
+      download(`/moderation/reports/${reportId}/evidence/raw`),
+    getReportTextEvidence: (reportId: number) =>
+      request<{
+        documentId: number;
+        versionId: number | null;
+        extractedText: string;
+        isVersionPinned: boolean;
+        isLegacyFallback: boolean;
+      }>(`/moderation/reports/${reportId}/evidence/text`, { method: 'GET' }),
+    getQueuePaged: (page = 1, pageSize = 20, search = '') =>
+      request<any>(
+        `/moderation/queue/paged?page=${page}&pageSize=${pageSize}&search=${encodeURIComponent(search)}`,
+        { method: 'GET' },
+      ),
+    getReportsPaged: (page = 1, pageSize = 20, status = '', type = '', search = '') =>
+      request<any>(
+        `/moderation/reports/paged?page=${page}&pageSize=${pageSize}&status=${encodeURIComponent(status)}&type=${encodeURIComponent(type)}&search=${encodeURIComponent(search)}`,
+        { method: 'GET' },
+      ),
+    getAppealsPaged: (page = 1, pageSize = 20, status = '') =>
+      request<any>(
+        `/moderation/appeals/paged?page=${page}&pageSize=${pageSize}&status=${encodeURIComponent(status)}`,
+        { method: 'GET' },
+      ),
+    getHistoryPaged: (page = 1, pageSize = 20) =>
+      request<any>(`/moderation/history/paged?page=${page}&pageSize=${pageSize}`, { method: 'GET' }),
     assignReport: (id: number) =>
       request<any>(`/moderation/reports/${id}/assign`, { method: 'POST' }),
     resolveReport: (id: number, action: string, note = '') =>
@@ -345,6 +585,23 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(dto),
       }),
+    resolveCitation: (citationId: number) =>
+      request<{
+        citationId: number;
+        messageId: number;
+        documentId: number;
+        documentVersionId?: number;
+        chunkId?: number;
+        documentTitleSnapshot: string;
+        versionNumberSnapshot: number;
+        fileExtensionSnapshot: string;
+        pageNumber?: number;
+        startOffset?: number;
+        endOffset?: number;
+        headingPath?: string;
+        snippet: string;
+        createdAt: string;
+      }>(`/chat/citations/${citationId}/resolve`, { method: 'GET' }),
   },
 
   // Friendship
@@ -376,6 +633,12 @@ export const api = {
     getTiers: () => request<any[]>('/transaction/tiers', { method: 'GET' }),
     getTransferConfig: () => request<any>('/transaction/transfer-config', { method: 'GET' }),
     getInvoice: (transactionId: number) => request<any>(`/transaction/${transactionId}/invoice`, { method: 'GET' }),
+    createPayosLink: (amount: number) =>
+      request<any>('/transaction/payos/create-link', { method: 'POST', body: JSON.stringify({ amount }) }),
+    retryPayosLink: (transactionId: number) =>
+      request<any>(`/transaction/payos/retry/${transactionId}`, { method: 'POST' }),
+    getPayosStatus: (orderCode: number | string) =>
+      request<any>(`/transaction/payos/${orderCode}/status`, { method: 'GET' }),
   },
 
   admin: {
@@ -402,13 +665,23 @@ export const api = {
     updateUser: (userId: number, dto: any) =>
       request<any>(`/admin/users/${userId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     deleteUser: (userId: number) => request<any>(`/admin/users/${userId}`, { method: 'DELETE' }),
-    getTransactions: (page = 1, pageSize = 8, search = '', status = '', type = '') => {
+    getTransactions: (
+      page = 1,
+      pageSize = 8,
+      search = '',
+      status = '',
+      type = '',
+      startDate = '',
+      endDate = ''
+    ) => {
       const params = new URLSearchParams();
       params.set('pageNumber', String(page));
       params.set('pageSize', String(pageSize));
       if (search) params.set('search', search);
       if (status) params.set('status', status);
       if (type) params.set('type', type);
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
       return request<any>(`/admin/transactions?${params.toString()}`, { method: 'GET' });
     },
     updateTransaction: (transactionId: number, status: string, failureReason?: string) =>
@@ -418,6 +691,11 @@ export const api = {
       }),
     refundTransaction: (transactionId: number, reason: string) =>
       request<any>(`/admin/transactions/${transactionId}/refund`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
+    reverseDeposit: (transactionId: number, reason: string) =>
+      request<any>(`/admin/transactions/${transactionId}/reverse-deposit`, {
         method: 'POST',
         body: JSON.stringify({ reason }),
       }),
@@ -466,6 +744,10 @@ export const api = {
       request<any>('/admin/transfer-config', { method: 'PUT', body: JSON.stringify(dto) }),
     getAuditLogs: (page = 1, pageSize = 20) =>
       request<any>(`/admin/audit-logs?page=${page}&pageSize=${pageSize}`, { method: 'GET' }),
+    getAiObservabilitySummary: () =>
+      request<any>('/admin/ai-observability/summary', { method: 'GET' }),
+    getAiObservabilityUsages: (page = 1, pageSize = 20) =>
+      request<any>(`/admin/ai-observability/usages?pageNumber=${page}&pageSize=${pageSize}`, { method: 'GET' }),
   },
   access: {
     getAccessSettings: (type: 'document' | 'folder', id: number) =>
@@ -505,17 +787,27 @@ export const api = {
   versions: {
     getVersionHistory: (documentId: number) =>
       request<any[]>(`/documents/${documentId}/versions`, { method: 'GET' }),
-    uploadNewVersion: (documentId: number, file: File, changeSummary?: string) => {
+    uploadNewVersion: (
+      documentId: number,
+      file: File,
+      changeSummary?: string,
+      onProgress?: (percent: number) => void,
+      signal?: AbortSignal,
+    ) => {
       const formData = new FormData();
       formData.append('file', file);
       if (changeSummary) formData.append('changeSummary', changeSummary);
-      return request<any>(`/documents/${documentId}/versions`, {
-        method: 'POST',
-        body: formData,
-      });
+      return uploadWithProgress<any>(
+        `/documents/${documentId}/versions`,
+        formData,
+        onProgress,
+        signal,
+      );
     },
     restoreVersion: (documentId: number, versionId: number) =>
       request<any>(`/documents/${documentId}/versions/${versionId}/restore`, { method: 'POST' }),
+    deleteVersion: (documentId: number, versionId: number) =>
+      request<any>(`/documents/${documentId}/versions/${versionId}`, { method: 'DELETE' }),
   },
   documentExtra: {
     getStorageQuota: () => request<any>('/document/storage-quota', { method: 'GET' }),
@@ -542,12 +834,14 @@ export const api = {
       page = 1,
       pageSize = 12,
       search = '',
+      subject = '',
       extensions: string[] = [],
       sortBy = 'createdAt',
       sortDirection = 'desc'
     ) => {
       let url = `/document/public/paged?page=${page}&pageSize=${pageSize}&sortBy=${sortBy}&sortDirection=${sortDirection}`;
       if (search) url += `&search=${encodeURIComponent(search)}`;
+      if (subject && subject !== 'ALL') url += `&subject=${encodeURIComponent(subject)}`;
       if (extensions.length) url += `&extensions=${encodeURIComponent(extensions.join(','))}`;
       return request<any>(url, { method: 'GET' });
     },
@@ -579,5 +873,53 @@ export const api = {
       request<any>(`/friendship/blocked/paged?page=${page}&pageSize=${pageSize}`, {
         method: 'GET',
       }),
+  },
+  subjects: {
+    getApproved: () =>
+      request<SubjectItem[]>('/subjects', { method: 'GET' }).then(placeOtherSubjectLast),
+    getTree: (status = 'APPROVED') =>
+      request<SubjectTreeNode[]>(`/subjects/tree?status=${status}`, { method: 'GET' })
+        .then(placeOtherSubjectLastInTree),
+    resolve: (name: string, parentSubjectId?: number | null) =>
+      request<{ subject: string }>('/subjects/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ name, parentSubjectId }),
+      }),
+    resolvePath: (subjectName: string, childSubjectName?: string | null) =>
+      request<{ subject: string }>('/subjects/resolve-path', {
+        method: 'POST',
+        body: JSON.stringify({ subjectName, childSubjectName }),
+      }),
+  },
+  moderatorSubjects: {
+    getSubjects: (status = '', search = '') => {
+      const params = new URLSearchParams();
+      if (status) params.set('status', status);
+      if (search) params.set('search', search);
+      return request<SubjectItem[]>(`/moderator/subjects?${params.toString()}`, { method: 'GET' })
+        .then(placeOtherSubjectLast);
+    },
+    getTree: (status = 'ALL') =>
+      request<SubjectTreeNode[]>(`/subjects/tree?status=${status}`, { method: 'GET' })
+        .then(placeOtherSubjectLastInTree),
+    createSubject: (name: string, parentSubjectId?: number | null, sortOrder = 0) =>
+      request<SubjectItem>('/moderator/subjects', {
+        method: 'POST',
+        body: JSON.stringify({ name, parentSubjectId, sortOrder }),
+      }),
+    moveSubject: (id: number, newParentSubjectId: number | null, newSortOrder = 0) =>
+      request<{ success: boolean; message: string }>(`/moderator/subjects/${id}/move`, {
+        method: 'PUT',
+        body: JSON.stringify({ newParentSubjectId, newSortOrder }),
+      }),
+    approveSubject: (id: number) =>
+      request<SubjectItem>(`/moderator/subjects/${id}/approve`, { method: 'POST' }),
+    rejectSubject: (id: number, reason: string) =>
+      request<SubjectItem>(`/moderator/subjects/${id}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
+    deleteSubject: (id: number) =>
+      request<any>(`/moderator/subjects/${id}`, { method: 'DELETE' }),
   },
 };

@@ -41,7 +41,19 @@ public partial class Transaction
     public string? BankId { get; set; }
     public int? ApproverId { get; set; }
     public string? FailureReason { get; set; }
+    public int? OriginalTransactionId { get; set; }
+
+    public long? PayOsOrderCode { get; set; }
+    public string? PaymentLinkId { get; set; }
+    public DateTime? ReconciliationLockedUntil { get; set; }
+    public int ReconciliationAttempts { get; set; }
+    public DateTime? LastReconciliationAt { get; set; }
+    public bool RequiresManualReview { get; set; }
+    public string? ReviewReason { get; set; }
+    public decimal? ExpectedAmount { get; set; }
+    public decimal? ProviderReportedAmount { get; set; }
 
     public virtual User User { get; set; } = null!;
     public virtual User? Approver { get; set; }
+    public virtual Transaction? OriginalTransaction { get; set; }
 }

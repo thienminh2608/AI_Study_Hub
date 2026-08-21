@@ -27,7 +27,7 @@ public class TestStudyHubDbContext : StudyHubDbContext
             foreach (var property in entityType.GetProperties())
             {
                 var defaultSql = property.GetDefaultValueSql();
-                if (defaultSql != null && defaultSql.Contains("getdate", StringComparison.OrdinalIgnoreCase))
+                if (defaultSql != null && (defaultSql.Contains("getdate", StringComparison.OrdinalIgnoreCase) || defaultSql.Contains("getutcdate", StringComparison.OrdinalIgnoreCase) || defaultSql.Contains("sysutcdatetime", StringComparison.OrdinalIgnoreCase)))
                 {
                     property.SetDefaultValueSql("datetime('now')");
                 }

@@ -16,10 +16,11 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { api, type PagedResult } from '../services/api';
+import { api, type PagedResult, type SubjectTreeNode } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { FileTypeIcon } from '../components/FileTypeIcon';
 import { Pagination } from '../components/Pagination';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const PAGE_SIZE = 12;
 
@@ -60,17 +61,22 @@ const FILE_CATEGORIES = [
   { id: 'TEXT', label: 'Văn bản', extensions: ['txt', 'md'], icon: FileCode2, color: '#06b6d4' },
 ];
 
+const flattenSubjectChildren = (nodes: SubjectTreeNode[]): SubjectTreeNode[] =>
+  nodes.flatMap((node) => [node, ...flattenSubjectChildren(node.children || [])]);
+
 export const PublicDocuments: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [documents, setDocuments] = useState<PublicDocument[]>([]);
   const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 1000);
   const [sortBy, setSortBy] = useState<'createdAt' | 'bookmarks' | 'downloads' | 'views' | 'title'>(
     'createdAt',
   );
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [fileType, setFileType] = useState('ALL');
+  const [subject, setSubject] = useState('ALL');
+  const [subjectTree, setSubjectTree] = useState<SubjectTreeNode[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
@@ -94,29 +100,29 @@ export const PublicDocuments: React.FC = () => {
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
   useEffect(() => {
-    Promise.all([api.document.getBookmarks(), api.document.getReportReasons()])
-      .then(([bookmarkIds, reasons]) => {
+    Promise.all([
+      api.document.getBookmarks(),
+      api.document.getReportReasons(),
+      api.subjects.getTree('APPROVED').catch(() => []),
+    ])
+      .then(([bookmarkIds, reasons, approvedSubjectTree]) => {
         setBookmarkedIds(new Set(bookmarkIds));
         setReportReasons(reasons);
         if (reasons.length) setReportReason(reasons[0].reasonCode);
+        if (Array.isArray(approvedSubjectTree)) setSubjectTree(approvedSubjectTree);
       })
       .catch((err: Error) => setError(err.message || 'Không thể tải dữ liệu.'));
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
-    return () => window.clearTimeout(timer);
-  }, [query]);
-
-  useEffect(() => {
     setPage(1);
-  }, [debouncedQuery, fileType, sortBy, sortDirection]);
+  }, [debouncedQuery, fileType, subject, sortBy, sortDirection]);
 
   useEffect(() => {
     const category = FILE_CATEGORIES.find((c) => c.id === fileType) ?? FILE_CATEGORIES[0];
     setLoading(true);
     api.documentExtra
-      .getPublicDocumentsPaged(page, PAGE_SIZE, debouncedQuery, category.extensions, sortBy, sortDirection)
+      .getPublicDocumentsPaged(page, PAGE_SIZE, debouncedQuery, subject, category.extensions, sortBy, sortDirection)
       .then((res: PagedResult<PublicDocument>) => {
         setDocuments(res.items);
         setTotalPages(res.totalPages);
@@ -124,7 +130,7 @@ export const PublicDocuments: React.FC = () => {
       })
       .catch((err: Error) => setError(err.message || 'Không thể tải tài liệu công khai.'))
       .finally(() => setLoading(false));
-  }, [page, debouncedQuery, fileType, sortBy, sortDirection]);
+  }, [page, debouncedQuery, fileType, subject, sortBy, sortDirection]);
 
   const toggleBookmark = async (document: PublicDocument) => {
     if (bookmarkingId !== null) return;
@@ -229,6 +235,70 @@ export const PublicDocuments: React.FC = () => {
           <h1>Tài liệu công khai</h1>
           <p>Khám phá tài liệu học tập được chia sẻ bởi cộng đồng AI Study Hub.</p>
         </div>
+      </header>
+
+      <div className="file-category-bar" aria-label="Danh mục loại tài liệu">
+        {FILE_CATEGORIES.map((category) => {
+          const Icon = category.icon;
+          return (
+            <button
+              key={category.id}
+              type="button"
+              className={fileType === category.id ? 'active' : ''}
+              onClick={() => setFileType(category.id)}
+              aria-pressed={fileType === category.id}
+            >
+              <span
+                className="category-icon"
+                style={{ color: category.color, backgroundColor: `${category.color}18` }}
+              >
+                <Icon size={22} />
+              </span>
+              <span>
+                <strong>{category.label}</strong>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="subject-filter-panel" aria-label="Lọc theo cây môn học">
+        <div className="subject-filter-row">
+          <span className="subject-filter-label">Môn học</span>
+          <button type="button" className={subject === 'ALL' ? 'active' : ''} onClick={() => setSubject('ALL')}>
+            Tất cả
+          </button>
+          {subjectTree.map((root) => {
+            const childNames = flattenSubjectChildren(root.children).map((child) => child.name);
+            const active = subject === root.name || childNames.includes(subject);
+            return (
+              <button key={root.subjectId} type="button" className={active ? 'active' : ''} onClick={() => setSubject(root.name)}>
+                {root.name}
+              </button>
+            );
+          })}
+        </div>
+        {subjectTree.map((root) => {
+          const children = flattenSubjectChildren(root.children);
+          if (!children.length || !(subject === root.name || children.some((child) => child.name === subject))) return null;
+          return (
+            <div className="subject-filter-row subject-child-row" key={`children-${root.subjectId}`}>
+              <span className="subject-filter-label">Chuyên mục</span>
+              <button type="button" className={subject === root.name ? 'active' : ''} onClick={() => setSubject(root.name)}>
+                Tất cả {root.name}
+              </button>
+              {children.map((child) => (
+                <button key={child.subjectId} type="button" className={subject === child.name ? 'active' : ''} onClick={() => setSubject(child.name)}>
+                  {'—'.repeat(Math.max(0, child.depth - 1))} {child.name}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="public-results-toolbar">
+        <div className="public-result-count">{totalCount} tài liệu</div>
         <div className="public-toolbar">
           <label className="public-search">
             <Search size={18} />
@@ -260,31 +330,6 @@ export const PublicDocuments: React.FC = () => {
             <option value="desc">Giảm dần</option>
           </select>
         </div>
-      </header>
-
-      <div className="file-category-bar" aria-label="Danh mục loại tài liệu">
-        {FILE_CATEGORIES.map((category) => {
-          const Icon = category.icon;
-          return (
-            <button
-              key={category.id}
-              type="button"
-              className={fileType === category.id ? 'active' : ''}
-              onClick={() => setFileType(category.id)}
-              aria-pressed={fileType === category.id}
-            >
-              <span
-                className="category-icon"
-                style={{ color: category.color, backgroundColor: `${category.color}18` }}
-              >
-                <Icon size={22} />
-              </span>
-              <span>
-                <strong>{category.label}</strong>
-              </span>
-            </button>
-          );
-        })}
       </div>
 
       {notice && <div className="public-notice">{notice}</div>}
@@ -304,7 +349,6 @@ export const PublicDocuments: React.FC = () => {
         </div>
       ) : (
         <>
-          <div className="public-result-count">{totalCount} tài liệu</div>
           <div className="public-document-grid">
             {documents.map((document) => (
               <article
@@ -553,7 +597,8 @@ export const PublicDocuments: React.FC = () => {
         .eyebrow { display: flex; align-items: center; gap: .45rem; color: var(--accent-blue); font-weight: 700; }
         .public-search { min-width: 360px; display: flex; align-items: center; gap: .6rem; padding: .8rem 1rem; border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-sm); background: rgba(255,255,255,.04); }
         .public-search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text-primary); }
-        .public-toolbar { min-width:0;display:flex;flex-wrap:wrap;gap:.65rem;align-items:center; }
+        .public-results-toolbar { min-width:0;display:flex;align-items:center;justify-content:space-between;gap:1rem; }
+        .public-toolbar { min-width:0;display:flex;flex-wrap:wrap;gap:.65rem;align-items:center;justify-content:flex-end; }
         .public-sort { padding:.8rem; border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-sm); background:var(--bg-secondary); color:var(--text-primary); }
         .file-category-bar { display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:.7rem;margin-top:-.5rem; }
         .file-category-bar button { min-width:0;display:flex;align-items:center;gap:.65rem;padding:.75rem;border:1px solid rgba(255,255,255,.08);border-radius:var(--radius-sm);background:rgba(255,255,255,.03);color:var(--text-primary);cursor:pointer;text-align:left;transition:var(--transition-fast); }
@@ -563,6 +608,17 @@ export const PublicDocuments: React.FC = () => {
         .file-category-bar button>span:last-child { min-width:0;display:flex;flex-direction:column; }
         .file-category-bar strong { white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
         .file-category-bar small { color:var(--text-muted);font-size:.72rem;margin-top:.12rem; }
+        .subject-filter-panel{display:grid;gap:.8rem;margin-top:-.55rem;padding:1rem 1.1rem .75rem;border:1px solid rgba(255,255,255,.08);border-radius:var(--radius-sm);background:rgba(255,255,255,.025)}
+        .subject-filter-row{display:flex;align-items:center;gap:.65rem;overflow-x:auto;padding:.1rem 0 .65rem;scrollbar-width:thin;scrollbar-color:rgba(0,180,216,.55) rgba(255,255,255,.045)}
+        .subject-filter-row::-webkit-scrollbar{height:8px}
+        .subject-filter-row::-webkit-scrollbar-track{background:rgba(255,255,255,.045);border-radius:999px}
+        .subject-filter-row::-webkit-scrollbar-thumb{background:linear-gradient(90deg,rgba(0,180,216,.58),rgba(157,78,221,.58));border:2px solid rgba(9,11,18,.85);border-radius:999px}
+        .subject-filter-row::-webkit-scrollbar-thumb:hover{background:linear-gradient(90deg,rgba(0,180,216,.82),rgba(157,78,221,.82))}
+        .subject-filter-label{min-width:92px;color:var(--text-muted);font-size:.82rem;font-weight:800;text-transform:uppercase;letter-spacing:.07em}
+        .subject-filter-row button{min-height:40px;flex:0 0 auto;padding:.58rem .95rem;border:1px solid rgba(255,255,255,.1);border-radius:999px;background:rgba(255,255,255,.04);color:var(--text-secondary);cursor:pointer;font-size:.92rem;font-weight:600;line-height:1;transition:var(--transition-fast)}
+        .subject-filter-row button:hover{border-color:rgba(56,189,248,.45);background:rgba(56,189,248,.08);color:var(--text-primary);transform:translateY(-1px)}
+        .subject-filter-row button.active{border-color:var(--accent-blue);background:rgba(0,180,216,.15);color:var(--accent-blue);box-shadow:0 0 0 2px rgba(0,180,216,.07)}
+        .subject-child-row{padding-top:.75rem;border-top:1px solid rgba(255,255,255,.06)}
         .public-result-count { color: var(--text-muted); font-size: .9rem; }
         .public-document-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
         .public-document-card { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; cursor: pointer; transition: var(--transition-fast); }
@@ -590,7 +646,7 @@ export const PublicDocuments: React.FC = () => {
         .public-report-actions { display: flex; justify-content: flex-end; gap: .65rem; margin-top: .25rem; }
         .public-state { min-height: 260px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: .75rem; color: var(--text-secondary); }
         @media (max-width: 1200px) { .public-documents-header { align-items: stretch; flex-direction: column; gap:1rem; } .public-toolbar{align-items:stretch}.public-search{min-width:0;flex:1 1 100%}.file-category-bar{grid-template-columns:repeat(3,1fr)} }
-        @media (max-width: 800px) { .public-toolbar{flex-direction:column}.public-search { min-width: 0; } }
+        @media (max-width: 800px) { .public-results-toolbar{align-items:stretch;flex-direction:column}.public-toolbar{flex-direction:column}.public-search { min-width: 0; } }
         @media (max-width: 520px) { .file-category-bar{grid-template-columns:repeat(2,1fr)} }
       `}</style>
     </div>

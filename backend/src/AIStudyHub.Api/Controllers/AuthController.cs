@@ -58,7 +58,9 @@ public class AuthController : ControllerBase
     {
         try
         {
-            var response = await _authService.LoginAsync(dto);
+            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+            var userAgent = Request.Headers.UserAgent.ToString();
+            var response = await _authService.LoginAsync(dto, ip, userAgent);
             if (response == null)
             {
                 return Unauthorized(new
@@ -84,46 +86,54 @@ public class AuthController : ControllerBase
         }
     }
 
-    [HttpPost("forgot-password")]
-    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto)
-    {
-        bool success = await _authService.SendForgotPasswordOtpAsync(dto.Email);
-        if (success)
-        {
-            return Ok(new
-            {
-                message = "Mã OTP đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư."
-            });
-        }
-        return BadRequest(new
-        {
-            message = "Email không tồn tại trong hệ thống."
-        });
-    }
-
     [HttpPost("refresh")]
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenDto dto)
     {
-        var response = await _authService.RefreshAsync(dto.RefreshToken);
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers.UserAgent.ToString();
+        var response = await _authService.RefreshAsync(dto.RefreshToken, ip, userAgent);
         return response == null
             ? Unauthorized(new { message = "Phiên ghi nhớ đăng nhập đã hết hạn. Vui lòng đăng nhập lại." })
             : Ok(response);
     }
 
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout([FromBody] LogoutDto? dto)
+    {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        await _authService.LogoutAsync(dto?.RefreshToken, ip);
+        return Ok(new { message = "Đăng xuất thành công." });
+    }
+
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto)
+    {
+        var result = await _authService.SendForgotPasswordOtpAsync(dto.Email);
+        return Ok(new
+        {
+            success = result.Success,
+            challengeId = result.ChallengeId,
+            message = result.Message
+        });
+    }
+
     [HttpPost("verify-otp")]
     public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpDto dto)
     {
-        bool success = await _authService.VerifyOtpAsync(dto);
-        if (success)
+        var result = await _authService.VerifyOtpAsync(dto);
+        if (result.Success)
         {
             return Ok(new
             {
-                message = "Xác thực OTP thành công. Bạn có thể tiến hành đổi mật khẩu."
+                success = true,
+                resetGrantToken = result.ResetGrantToken,
+                message = result.Message ?? "Xác thực OTP thành công."
             });
         }
         return BadRequest(new
         {
-            message = "Mã OTP không hợp lệ hoặc đã hết hạn."
+            success = false,
+            message = result.Message ?? "Mã OTP không hợp lệ hoặc đã hết hạn."
         });
     }
 

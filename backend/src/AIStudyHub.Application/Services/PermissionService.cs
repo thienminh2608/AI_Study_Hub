@@ -30,13 +30,16 @@ public class PermissionService : IPermissionService
         if (doc.UserId == userId) return "OWNER";
 
         // 2. Direct User Share on Document
-        var directShare = await _db.DocumentShares
-            .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.DocumentId == documentId && s.SharedWithUserId == userId);
-        if (directShare != null) return directShare.Role;
+        if (userId > 0)
+        {
+            var directShare = await _db.DocumentShares
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.DocumentId == documentId && s.SharedWithUserId == userId);
+            if (directShare != null) return directShare.Role;
+        }
 
         // 3. Inherited Share from Parent Folders
-        if (doc.FolderId.HasValue)
+        if (doc.FolderId.HasValue && userId > 0)
         {
             var folderRole = await GetEffectiveFolderRoleAsync(doc.FolderId.Value, userId);
             if (folderRole == "OWNER" || folderRole == "EDITOR" || folderRole == "VIEWER")
@@ -54,19 +57,31 @@ public class PermissionService : IPermissionService
             }
         }
 
-        // 5. General Access
-        if (doc.GeneralAccess == "LINK" && !doc.IsShareLinkRevoked) return "VIEWER";
-        if (doc.GeneralAccess == "PUBLIC") return "VIEWER";
+        // 5. General Access / Public
+        if (doc.SharingPermission == "PUBLIC" && doc.IsFlagged != true) return "VIEWER";
+        if (doc.GeneralAccess == "PUBLIC" && doc.IsFlagged != true) return "VIEWER";
 
         return "NONE";
     }
 
     public async Task<string> GetEffectiveFolderRoleAsync(int folderId, int userId)
     {
-        int? currentFolderId = folderId;
+        if (userId <= 0) return "NONE";
 
-        while (currentFolderId.HasValue)
+        int? currentFolderId = folderId;
+        var visited = new HashSet<int>();
+        int depth = 0;
+        const int maxDepth = 20;
+
+        while (currentFolderId.HasValue && depth < maxDepth)
         {
+            if (!visited.Add(currentFolderId.Value))
+            {
+                // Cycle detected in folder hierarchy
+                break;
+            }
+            depth++;
+
             var folder = await _db.Folders
                 .AsNoTracking()
                 .FirstOrDefaultAsync(f => f.FolderId == currentFolderId.Value);
@@ -81,13 +96,165 @@ public class PermissionService : IPermissionService
 
             if (share != null) return share.Role;
 
-            if (folder.GeneralAccess == "PUBLIC" || folder.GeneralAccess == "LINK") return "VIEWER";
+            if (folder.GeneralAccess == "PUBLIC") return "VIEWER";
 
             currentFolderId = folder.ParentFolderId;
         }
 
         return "NONE";
     }
+
+    public async Task<bool> CanViewDocumentAsync(int documentId, int userId, string? shareToken = null)
+    {
+        if (userId > 0)
+        {
+            var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == userId);
+            if (user != null && (user.Role == "ADMIN" || user.Role == "MODERATOR"))
+            {
+                return true;
+            }
+        }
+
+        var role = await GetEffectiveDocumentRoleAsync(documentId, userId, shareToken);
+        return role == "OWNER" || role == "EDITOR" || role == "VIEWER";
+    }
+
+    public async Task<bool> CanDownloadDocumentAsync(int documentId, int userId, string? shareToken = null)
+    {
+        return await CanViewDocumentAsync(documentId, userId, shareToken);
+    }
+
+    public async Task<bool> CanEditDocumentAsync(int documentId, int userId)
+    {
+        if (userId <= 0) return false;
+
+        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == userId);
+        if (user != null && user.Role == "ADMIN")
+        {
+            return true;
+        }
+
+        var role = await GetEffectiveDocumentRoleAsync(documentId, userId);
+        return role == "OWNER" || role == "EDITOR";
+    }
+
+    public async Task<bool> CanManageDocumentAccessAsync(int documentId, int userId)
+    {
+        if (userId <= 0) return false;
+
+        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == userId);
+        if (user != null && (user.Role == "ADMIN" || user.Role == "MODERATOR"))
+        {
+            return true;
+        }
+
+        var doc = await _db.Documents.AsNoTracking().FirstOrDefaultAsync(d => d.DocumentId == documentId && !d.IsDeleted);
+        if (doc == null) return false;
+
+        return doc.UserId == userId;
+    }
+
+    public async Task<List<int>> GetSharedDocumentIdsAsync(int userId, IEnumerable<int>? candidateDocumentIds = null)
+    {
+        if (userId <= 0) return new List<int>();
+
+        // 1. Direct document shares (where document is not owned by user and not deleted)
+        var sharedDocQuery = _db.DocumentShares
+            .AsNoTracking()
+            .Where(s => s.SharedWithUserId == userId && s.Document.UserId != userId && !s.Document.IsDeleted);
+
+        if (candidateDocumentIds != null)
+        {
+            var candidateList = candidateDocumentIds.Distinct().ToList();
+            sharedDocQuery = sharedDocQuery.Where(s => candidateList.Contains(s.DocumentId));
+        }
+
+        var sharedDocIds = await sharedDocQuery.Select(s => s.DocumentId).ToListAsync();
+
+        // 2. Inherited folder shares
+        var sharedFolderIds = await _db.FolderShares
+            .AsNoTracking()
+            .Where(fs => fs.SharedWithUserId == userId && fs.Folder.UserId != userId && !fs.Folder.IsDeleted)
+            .Select(fs => fs.FolderId)
+            .ToListAsync();
+
+        var inheritedDocIds = new List<int>();
+        if (sharedFolderIds.Any())
+        {
+            var allFolderIds = new HashSet<int>(sharedFolderIds);
+            var queue = new Queue<int>(sharedFolderIds);
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                var children = await _db.Folders
+                    .AsNoTracking()
+                    .Where(f => f.ParentFolderId == current && !f.IsDeleted)
+                    .Select(f => f.FolderId)
+                    .ToListAsync();
+                foreach (var child in children)
+                {
+                    if (allFolderIds.Add(child))
+                    {
+                        queue.Enqueue(child);
+                    }
+                }
+            }
+
+            var inheritedQuery = _db.Documents
+                .AsNoTracking()
+                .Where(d => !d.IsDeleted && d.UserId != userId && d.FolderId.HasValue && allFolderIds.Contains(d.FolderId.Value));
+
+            if (candidateDocumentIds != null)
+            {
+                var candidateList = candidateDocumentIds.Distinct().ToList();
+                inheritedQuery = inheritedQuery.Where(d => candidateList.Contains(d.DocumentId));
+            }
+
+            inheritedDocIds = await inheritedQuery.Select(d => d.DocumentId).ToListAsync();
+        }
+
+        return sharedDocIds.Concat(inheritedDocIds).Distinct().ToList();
+    }
+
+    public async Task<List<int>> GetViewableDocumentIdsAsync(int userId, IEnumerable<int>? candidateDocumentIds = null)
+    {
+        if (candidateDocumentIds != null)
+        {
+            var list = candidateDocumentIds.Distinct().ToList();
+            var accessible = new List<int>();
+            foreach (var docId in list)
+            {
+                if (await CanViewDocumentAsync(docId, userId))
+                {
+                    accessible.Add(docId);
+                }
+            }
+            return accessible;
+        }
+
+        if (userId <= 0)
+        {
+            return await _db.Documents
+                .AsNoTracking()
+                .Where(d => !d.IsDeleted && (d.SharingPermission == "PUBLIC" || d.GeneralAccess == "PUBLIC") && d.IsFlagged != true)
+                .Select(d => d.DocumentId)
+                .ToListAsync();
+        }
+
+        // Direct owned or public (unflagged)
+        var directIds = await _db.Documents
+            .AsNoTracking()
+            .Where(d => !d.IsDeleted && (d.UserId == userId || ((d.SharingPermission == "PUBLIC" || d.GeneralAccess == "PUBLIC") && d.IsFlagged != true)))
+            .Select(d => d.DocumentId)
+            .ToListAsync();
+
+        var sharedDocIds = await GetSharedDocumentIdsAsync(userId);
+
+        return directIds.Concat(sharedDocIds).Distinct().ToList();
+    }
+
+    public Task<List<int>> GetAccessibleDocumentIdsAsync(int userId, IEnumerable<int>? candidateDocumentIds = null) =>
+        GetViewableDocumentIdsAsync(userId, candidateDocumentIds);
 
     public async Task<ItemAccessSettingsDto> GetDocumentAccessSettingsAsync(int documentId, int currentUserId)
     {
@@ -119,6 +286,11 @@ public class PermissionService : IPermissionService
             OwnerUserId = doc.UserId,
             OwnerName = doc.User.Username,
             GeneralAccess = doc.GeneralAccess,
+            ModerationStatus = doc.ModerationStatus,
+            RequestedVisibility = doc.RequestedVisibility,
+            SharingPermission = doc.SharingPermission,
+            ModerationNote = doc.ModerationNote,
+            ModerationSubmittedAt = doc.ModerationSubmittedAt,
             IsInherited = doc.FolderId.HasValue,
             ParentFolderId = doc.FolderId,
             Shares = shares,
@@ -173,14 +345,67 @@ public class PermissionService : IPermissionService
     public async Task UpdateDocumentGeneralAccessAsync(int documentId, string generalAccess, int currentUserId)
     {
         var doc = await _db.Documents.FirstOrDefaultAsync(d => d.DocumentId == documentId);
-        if (doc == null) throw new KeyNotFoundException("Document not found");
-        if (doc.UserId != currentUserId) throw new UnauthorizedAccessException("Only document owner can change access settings");
+        if (doc == null) throw new KeyNotFoundException("Tài liệu không tồn tại");
+        if (doc.UserId != currentUserId) throw new UnauthorizedAccessException("Chỉ chủ sở hữu tài liệu mới có quyền thay đổi cài đặt truy cập");
+
+        var user = await _db.Users.FindAsync(currentUserId);
+        if (user == null) throw new KeyNotFoundException("Người dùng không tồn tại");
 
         string oldAccess = doc.GeneralAccess;
-        doc.GeneralAccess = generalAccess;
-        await _db.SaveChangesAsync();
+        string normalizedAccess = (generalAccess ?? "RESTRICTED").ToUpper().Trim();
 
-        await LogAuditAsync(currentUserId, "GENERAL_ACCESS_CHANGED", "DOCUMENT", documentId, $"Changed from {oldAccess} to {generalAccess}");
+        if (normalizedAccess == "PUBLIC")
+        {
+            if ("SUSPENDED".Equals(user.Status, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Tài khoản đang bị tạm khóa/hạn chế, không thể yêu cầu công khai tài liệu.");
+
+            doc.GeneralAccess = "PUBLIC";
+            doc.RequestedVisibility = "PUBLIC";
+
+            if (doc.ModerationStatus == "APPROVED")
+            {
+                doc.SharingPermission = "PUBLIC";
+            }
+            else
+            {
+                doc.SharingPermission = "PRIVATE";
+                doc.ModerationStatus = "PENDING_REVIEW";
+                doc.ModerationSubmittedAt = DateTime.Now;
+                doc.ModerationNote = null;
+
+                // Gửi thông báo cho toàn bộ Moderator đang hoạt động
+                var moderators = await _db.Users
+                    .Where(u => u.Role == "MODERATOR" && u.Status == "ACTIVE")
+                    .Select(u => u.UserId)
+                    .ToListAsync();
+
+                _db.ModerationNotices.AddRange(moderators.Select(modId => new ModerationNotice
+                {
+                    UserId = modId,
+                    DocumentId = doc.DocumentId,
+                    Type = "DOCUMENT_REVIEW_PENDING",
+                    Title = "Tài liệu mới cần xét duyệt",
+                    Message = $"Tài liệu “{doc.Title}” vừa yêu cầu công khai và đang chờ xét duyệt.",
+                    ActionUrl = $"/moderator?tab=queue&documentId={doc.DocumentId}",
+                    IsRead = false,
+                    CreatedAt = DateTime.Now
+                }));
+            }
+        }
+        else
+        {
+            doc.GeneralAccess = normalizedAccess == "LINK" ? "LINK" : "RESTRICTED";
+            doc.SharingPermission = "PRIVATE";
+            if (doc.ModerationStatus == "PENDING_REVIEW")
+            {
+                doc.RequestedVisibility = "PRIVATE";
+                doc.ModerationStatus = "NOT_REQUESTED";
+                doc.ModerationSubmittedAt = null;
+            }
+        }
+
+        await _db.SaveChangesAsync();
+        await LogAuditAsync(currentUserId, "GENERAL_ACCESS_CHANGED", "DOCUMENT", documentId, $"Changed from {oldAccess} to {doc.GeneralAccess} (ModerationStatus: {doc.ModerationStatus})");
     }
 
     public async Task UpdateFolderGeneralAccessAsync(int folderId, string generalAccess, int currentUserId)

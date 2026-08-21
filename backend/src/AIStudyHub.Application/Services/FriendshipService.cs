@@ -259,25 +259,91 @@ public class FriendshipService : IFriendshipService
 
     public async Task<PagedResult<FriendDto>> GetAcceptedFriendsPagedAsync(int userId, int pageNumber, int pageSize)
     {
-        var all = await GetAcceptedFriendsAsync(userId);
-        int total = all.Count;
-        var paged = all.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
-        return new PagedResult<FriendDto>(paged, total, pageNumber, pageSize);
+        if (pageNumber < 1) pageNumber = 1;
+        if (pageSize < 1) pageSize = 10;
+        if (pageSize > 100) pageSize = 100;
+
+        var baseQuery = _dbContext.Friendships
+            .AsNoTracking()
+            .Where(f => f.Status == "ACCEPTED" && (f.RequesterId == userId || f.AddresseeId == userId));
+
+        int total = await baseQuery.CountAsync();
+
+        var items = await baseQuery
+            .OrderByDescending(f => f.UpdatedAt ?? f.CreatedAt)
+            .ThenByDescending(f => f.FriendshipId)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(f => new FriendDto
+            {
+                UserId = f.RequesterId == userId ? f.Addressee.UserId : f.Requester.UserId,
+                Username = f.RequesterId == userId ? f.Addressee.Username : f.Requester.Username,
+                Email = (f.RequesterId == userId ? f.Addressee.Email : f.Requester.Email) ?? "",
+                Status = "ACCEPTED",
+                IsRequester = f.RequesterId == userId
+            })
+            .ToListAsync();
+
+        return new PagedResult<FriendDto>(items, total, pageNumber, pageSize);
     }
 
     public async Task<PagedResult<FriendDto>> GetPendingRequestsPagedAsync(int userId, int pageNumber, int pageSize)
     {
-        var all = await GetPendingRequestsAsync(userId);
-        int total = all.Count;
-        var paged = all.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
-        return new PagedResult<FriendDto>(paged, total, pageNumber, pageSize);
+        if (pageNumber < 1) pageNumber = 1;
+        if (pageSize < 1) pageSize = 10;
+        if (pageSize > 100) pageSize = 100;
+
+        var baseQuery = _dbContext.Friendships
+            .AsNoTracking()
+            .Where(f => f.Status == "PENDING" && f.AddresseeId == userId);
+
+        int total = await baseQuery.CountAsync();
+
+        var items = await baseQuery
+            .OrderByDescending(f => f.CreatedAt)
+            .ThenByDescending(f => f.FriendshipId)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(f => new FriendDto
+            {
+                UserId = f.Requester.UserId,
+                Username = f.Requester.Username,
+                Email = f.Requester.Email ?? "",
+                Status = "PENDING",
+                IsRequester = false
+            })
+            .ToListAsync();
+
+        return new PagedResult<FriendDto>(items, total, pageNumber, pageSize);
     }
 
     public async Task<PagedResult<FriendDto>> GetBlockedUsersPagedAsync(int userId, int pageNumber, int pageSize)
     {
-        var all = await GetBlockedUsersAsync(userId);
-        int total = all.Count;
-        var paged = all.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
-        return new PagedResult<FriendDto>(paged, total, pageNumber, pageSize);
+        if (pageNumber < 1) pageNumber = 1;
+        if (pageSize < 1) pageSize = 10;
+        if (pageSize > 100) pageSize = 100;
+
+        var baseQuery = _dbContext.Friendships
+            .AsNoTracking()
+            .Where(f => f.Status == "BLOCKED" && f.BlockerId == userId);
+
+        int total = await baseQuery.CountAsync();
+
+        var items = await baseQuery
+            .OrderByDescending(f => f.UpdatedAt ?? f.CreatedAt)
+            .ThenByDescending(f => f.FriendshipId)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(f => new FriendDto
+            {
+                UserId = f.RequesterId == userId ? f.Addressee.UserId : f.Requester.UserId,
+                Username = f.RequesterId == userId ? f.Addressee.Username : f.Requester.Username,
+                Email = (f.RequesterId == userId ? f.Addressee.Email : f.Requester.Email) ?? "",
+                Status = "BLOCKED",
+                IsRequester = f.RequesterId == userId
+            })
+            .ToListAsync();
+
+        return new PagedResult<FriendDto>(items, total, pageNumber, pageSize);
     }
 }

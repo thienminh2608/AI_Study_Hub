@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { api, type TrashItem, type PagedResult } from '../services/api';
 import { Pagination } from '../components/Pagination';
 import { Trash2, RotateCcw, Folder, Loader } from 'lucide-react';
@@ -27,9 +27,27 @@ export const TrashPage: React.FC = () => {
   const [trashData, setTrashData] = useState<PagedResult<TrashItem> | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
+  const [sortKey, setSortKey] = useState<'name' | 'itemType' | 'deletedAt'>('deletedAt');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const pageSize = 10;
+  const sortedItems = useMemo(() => [...(trashData?.items || [])].sort((left, right) => {
+    const a = left[sortKey] || '';
+    const b = right[sortKey] || '';
+    const result = sortKey === 'deletedAt'
+      ? new Date(a).getTime() - new Date(b).getTime()
+      : String(a).localeCompare(String(b), 'vi', { numeric: true });
+    return sortDirection === 'asc' ? result : -result;
+  }), [trashData, sortKey, sortDirection]);
+  const sortHeader = (key: typeof sortKey, label: string) => (
+    <button type="button" className="trash-sort-header" onClick={() => {
+      if (sortKey === key) setSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
+      else { setSortKey(key); setSortDirection('asc'); }
+    }}>
+      {label} {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+    </button>
+  );
 
-  const fetchTrash = async (p = 1) => {
+  const fetchTrash = useCallback(async (p = 1) => {
     setLoading(true);
     try {
       const res = await api.trash.getTrashItems(p, pageSize);
@@ -40,11 +58,11 @@ export const TrashPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [notify, pageSize]);
 
   useEffect(() => {
     fetchTrash(1);
-  }, []);
+  }, [fetchTrash]);
 
   const handleRestore = async (item: TrashItem) => {
     try {
@@ -139,14 +157,14 @@ export const TrashPage: React.FC = () => {
             <table className="trash-table">
               <thead>
                 <tr>
-                  <th>Tên mục</th>
-                  <th>Loại</th>
-                  <th>Ngày xóa</th>
+                  <th>{sortHeader('name', 'Tên mục')}</th>
+                  <th>{sortHeader('itemType', 'Loại')}</th>
+                  <th>{sortHeader('deletedAt', 'Ngày xóa')}</th>
                   <th style={{ textAlign: 'right' }}>Thao tác</th>
                 </tr>
               </thead>
               <tbody>
-                {trashData.items.map((item) => {
+                {sortedItems.map((item) => {
                   const cleanName = getCleanTitle(item.name, item.fileExtension);
                   const fullName = item.itemType === 'FOLDER' ? cleanName : `${cleanName}.${item.fileExtension || ''}`;
 
@@ -321,6 +339,9 @@ export const TrashPage: React.FC = () => {
           color: var(--text-muted);
           border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         }
+
+        .trash-sort-header { border:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;padding:0; }
+        .trash-sort-header:hover { color:var(--accent-blue); }
 
         .trash-table td {
           padding: 1rem 1.25rem;

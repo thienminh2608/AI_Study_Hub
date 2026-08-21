@@ -21,27 +21,36 @@ public class DocumentService : IDocumentService
     private readonly IStudyHubDbContext _dbContext;
     private readonly IFileStorage _fileStorage;
     private readonly IClock _clock;
+    private readonly IDocumentProcessingQueue _queue;
+    private readonly IGeminiService _geminiService;
+    private readonly ISubjectService _subjectService;
     private const string UploadFolder = "uploads";
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
-        { "pdf", "docx", "txt", "xlsx", "pptx", "md" };
+        { "pdf", "docx", "txt", "xlsx", "pptx", "md", "png", "jpg", "jpeg", "webp", "bmp", "gif" };
     private const long MaxFileSizeBytes = 50L * 1024 * 1024;
 
-    public DocumentService(IStudyHubDbContext dbContext, IFileStorage fileStorage, IClock clock)
+    public DocumentService(IStudyHubDbContext dbContext, IFileStorage fileStorage, IClock clock, IDocumentProcessingQueue queue, IGeminiService geminiService, ISubjectService subjectService)
     {
         _dbContext = dbContext;
         _fileStorage = fileStorage;
         _clock = clock;
+        _queue = queue;
+        _geminiService = geminiService;
+        _subjectService = subjectService;
     }
 
     public async Task<DocumentResponseDto> UploadDocumentAsync(int userId, int? folderId, string originalFileName, string fileExtension, long fileSizeInBytes, Stream fileStream)
     {
         fileExtension = fileExtension.Trim().TrimStart('.').ToLowerInvariant();
         if (!AllowedExtensions.Contains(fileExtension))
-            throw new ArgumentException("Unsupported file type.");
+            throw new ArgumentException("Định dạng tệp không được hỗ trợ.");
         if (fileSizeInBytes <= 0 || fileSizeInBytes > MaxFileSizeBytes)
-            throw new ArgumentException("File size must be between 1 byte and 50 MB.");
+            throw new ArgumentException("Dung lượng tệp phải từ 1 byte đến 50 MB.");
         if (!fileStream.CanRead)
-            throw new ArgumentException("The uploaded file cannot be read.");
+            throw new ArgumentException("Không thể đọc luồng tệp tải lên.");
+
+        // Security Magic Bytes & OOXML Zip structure verification
+        FileSecurityValidator.ValidateFile(fileStream, fileExtension);
 
         double fileSizeMb = fileSizeInBytes / (1024.0 * 1024.0);
         fileSizeMb = Math.Round(fileSizeMb, 2);
@@ -54,21 +63,27 @@ public class DocumentService : IDocumentService
         }
 
         if (folderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == folderId && f.UserId == userId))
-            throw new UnauthorizedAccessException("Invalid destination folder.");
+            throw new UnauthorizedAccessException("Thư mục đích không hợp lệ hoặc không có quyền truy cập.");
 
         // If not Premium tier
         if (user.TierId < 3)
         {
             var currentStorageUsed = await _dbContext.Documents
                 .Where(d => d.UserId == userId && !d.IsDeleted)
-                .SumAsync(d => (double?)d.FileSizeMb) ?? 0.0;
+                .SumAsync(d => (decimal?)d.FileSizeMb) ?? 0m;
 
-            double maxStorageMb = user.Tier?.MaxStorageMb ?? 50.0; // Free defaults to 50MB, guest 0
+            decimal maxStorageMb = user.Tier?.MaxStorageMb ?? 50m; // Free defaults to 50MB, guest 0
 
-            if (currentStorageUsed + fileSizeMb > maxStorageMb)
+            if (currentStorageUsed + (decimal)fileSizeMb > maxStorageMb)
             {
                 throw new InvalidOperationException($"Không đủ dung lượng trống! Đã dùng {currentStorageUsed:F2} MB / {maxStorageMb:F2} MB. File tải lên: {fileSizeMb:F2} MB.");
             }
+        }
+
+        // Ensure stream is at start before saving
+        if (fileStream.CanSeek)
+        {
+            fileStream.Position = 0;
         }
 
         // Sanitize and save temp file
@@ -108,52 +123,15 @@ public class DocumentService : IDocumentService
         {
             _dbContext.Documents.Add(document);
             await _dbContext.SaveChangesAsync();
+
+            // Enqueue durable background processing job
+            await _queue.EnqueueJobAsync(document.DocumentId);
         }
         catch
         {
             if (_fileStorage.FileExists(relativeFilePath))
                 _fileStorage.DeleteFile(relativeFilePath);
             throw;
-        }
-
-        // Extract text and save to DocumentExtractedText
-        try
-        {
-            string savedPhysicalPath = _fileStorage.GetPhysicalPath(relativeFilePath);
-            var extraction = ExtractTextFromFile(savedPhysicalPath, fileExtension);
-            string extractedText = extraction.Text;
-            if (!string.IsNullOrWhiteSpace(extractedText))
-            {
-                document.AiParsingStatus = "CHUNKING";
-                var textEntity = new DocumentExtractedText
-                {
-                    DocumentId = document.DocumentId,
-                    ExtractedText = extractedText,
-                    CreatedAt = _clock.Now
-                };
-                _dbContext.DocumentExtractedTexts.Add(textEntity);
-                _dbContext.DocumentChunks.AddRange(DocumentChunker.Chunk(document.DocumentId, extractedText, _clock.Now, extraction.PageOcrConfidence));
-                document.ExtractionCoveragePercent = extraction.CoveragePercent;
-                document.AiParsingStatus = "READY";
-                _dbContext.ModerationNotices.Add(new ModerationNotice
-                {
-                    UserId = userId,
-                    DocumentId = document.DocumentId,
-                    Type = "DOCUMENT_AI_READY",
-                    Title = "Tài liệu đã sẵn sàng cho AI",
-                    Message = $"Tài liệu “{document.Title}” đã tải lên và xử lý nội dung thành công. Bạn có thể bắt đầu chat với AI.",
-                    ActionUrl = $"/chat?documentId={document.DocumentId}",
-                    IsRead = false,
-                    CreatedAt = _clock.Now
-                });
-                await _dbContext.SaveChangesAsync();
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[TextExtraction] Failed to extract text: {ex.Message}");
-            document.AiParsingStatus = "FAILED";
-            await _dbContext.SaveChangesAsync();
         }
 
         return MapToDto(document, user.Username);
@@ -170,7 +148,7 @@ public class DocumentService : IDocumentService
         if (folderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == folderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Invalid destination folder.");
         sharingPermission = NormalizeSharingPermission(sharingPermission);
-        subject = NormalizeSubject(subject);
+        subject = await _subjectService.CreateOrResolveSubjectAsync(NormalizeSubject(subject), userId);
 
         // Check if user is suspended (then they cannot make new documents PUBLIC)
         var user = await _dbContext.Users.FindAsync(userId);
@@ -212,7 +190,7 @@ public class DocumentService : IDocumentService
     public async Task<DocumentResponseDto> ReplaceDocumentAsync(int userId, int pendingDocId, int duplicateDocId, string title, string subject, string sharingPermission, int? folderId)
     {
         sharingPermission = NormalizeSharingPermission(sharingPermission);
-        subject = NormalizeSubject(subject);
+        subject = await _subjectService.CreateOrResolveSubjectAsync(NormalizeSubject(subject), userId);
         if (folderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == folderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Invalid destination folder.");
         var pendingDoc = await _dbContext.Documents.FirstOrDefaultAsync(d => d.DocumentId == pendingDocId && d.UserId == userId);
@@ -240,51 +218,120 @@ public class DocumentService : IDocumentService
         if (sharingPermission == "PUBLIC")
             await EnsurePublicReviewAllowedAsync(oldDoc.DocumentId);
 
-        // Delete old physical file
-        DeletePhysicalFileByUrl(oldDoc.CloudStorageUrl);
-
-        // Rename pending physical file to target final name
+        string originalPendingUrl = pendingDoc.CloudStorageUrl;
         string newUrl = RenamePhysicalFile(pendingDoc.CloudStorageUrl, userId, title, pendingDoc.FileExtension);
+        bool fileMoved = !string.Equals(newUrl, originalPendingUrl, StringComparison.OrdinalIgnoreCase);
 
-        // Replace metadata on the old document
-        oldDoc.CloudStorageUrl = newUrl;
-        oldDoc.FileSizeMb = pendingDoc.FileSizeMb;
-        oldDoc.FileExtension = pendingDoc.FileExtension;
-        oldDoc.Title = title;
-        oldDoc.Subject = subject;
-        oldDoc.FolderId = folderId;
-        ApplyRequestedVisibility(oldDoc, sharingPermission);
-        await AddModeratorDocumentNoticesAsync(oldDoc);
-        oldDoc.UpdatedAt = _clock.Now;
-
-        // Transfer extracted text
-        var oldText = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(t => t.DocumentId == duplicateDocId);
-        var pendingText = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(t => t.DocumentId == pendingDocId);
-        var oldChunks = await _dbContext.DocumentChunks.Where(c => c.DocumentId == duplicateDocId).ToListAsync();
-        var pendingChunks = await _dbContext.DocumentChunks.Where(c => c.DocumentId == pendingDocId).ToListAsync();
-        _dbContext.DocumentChunks.RemoveRange(oldChunks);
-        foreach (var chunk in pendingChunks)
-            chunk.DocumentId = duplicateDocId;
-        if (oldText != null)
+        try
         {
-            _dbContext.DocumentExtractedTexts.Remove(oldText);
+            using var tx = await _dbContext.Database.BeginTransactionAsync();
+
+            // 1. Ensure baseline version exists for oldDoc if missing
+            if (!oldDoc.CurrentVersionId.HasValue || oldDoc.CurrentVersionId.Value == 0)
+            {
+                var existingBaseline = await _dbContext.DocumentVersions
+                    .FirstOrDefaultAsync(v => v.DocumentId == duplicateDocId && v.VersionNumber == 1);
+                if (existingBaseline == null)
+                {
+                    var baseline = new DocumentVersion
+                    {
+                        DocumentId = duplicateDocId,
+                        VersionNumber = 1,
+                        CloudStorageUrl = oldDoc.CloudStorageUrl,
+                        FileExtension = oldDoc.FileExtension,
+                        FileSizeMb = oldDoc.FileSizeMb,
+                        ChangeSummary = "Phiên bản gốc trước khi cập nhật thay thế",
+                        CreatedByUserId = oldDoc.UserId,
+                        CreatedAt = oldDoc.CreatedAt ?? _clock.UtcNow
+                    };
+                    _dbContext.DocumentVersions.Add(baseline);
+                    await _dbContext.SaveChangesAsync();
+                    oldDoc.CurrentVersionId = baseline.VersionId;
+                }
+                else
+                {
+                    oldDoc.CurrentVersionId = existingBaseline.VersionId;
+                }
+            }
+
+            // 2. Compute next VersionNumber
+            int maxVersionNumber = await _dbContext.DocumentVersions
+                .Where(v => v.DocumentId == duplicateDocId)
+                .MaxAsync(v => (int?)v.VersionNumber) ?? 1;
+            int newVersionNumber = maxVersionNumber + 1;
+
+            // 3. Create new DocumentVersion for duplicateDocId
+            var newVersion = new DocumentVersion
+            {
+                DocumentId = duplicateDocId,
+                VersionNumber = newVersionNumber,
+                CloudStorageUrl = newUrl,
+                FileExtension = pendingDoc.FileExtension,
+                FileSizeMb = pendingDoc.FileSizeMb,
+                ChangeSummary = "Thay thế tài liệu trùng lặp (Cập nhật phiên bản mới)",
+                CreatedByUserId = userId,
+                CreatedAt = _clock.UtcNow
+            };
+            _dbContext.DocumentVersions.Add(newVersion);
+            await _dbContext.SaveChangesAsync();
+
+            // 4. Update old document metadata & point CurrentVersionId to newVersion
+            oldDoc.CurrentVersionId = newVersion.VersionId;
+            oldDoc.CloudStorageUrl = newUrl;
+            oldDoc.FileSizeMb = pendingDoc.FileSizeMb;
+            oldDoc.FileExtension = pendingDoc.FileExtension;
+            oldDoc.Title = title;
+            oldDoc.Subject = subject;
+            oldDoc.FolderId = folderId;
+            ApplyRequestedVisibility(oldDoc, sharingPermission);
+            await AddModeratorDocumentNoticesAsync(oldDoc);
+            oldDoc.UpdatedAt = _clock.Now;
+
+            // 5. Transfer extracted text and chunks from pending document to the new version of duplicateDocId
+            var pendingTexts = await _dbContext.DocumentExtractedTexts.Where(t => t.DocumentId == pendingDocId).ToListAsync();
+            var pendingChunks = await _dbContext.DocumentChunks.Where(c => c.DocumentId == pendingDocId).ToListAsync();
+            foreach (var chunk in pendingChunks)
+            {
+                chunk.DocumentId = duplicateDocId;
+                chunk.DocumentVersionId = newVersion.VersionId;
+            }
+            foreach (var text in pendingTexts)
+            {
+                text.DocumentId = duplicateDocId;
+                text.DocumentVersionId = newVersion.VersionId;
+            }
+
+            // 6. Remove pending document metadata
+            _dbContext.Documents.Remove(pendingDoc);
+
+            await _dbContext.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            return MapToDto(oldDoc, user.Username);
         }
-        if (pendingText != null)
+        catch
         {
-            pendingText.DocumentId = duplicateDocId;
+            if (fileMoved)
+            {
+                try
+                {
+                    string newRel = newUrl.TrimStart('/');
+                    string origRel = originalPendingUrl.TrimStart('/');
+                    _fileStorage.MoveFile(newRel, origRel);
+                }
+                catch (Exception compEx)
+                {
+                    Console.WriteLine($"[ReplaceCompensation] Revert file move failed: {compEx.Message}");
+                }
+            }
+            throw;
         }
-
-        // Delete pending document metadata
-        _dbContext.Documents.Remove(pendingDoc);
-
-        await _dbContext.SaveChangesAsync();
-        return MapToDto(oldDoc, user.Username);
     }
 
     public async Task<DocumentResponseDto> KeepBothDocumentsAsync(int userId, int pendingDocId, string title, string subject, string sharingPermission, int? folderId)
     {
         sharingPermission = NormalizeSharingPermission(sharingPermission);
-        subject = NormalizeSubject(subject);
+        subject = await _subjectService.CreateOrResolveSubjectAsync(NormalizeSubject(subject), userId);
         if (folderId.HasValue && !await _dbContext.Folders.AnyAsync(f => f.FolderId == folderId && f.UserId == userId))
             throw new UnauthorizedAccessException("Invalid destination folder.");
         var pendingDoc = await _dbContext.Documents.FirstOrDefaultAsync(d => d.DocumentId == pendingDocId && d.UserId == userId);
@@ -385,30 +432,38 @@ public class DocumentService : IDocumentService
         return docs.Select(d => MapToDto(d, d.User.Username)).ToList();
     }
 
-    public async Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, string? fileType, string? sortBy, string? sortDirection)
+    public async Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, string? subject, List<string>? extensions, string? sortBy, string? sortDirection)
     {
         pageNumber = Math.Max(1, pageNumber);
-        pageSize = Math.Clamp(pageSize, 1, 50);
-        var query = _dbContext.Documents.Include(d => d.User)
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var query = _dbContext.Documents
+            .AsNoTracking()
+            .Include(d => d.User)
             .Where(d => d.SharingPermission == "PUBLIC" && d.IsFlagged == false && !d.IsDeleted);
+
+        if (!string.IsNullOrWhiteSpace(subject) && !subject.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var descendantSubjects = _subjectService != null
+                ? await _subjectService.GetDescendantSubjectNamesAsync(subject)
+                : new List<string> { subject };
+            query = query.Where(d => descendantSubjects.Contains(d.Subject));
+        }
+
+        if (extensions is { Count: > 0 })
+        {
+            var lowered = extensions.Select(e => e.ToLower()).ToList();
+            query = query.Where(d => lowered.Contains(d.FileExtension.ToLower()));
+        }
+
         if (!string.IsNullOrWhiteSpace(search))
         {
             var keyword = search.Trim().ToLower();
             query = query.Where(d => d.Title.ToLower().Contains(keyword) || d.User.Username.ToLower().Contains(keyword) || d.FileExtension.ToLower().Contains(keyword));
         }
-        if (!string.IsNullOrWhiteSpace(fileType) && !fileType.Equals("ALL", StringComparison.OrdinalIgnoreCase))
-        {
-            var extensions = fileType.ToUpperInvariant() switch
-            {
-                "PDF" => new[] { "pdf" }, "WORD" => new[] { "doc", "docx" },
-                "SHEET" => new[] { "xls", "xlsx", "csv" }, "SLIDE" => new[] { "ppt", "pptx" },
-                "TEXT" => new[] { "txt", "md" }, _ => Array.Empty<string>()
-            };
-            if (extensions.Length > 0) query = query.Where(d => extensions.Contains(d.FileExtension.ToLower()));
-        }
+
         var totalCount = await query.CountAsync();
         bool ascending = string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
-        var ordered = sortBy?.ToLowerInvariant() switch
+        var ordered = (sortBy?.ToLowerInvariant()) switch
         {
             "title" => ascending ? query.OrderBy(d => d.Title).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.Title).ThenByDescending(d => d.DocumentId),
             "bookmarks" => ascending ? query.OrderBy(d => d.BookmarkCount).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.BookmarkCount).ThenByDescending(d => d.DocumentId),
@@ -416,6 +471,7 @@ public class DocumentService : IDocumentService
             "views" => ascending ? query.OrderBy(d => d.ViewCount).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.ViewCount).ThenByDescending(d => d.DocumentId),
             _ => ascending ? query.OrderBy(d => d.CreatedAt).ThenBy(d => d.DocumentId) : query.OrderByDescending(d => d.CreatedAt).ThenByDescending(d => d.DocumentId)
         };
+
         var docs = await ordered.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToListAsync();
         return new PagedResult<DocumentResponseDto>(docs.Select(d => MapToDto(d, d.User.Username)).ToList(), totalCount, pageNumber, pageSize);
     }
@@ -454,10 +510,28 @@ public class DocumentService : IDocumentService
         return false;
     }
 
-    public async Task<string?> GetExtractedTextAsync(int documentId)
+    public async Task<string?> GetExtractedTextAsync(int documentId, int? versionId = null)
     {
-        var text = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(t => t.DocumentId == documentId);
-        return text?.ExtractedText;
+        if (versionId.HasValue && versionId.Value > 0)
+        {
+            var textByVersion = await _dbContext.DocumentExtractedTexts
+                .FirstOrDefaultAsync(t => t.DocumentId == documentId && t.DocumentVersionId == versionId.Value);
+            return textByVersion?.ExtractedText;
+        }
+
+        var doc = await _dbContext.Documents.AsNoTracking().FirstOrDefaultAsync(d => d.DocumentId == documentId);
+        if (doc?.CurrentVersionId != null)
+        {
+            var currentVersionText = await _dbContext.DocumentExtractedTexts
+                .FirstOrDefaultAsync(t => t.DocumentId == documentId && t.DocumentVersionId == doc.CurrentVersionId);
+            if (currentVersionText != null) return currentVersionText.ExtractedText;
+        }
+
+        // Fallback for legacy text when no version was specified
+        var fallback = await _dbContext.DocumentExtractedTexts
+            .OrderByDescending(t => t.ExtractionId)
+            .FirstOrDefaultAsync(t => t.DocumentId == documentId);
+        return fallback?.ExtractedText;
     }
 
     public async Task<bool> CheckDuplicateTitleAsync(int userId, string title, string fileExtension, int? folderId, int? excludeDocId)
@@ -465,6 +539,8 @@ public class DocumentService : IDocumentService
         var normalizedTitle = StripExtension(title).Trim();
         var normalizedExtension = fileExtension.Trim().TrimStart('.').ToLowerInvariant();
         var query = _dbContext.Documents.Where(d => d.UserId == userId
+            && !d.IsDeleted
+            && !d.CloudStorageUrl.Contains("/temp_")
             && d.Title == normalizedTitle
             && d.FileExtension == normalizedExtension);
         if (folderId.HasValue)
@@ -514,7 +590,8 @@ public class DocumentService : IDocumentService
             ModeratorNote = r.ModeratorNote,
             AssignedModeratorId = r.AssignedModeratorId,
             PreviousSharingPermission = r.PreviousSharingPermission,
-            RestrictedAt = r.RestrictedAt
+            RestrictedAt = r.RestrictedAt,
+            ReportedVersionId = r.ReportedVersionId
         }).ToList();
     }
 
@@ -544,6 +621,7 @@ public class DocumentService : IDocumentService
             ClaimantEmail = reportDto.ClaimantEmail?.Trim(),
             OriginalWorkUrl = reportDto.OriginalWorkUrl?.Trim(),
             EvidenceDescription = reportDto.EvidenceDescription?.Trim(),
+            ReportedVersionId = doc.CurrentVersionId,
             Status = "PENDING",
             CreatedAt = _clock.Now
         };
@@ -561,7 +639,10 @@ public class DocumentService : IDocumentService
         }
 
         await _dbContext.SaveChangesAsync();
-        var moderators = await _dbContext.Users.Where(u => u.Role == "MODERATOR" && u.Status == "ACTIVE").Select(u => u.UserId).ToListAsync();
+        var moderators = await _dbContext.Users
+            .Where(u => u.Role == "MODERATOR" && u.Status == "ACTIVE" && u.UserId != reporterId)
+            .Select(u => u.UserId)
+            .ToListAsync();
         _dbContext.ModerationNotices.AddRange(moderators.Select(moderatorId => new ModerationNotice
         {
             UserId = moderatorId,
@@ -716,7 +797,7 @@ public class DocumentService : IDocumentService
 
     public async Task<DocumentDetailDto?> GetDocumentDetailAsync(int documentId)
     {
-        var document = await _dbContext.Documents.Include(d => d.User).Include(d => d.DocumentExtractedText).FirstOrDefaultAsync(d => d.DocumentId == documentId);
+        var document = await _dbContext.Documents.Include(d => d.User).Include(d => d.DocumentExtractedTexts).FirstOrDefaultAsync(d => d.DocumentId == documentId);
         if (document == null)
             return null;
         var activities = await _dbContext.DocumentActivities.Include(a => a.User).Where(a => a.DocumentId == documentId).ToListAsync();
@@ -729,7 +810,12 @@ public class DocumentService : IDocumentService
             ViewCount = group.Count(a => a.ActivityType == "VIEW"),
             LastActivityAt = group.Max(a => a.CreatedAt)
         }).OrderByDescending(a => a.LastActivityAt).ToList();
-        var extracted = document.DocumentExtractedText?.ExtractedText?.Trim();
+
+        var currentText = document.DocumentExtractedTexts
+            .FirstOrDefault(t => t.DocumentVersionId == document.CurrentVersionId)
+            ?? document.DocumentExtractedTexts.OrderByDescending(t => t.ExtractionId).FirstOrDefault();
+        var extracted = currentText?.ExtractedText?.Trim();
+
         return new DocumentDetailDto
         {
             Document = MapToDto(document, document.User.Username),
@@ -876,14 +962,14 @@ public class DocumentService : IDocumentService
 
     private sealed record ExtractionResult(string Text, double? CoveragePercent, IReadOnlyDictionary<int, double>? PageOcrConfidence = null);
 
-    private ExtractionResult ExtractTextFromFile(string filePath, string fileExtension)
+    private async Task<ExtractionResult> ExtractTextFromFileAsync(string filePath, string fileExtension)
     {
         string ext = fileExtension.ToLower().TrimStart('.');
         switch (ext)
         {
             case "txt":
             case "md":
-                return new ExtractionResult(File.ReadAllText(filePath, Encoding.UTF8), 1.0);
+                return new ExtractionResult(await File.ReadAllTextAsync(filePath, Encoding.UTF8), 1.0);
 
             case "docx":
                 return new ExtractionResult(ExtractTextFromDocx(filePath), null);
@@ -897,9 +983,45 @@ public class DocumentService : IDocumentService
             case "pptx":
                 return ExtractTextFromPptx(filePath);
 
+            case "png":
+            case "jpg":
+            case "jpeg":
+            case "webp":
+            case "bmp":
+            case "gif":
+                return await ExtractTextFromImageAsync(filePath, ext);
+
             default:
                 Console.WriteLine($"Unsupported file type for text extraction: {fileExtension}");
                 return new ExtractionResult("", null);
+        }
+    }
+
+    private async Task<ExtractionResult> ExtractTextFromImageAsync(string filePath, string ext)
+    {
+        try
+        {
+            byte[] imageBytes = await File.ReadAllBytesAsync(filePath);
+            string mimeType = ext switch
+            {
+                "png" => "image/png",
+                "webp" => "image/webp",
+                "gif" => "image/gif",
+                "bmp" => "image/bmp",
+                _ => "image/jpeg"
+            };
+
+            string extractedText = await _geminiService.ExtractTextFromImageAsync(imageBytes, mimeType);
+            if (string.IsNullOrWhiteSpace(extractedText))
+            {
+                extractedText = $"[Hình ảnh không có văn bản nhận diện được: {Path.GetFileName(filePath)}]";
+            }
+            return new ExtractionResult(extractedText, 1.0);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ImageOCR] Error extracting text from image {filePath}: {ex.Message}");
+            return new ExtractionResult($"[Lỗi trích xuất OCR từ ảnh: {ex.Message}]", 0.0);
         }
     }
 
@@ -950,14 +1072,18 @@ public class DocumentService : IDocumentService
                 foreach (var sheet in package.Workbook.Worksheets)
                 {
                     sb.AppendLine($"--- Worksheet: {sheet.Name} ---");
-                    int rows = sheet.Dimension?.Rows ?? 0;
-                    int cols = sheet.Dimension?.Columns ?? 0;
+                    const int maxRows = 10_000;
+                    const int maxColumns = 250;
+                    int rows = Math.Min(sheet.Dimension?.Rows ?? 0, maxRows);
+                    int cols = Math.Min(sheet.Dimension?.Columns ?? 0, maxColumns);
                     for (int r = 1; r <= rows; r++)
                     {
                         var rowVals = new List<string>();
                         for (int c = 1; c <= cols; c++)
                         {
-                            var val = sheet.Cells[r, c].Value?.ToString();
+                            // Text returns the formatted/cached display value and is more useful
+                            // than Value.ToString() for dates, percentages and formula cells.
+                            var val = sheet.Cells[r, c].Text;
                             if (!string.IsNullOrWhiteSpace(val))
                             {
                                 rowVals.Add(val);
@@ -974,8 +1100,9 @@ public class DocumentService : IDocumentService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error extracting XLSX: {ex.Message}");
-            return "";
+            // Do not turn parser failures into a successful placeholder extraction.
+            // ProcessExtractionAsync will mark the document FAILED and the worker can retry it.
+            throw new InvalidDataException($"Unable to extract XLSX content from '{Path.GetFileName(filePath)}'.", ex);
         }
     }
 
@@ -1178,6 +1305,9 @@ public class DocumentService : IDocumentService
             ModerationSubmittedAt = doc.ModerationSubmittedAt,
             ModeratedAt = doc.ModeratedAt,
             ShareLinkToken = doc.ShareLinkToken,
+            GeneralAccess = doc.GeneralAccess ?? "RESTRICTED",
+            IsShareLinkRevoked = doc.IsShareLinkRevoked,
+            ShareLinkExpiresAt = doc.ShareLinkExpiresAt,
             TotalReportScore = doc.TotalReportScore,
             IsFlagged = doc.IsFlagged,
             BookmarkCount = doc.BookmarkCount,
@@ -1200,52 +1330,260 @@ public class DocumentService : IDocumentService
         catch { return false; }
     }
 
-    public async Task ProcessExtractionAsync(int documentId)
+    public async Task ProcessExtractionAsync(int documentId, int? versionId = null)
     {
         var doc = await _dbContext.Documents.FirstOrDefaultAsync(d => d.DocumentId == documentId);
         if (doc == null || doc.IsDeleted) return;
 
+        string relativePath = doc.CloudStorageUrl.TrimStart('/');
+        string fileExtension = doc.FileExtension;
+
+        if (versionId.HasValue)
+        {
+            var version = await _dbContext.DocumentVersions.FirstOrDefaultAsync(v => v.VersionId == versionId.Value && v.DocumentId == documentId);
+            if (version != null && !string.IsNullOrWhiteSpace(version.CloudStorageUrl))
+            {
+                relativePath = version.CloudStorageUrl.TrimStart('/');
+                fileExtension = version.FileExtension;
+            }
+        }
+
+        var extractionStartTime = _clock.UtcNow.AddSeconds(-2);
         try
         {
             doc.AiParsingStatus = "PROCESSING";
             await _dbContext.SaveChangesAsync();
 
-            // Perform extraction logic if file exists
-            if (IsFileAvailable(doc.CloudStorageUrl))
+            string physicalPath = _fileStorage.GetPhysicalPath(relativePath);
+            if (!File.Exists(physicalPath))
             {
-                // Simple extraction or text simulation
-                var existingText = await _dbContext.DocumentExtractedTexts.FirstOrDefaultAsync(e => e.DocumentId == documentId);
-                if (existingText == null)
+                throw new FileNotFoundException($"File not found on storage: {physicalPath}");
+            }
+
+            var extraction = await ExtractTextFromFileAsync(physicalPath, fileExtension);
+            string extractedText = extraction.Text;
+
+            if (string.IsNullOrWhiteSpace(extractedText))
+            {
+                extractedText = $"[Tài liệu không chứa lớp văn bản trích xuất được hoặc tệp ảnh rỗng: {doc.Title}]";
+            }
+
+            doc.AiParsingStatus = "CHUNKING";
+            await _dbContext.SaveChangesAsync();
+
+            int? targetVersionId = versionId ?? doc.CurrentVersionId;
+            if (!targetVersionId.HasValue || targetVersionId.Value == 0)
+            {
+                targetVersionId = await _dbContext.DocumentVersions
+                    .Where(v => v.DocumentId == documentId)
+                    .OrderByDescending(v => v.VersionNumber)
+                    .Select(v => (int?)v.VersionId)
+                    .FirstOrDefaultAsync();
+            }
+
+            // If still null, create baseline Version 1 automatically
+            if (!targetVersionId.HasValue || targetVersionId.Value == 0)
+            {
+                var existingV1 = await _dbContext.DocumentVersions
+                    .FirstOrDefaultAsync(v => v.DocumentId == documentId && v.VersionNumber == 1);
+                if (existingV1 != null)
                 {
-                    _dbContext.DocumentExtractedTexts.Add(new DocumentExtractedText
+                    targetVersionId = existingV1.VersionId;
+                }
+                else
+                {
+                    var baselineVersion = new DocumentVersion
                     {
                         DocumentId = documentId,
-                        ExtractedText = $"Trích xuất văn bản tự động cho tài liệu {doc.Title}",
-                        CreatedAt = _clock.Now
-                    });
+                        VersionNumber = 1,
+                        CloudStorageUrl = doc.CloudStorageUrl,
+                        FileExtension = doc.FileExtension,
+                        FileSizeMb = doc.FileSizeMb,
+                        ChangeSummary = "Phiên bản khởi tạo tự động (Baseline v1)",
+                        CreatedByUserId = doc.UserId,
+                        CreatedAt = _clock.UtcNow
+                    };
+                    _dbContext.DocumentVersions.Add(baselineVersion);
+                    try
+                    {
+                        await _dbContext.SaveChangesAsync();
+                        targetVersionId = baselineVersion.VersionId;
+                    }
+                    catch (DbUpdateException)
+                    {
+                        foreach (var entry in _dbContext.ChangeTracker.Entries<DocumentVersion>().ToList())
+                        {
+                            entry.State = EntityState.Detached;
+                        }
+                        var concurrentV1 = await _dbContext.DocumentVersions
+                            .FirstOrDefaultAsync(v => v.DocumentId == documentId && v.VersionNumber == 1);
+                        if (concurrentV1 != null)
+                        {
+                            targetVersionId = concurrentV1.VersionId;
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
+                }
+
+                if (doc.CurrentVersionId != targetVersionId)
+                {
+                    doc.CurrentVersionId = targetVersionId;
+                    await _dbContext.SaveChangesAsync();
                 }
             }
 
+            // 1. Upsert DocumentExtractedText for (documentId, targetVersionId)
+            var existingText = await _dbContext.DocumentExtractedTexts
+                .FirstOrDefaultAsync(e => e.DocumentId == documentId && e.DocumentVersionId == targetVersionId);
+            if (existingText == null)
+            {
+                _dbContext.DocumentExtractedTexts.Add(new DocumentExtractedText
+                {
+                    DocumentId = documentId,
+                    DocumentVersionId = targetVersionId,
+                    ExtractedText = extractedText,
+                    CreatedAt = _clock.UtcNow
+                });
+            }
+            else
+            {
+                existingText.ExtractedText = extractedText;
+            }
+
+            try
+            {
+                await _dbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                // In case of concurrent extraction insertion race condition:
+                // 1. Detach all faulted DocumentExtractedText entities in tracker
+                foreach (var entry in _dbContext.ChangeTracker.Entries<DocumentExtractedText>().ToList())
+                {
+                    entry.State = EntityState.Detached;
+                }
+
+                // 2. Reload the concurrently created record and update
+                var concurrentText = await _dbContext.DocumentExtractedTexts
+                    .FirstOrDefaultAsync(e => e.DocumentId == documentId && e.DocumentVersionId == targetVersionId);
+                if (concurrentText != null)
+                {
+                    concurrentText.ExtractedText = extractedText;
+                    await _dbContext.SaveChangesAsync();
+                }
+                else
+                {
+                    throw;
+                }
+            }
+
+            bool isBaselineVersion = false;
+            if (targetVersionId.HasValue)
+            {
+                var targetVer = await _dbContext.DocumentVersions
+                    .FirstOrDefaultAsync(v => v.VersionId == targetVersionId.Value);
+                if (targetVer != null && targetVer.VersionNumber == 1)
+                {
+                    isBaselineVersion = true;
+                }
+            }
+
+            // 2. Replace Chunks Idempotently for this version
+            var oldChunks = await _dbContext.DocumentChunks
+                .Where(c => c.DocumentId == documentId && (c.DocumentVersionId == targetVersionId || (isBaselineVersion && c.DocumentVersionId == null)))
+                .ToListAsync();
+            if (oldChunks.Any())
+            {
+                _dbContext.DocumentChunks.RemoveRange(oldChunks);
+            }
+
+            var newChunks = DocumentChunker.Chunk(documentId, extractedText, _clock.UtcNow, extraction.PageOcrConfidence, targetVersionId);
+            _dbContext.DocumentChunks.AddRange(newChunks);
+
+            doc.ExtractionCoveragePercent = extraction.CoveragePercent ?? 1.0;
             doc.AiParsingStatus = "READY";
-            await _dbContext.SaveChangesAsync();
+            doc.UpdatedAt = _clock.UtcNow;
+
+            // 3. Add ModerationNotice
+            _dbContext.ModerationNotices.Add(new ModerationNotice
+            {
+                UserId = doc.UserId,
+                DocumentId = doc.DocumentId,
+                Type = "DOCUMENT_AI_READY",
+                Title = "Tài liệu đã sẵn sàng cho AI",
+                Message = $"Tài liệu “{doc.Title}” đã tải lên và trích xuất nội dung thành công ({newChunks.Count} đoạn). Bạn có thể bắt đầu chat với AI.",
+                ActionUrl = $"/chat?documentId={doc.DocumentId}",
+                IsRead = false,
+                CreatedAt = _clock.Now
+            });
+
+            try
+            {
+                await _dbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex)
+            {
+                // 1. Check if error is a unique constraint violation
+                if (!IsUniqueConstraintViolation(ex))
+                {
+                    throw;
+                }
+
+                // 2. In case of concurrent extraction worker race condition on chunks:
+                // Detach all faulted DocumentChunks and ModerationNotices in tracker
+                foreach (var entry in _dbContext.ChangeTracker.Entries<DocumentChunk>().ToList())
+                {
+                    entry.State = EntityState.Detached;
+                }
+                foreach (var entry in _dbContext.ChangeTracker.Entries<ModerationNotice>().ToList())
+                {
+                    entry.State = EntityState.Detached;
+                }
+
+                // 3. Verify that winner chunks actually exist for (documentId, targetVersionId) created during this run
+                var winnerChunksExist = await _dbContext.DocumentChunks
+                    .AnyAsync(c => c.DocumentId == documentId && c.DocumentVersionId == targetVersionId && c.CreatedAt >= extractionStartTime);
+                if (winnerChunksExist)
+                {
+                    // Winner succeeded; ensure doc status is set to READY
+                    var reloadedDoc = await _dbContext.Documents.FindAsync(documentId);
+                    if (reloadedDoc != null && reloadedDoc.AiParsingStatus != "READY")
+                    {
+                        reloadedDoc.AiParsingStatus = "READY";
+                        reloadedDoc.ExtractionCoveragePercent = extraction.CoveragePercent ?? 1.0;
+                        reloadedDoc.UpdatedAt = _clock.UtcNow;
+                        await _dbContext.SaveChangesAsync();
+                    }
+                }
+                else
+                {
+                    // Not a verified concurrent chunk race, rethrow
+                    throw;
+                }
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Console.WriteLine($"[TextExtraction] Failed to extract text for doc {documentId}: {ex.Message}");
             doc.AiParsingStatus = "FAILED";
             await _dbContext.SaveChangesAsync();
+            throw; // Rethrow so queue marks job FAILED/DEAD
         }
     }
 
     public async Task RetryExtractionAsync(int documentId, int userId)
     {
         var doc = await _dbContext.Documents.FirstOrDefaultAsync(d => d.DocumentId == documentId);
-        if (doc == null || doc.IsDeleted) throw new KeyNotFoundException("Document not found");
-        if (doc.UserId != userId) throw new UnauthorizedAccessException("Only owner can retry extraction");
+        if (doc == null || doc.IsDeleted) throw new KeyNotFoundException("Tài liệu không tồn tại");
+        if (doc.UserId != userId) throw new UnauthorizedAccessException("Chỉ chủ sở hữu mới có quyền yêu cầu trích xuất lại");
 
-        doc.AiParsingStatus = "PROCESSING";
+        doc.AiParsingStatus = "QUEUED";
         await _dbContext.SaveChangesAsync();
 
-        await ProcessExtractionAsync(documentId);
+        await _queue.EnqueueJobAsync(documentId);
     }
 
     public async Task<StorageQuotaDto> GetUserStorageQuotaAsync(int userId)
@@ -1253,9 +1591,9 @@ public class DocumentService : IDocumentService
         var user = await _dbContext.Users.Include(u => u.Tier).FirstOrDefaultAsync(u => u.UserId == userId);
         if (user == null) throw new KeyNotFoundException("User not found");
 
-        double usedMb = await _dbContext.Documents
+        decimal usedMb = await _dbContext.Documents
             .Where(d => d.UserId == userId && !d.IsDeleted)
-            .SumAsync(d => (double?)d.FileSizeMb) ?? 0.0;
+            .SumAsync(d => (decimal?)d.FileSizeMb) ?? 0m;
 
         decimal maxStorageMb = user.Tier?.MaxStorageMb ?? 50m;
         string tierName = user.Tier?.TierName ?? "Free";
@@ -1296,7 +1634,10 @@ public class DocumentService : IDocumentService
 
         if (!string.IsNullOrWhiteSpace(subject) && subject != "ALL")
         {
-            query = query.Where(d => d.Subject == subject);
+            var descendantSubjects = _subjectService != null
+                ? await _subjectService.GetDescendantSubjectNamesAsync(subject)
+                : new List<string> { subject };
+            query = query.Where(d => descendantSubjects.Contains(d.Subject));
         }
 
         int totalCount = await query.CountAsync();
@@ -1348,44 +1689,6 @@ public class DocumentService : IDocumentService
         return new PagedResult<DocumentResponseDto>(dtos, totalCount, pageNumber, pageSize);
     }
 
-    public async Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, List<string>? extensions, string? sortBy, string? sortDirection)
-    {
-        var query = _dbContext.Documents
-            .AsNoTracking()
-            .Include(d => d.User)
-            .Where(d => d.SharingPermission == "PUBLIC" && d.IsFlagged == false && !d.IsDeleted);
-
-        if (extensions is { Count: > 0 })
-        {
-            var lowered = extensions.Select(e => e.ToLower()).ToList();
-            query = query.Where(d => lowered.Contains(d.FileExtension.ToLower()));
-        }
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            query = query.Where(d => d.Title.Contains(search) || d.User.Username.Contains(search) || d.FileExtension.Contains(search));
-        }
-
-        bool ascending = string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
-        query = (sortBy?.ToLowerInvariant()) switch
-        {
-            "title" => ascending ? query.OrderBy(d => d.Title) : query.OrderByDescending(d => d.Title),
-            "downloads" => ascending ? query.OrderBy(d => d.DownloadCount) : query.OrderByDescending(d => d.DownloadCount),
-            "views" => ascending ? query.OrderBy(d => d.ViewCount) : query.OrderByDescending(d => d.ViewCount),
-            "bookmarks" => ascending ? query.OrderBy(d => d.BookmarkCount) : query.OrderByDescending(d => d.BookmarkCount),
-            _ => ascending ? query.OrderBy(d => d.CreatedAt) : query.OrderByDescending(d => d.CreatedAt),
-        };
-
-        int totalCount = await query.CountAsync();
-        var items = await query
-            .Skip((pageNumber - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync();
-
-        var dtos = items.Select(d => MapToDto(d, d.User.Username)).ToList();
-        return new PagedResult<DocumentResponseDto>(dtos, totalCount, pageNumber, pageSize);
-    }
-
     public async Task BulkDeleteDocumentsAsync(List<int> documentIds, int userId)
     {
         var docs = await _dbContext.Documents.Where(d => documentIds.Contains(d.DocumentId) && d.UserId == userId).ToListAsync();
@@ -1413,5 +1716,24 @@ public class DocumentService : IDocumentService
             doc.UpdatedAt = _clock.Now;
         }
         await _dbContext.SaveChangesAsync();
+    }
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException ex)
+    {
+        var inner = ex.InnerException;
+        while (inner != null)
+        {
+            var msg = inner.Message;
+            if (msg.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Cannot insert duplicate key", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Violation of UNIQUE KEY", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Violation of PRIMARY KEY", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("2601") || msg.Contains("2627") || msg.Contains("2067"))
+            {
+                return true;
+            }
+            inner = inner.InnerException;
+        }
+        return false;
     }
 }

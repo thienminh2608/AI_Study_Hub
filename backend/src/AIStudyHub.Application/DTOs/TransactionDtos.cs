@@ -32,6 +32,17 @@ public class TransactionDto
     public int? ApproverId { get; set; }
     public string? ApproverName { get; set; }
     public string? FailureReason { get; set; }
+    public int? OriginalTransactionId { get; set; }
+}
+
+public class ReverseDepositDto
+{
+    public string Reason { get; set; } = null!;
+}
+
+public class RefundRequestDto
+{
+    public string? Reason { get; set; }
 }
 
 public class CreateTransactionDto

@@ -14,10 +14,10 @@ public interface IDocumentService
     Task CancelUploadAsync(int userId, int pendingDocId);
     Task<List<DocumentResponseDto>> GetUserDocumentsAsync(int userId, int? folderId);
     Task<List<DocumentResponseDto>> GetPublicDocumentsAsync();
-    Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, string? fileType, string? sortBy, string? sortDirection);
+    Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, string? subject, List<string>? extensions, string? sortBy, string? sortDirection);
     Task<DocumentResponseDto?> GetDocumentByIdAsync(int documentId);
     Task<bool> DeleteDocumentAsync(int userId, int documentId);
-    Task<string?> GetExtractedTextAsync(int documentId);
+    Task<string?> GetExtractedTextAsync(int documentId, int? versionId = null);
     Task<bool> CheckDuplicateTitleAsync(int userId, string title, string fileExtension, int? folderId, int? excludeDocId);
     Task<List<DocumentReportResponseDto>> GetReportsAsync();
     Task<bool> ReportDocumentAsync(int reporterId, DocumentReportDto reportDto);
@@ -32,13 +32,12 @@ public interface IDocumentService
     Task<DocumentDetailDto?> GetDocumentDetailAsync(int documentId);
 
     // New Features & Background Processing Queue
-    Task ProcessExtractionAsync(int documentId);
+    Task ProcessExtractionAsync(int documentId, int? versionId = null);
     Task RetryExtractionAsync(int documentId, int userId);
     Task<StorageQuotaDto> GetUserStorageQuotaAsync(int userId);
     Task<PagedResult<DocumentResponseDto>> GetMyDocumentsPagedAsync(int userId, int? folderId, int pageNumber, int pageSize, string? search, string? subject);
     Task<PagedResult<DocumentResponseDto>> GetSharedWithMePagedAsync(int userId, int pageNumber, int pageSize);
     Task<PagedResult<DocumentResponseDto>> GetBookmarksPagedAsync(int userId, int pageNumber, int pageSize);
-    Task<PagedResult<DocumentResponseDto>> GetPublicDocumentsPagedAsync(int pageNumber, int pageSize, string? search, List<string>? extensions, string? sortBy, string? sortDirection);
     Task BulkDeleteDocumentsAsync(List<int> documentIds, int userId);
     Task BulkMoveDocumentsAsync(List<int> documentIds, int? targetFolderId, int userId);
 }

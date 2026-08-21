@@ -7,5 +7,6 @@ namespace AIStudyHub.Application.Interfaces;
 
 public interface IGeminiService
 {
-    Task<string> GetGeminiResponseAsync(List<ChatMessageDto> messageHistory, CancellationToken cancellationToken = default);
+    Task<GeminiResponseDto> GetGeminiResponseAsync(List<ChatMessageDto> messageHistory, string operation = "CHAT", CancellationToken cancellationToken = default);
+    Task<string> ExtractTextFromImageAsync(byte[] imageBytes, string mimeType, CancellationToken cancellationToken = default);
 }

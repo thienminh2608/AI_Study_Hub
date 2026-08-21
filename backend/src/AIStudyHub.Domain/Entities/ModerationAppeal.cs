@@ -37,4 +37,5 @@ public class ModerationAppeal
         get; set;
     }
     public virtual DocumentReport Report { get; set; } = null!;
+    public virtual User SubmittedByUser { get; set; } = null!;
 }

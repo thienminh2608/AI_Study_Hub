@@ -2,11 +2,41 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Text;
 using AIStudyHub.Application.Services;
+using OfficeOpenXml;
 
 namespace AIStudyHub.UnitTests;
 
 public class DocumentExtractionTests
 {
+    [Fact]
+    public void ExtractTextFromXlsx_ReadsFormattedTextAcrossWorksheets()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"aistudyhub-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            ExcelPackage.License.SetNonCommercialPersonal("AIStudyHub Tests");
+            using (var package = new ExcelPackage())
+            {
+                var overview = package.Workbook.Worksheets.Add("Tong quan");
+                overview.Cells[1, 1].Value = "Nội dung tiếng Việt";
+                overview.Cells[2, 1].Value = 0.25;
+                overview.Cells[2, 1].Style.Numberformat.Format = "0%";
+                var details = package.Workbook.Worksheets.Add("Chi tiet");
+                details.Cells[1, 1].Value = "Dữ liệu sheet thứ hai";
+                package.SaveAs(new FileInfo(path));
+            }
+
+            var extracted = Extract(path, "xlsx");
+
+            Assert.Contains("--- Worksheet: Tong quan ---", extracted);
+            Assert.Contains("Nội dung tiếng Việt", extracted);
+            Assert.Contains("25%", extracted);
+            Assert.Contains("--- Worksheet: Chi tiet ---", extracted);
+            Assert.Contains("Dữ liệu sheet thứ hai", extracted);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
     [Fact]
     public void ExtractTextFromPptx_ReadsTextFromSlides()
     {
@@ -39,9 +69,11 @@ public class DocumentExtractionTests
 
     private static string Extract(string path, string extension)
     {
-        var service = new DocumentService(null!, null!, null!);
-        var method = typeof(DocumentService).GetMethod("ExtractTextFromFile", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var result = method.Invoke(service, [path, extension])!;
+        var service = new DocumentService(null!, null!, null!, null!, new AIStudyHub.Infrastructure.Services.Gemini.MockGeminiService(), null!);
+        var method = typeof(DocumentService).GetMethod("ExtractTextFromFileAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var task = (Task)method.Invoke(service, [path, extension])!;
+        task.GetAwaiter().GetResult();
+        var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
         var textProperty = result.GetType().GetProperty("Text")!;
         return (string)textProperty.GetValue(result)!;
     }

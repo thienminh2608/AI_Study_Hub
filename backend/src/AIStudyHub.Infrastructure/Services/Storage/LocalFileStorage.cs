@@ -70,4 +70,12 @@ public class LocalFileStorage : IFileStorage
         string physicalPath = GetPhysicalPath(relativePath);
         return File.Exists(physicalPath);
     }
+
+    public Stream OpenReadStream(string relativePath)
+    {
+        string physicalPath = GetPhysicalPath(relativePath);
+        if (!File.Exists(physicalPath))
+            throw new FileNotFoundException("File not found on storage.", physicalPath);
+        return new FileStream(physicalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+    }
 }

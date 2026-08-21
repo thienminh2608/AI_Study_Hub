@@ -7,6 +7,13 @@ public interface IPermissionService
 {
     Task<string> GetEffectiveDocumentRoleAsync(int documentId, int userId, string? shareToken = null);
     Task<string> GetEffectiveFolderRoleAsync(int folderId, int userId);
+    Task<bool> CanViewDocumentAsync(int documentId, int userId, string? shareToken = null);
+    Task<bool> CanDownloadDocumentAsync(int documentId, int userId, string? shareToken = null);
+    Task<bool> CanEditDocumentAsync(int documentId, int userId);
+    Task<bool> CanManageDocumentAccessAsync(int documentId, int userId);
+    Task<List<int>> GetSharedDocumentIdsAsync(int userId, IEnumerable<int>? candidateDocumentIds = null);
+    Task<List<int>> GetViewableDocumentIdsAsync(int userId, IEnumerable<int>? candidateDocumentIds = null);
+    Task<List<int>> GetAccessibleDocumentIdsAsync(int userId, IEnumerable<int>? candidateDocumentIds = null);
     Task<ItemAccessSettingsDto> GetDocumentAccessSettingsAsync(int documentId, int currentUserId);
     Task<ItemAccessSettingsDto> GetFolderAccessSettingsAsync(int folderId, int currentUserId);
     Task UpdateDocumentGeneralAccessAsync(int documentId, string generalAccess, int currentUserId);

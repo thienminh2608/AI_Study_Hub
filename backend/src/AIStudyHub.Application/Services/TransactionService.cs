@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Tasks;
 using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
@@ -15,12 +13,19 @@ public class TransactionService : ITransactionService
 {
     private readonly IStudyHubDbContext _dbContext;
     private readonly IClock _clock;
-    private const string LedgerSecretKey = "AIStudyHubSecureLedgerKey";
+    private readonly IBalanceLedgerService _ledgerService;
+    private readonly ISubscriptionPurchaseService _subscriptionPurchaseService;
 
-    public TransactionService(IStudyHubDbContext dbContext, IClock clock)
+    public TransactionService(
+        IStudyHubDbContext dbContext,
+        IClock clock,
+        IBalanceLedgerService ledgerService,
+        ISubscriptionPurchaseService subscriptionPurchaseService)
     {
         _dbContext = dbContext;
         _clock = clock;
+        _ledgerService = ledgerService;
+        _subscriptionPurchaseService = subscriptionPurchaseService;
     }
 
     public async Task<List<TransactionDto>> GetUserTransactionsAsync(int userId)
@@ -46,12 +51,24 @@ public class TransactionService : ITransactionService
         return txs.Select(t => MapToDto(t, t.User.Username)).ToList();
     }
 
-    public async Task<PagedResult<TransactionDto>> GetTransactionsPaginatedAsync(int pageNumber, int pageSize, string? search, string? status, string? type)
+    public async Task<PagedResult<TransactionDto>> GetTransactionsPaginatedAsync(int pageNumber, int pageSize, string? search, string? status, string? type, DateTime? startDate = null, DateTime? endDate = null)
     {
         var query = _dbContext.Transactions
             .Include(t => t.User)
             .Include(t => t.Approver)
             .AsQueryable();
+
+        // Apply Date Filters
+        if (startDate.HasValue)
+        {
+            query = query.Where(t => t.StartedAt >= startDate.Value);
+        }
+
+        if (endDate.HasValue)
+        {
+            var exclusiveEnd = endDate.Value.Date.AddDays(1);
+            query = query.Where(t => t.StartedAt < exclusiveEnd);
+        }
 
         // Apply Filters
         if (!string.IsNullOrWhiteSpace(search))
@@ -75,6 +92,7 @@ public class TransactionService : ITransactionService
         var totalCount = await query.CountAsync();
         var items = await query
             .OrderByDescending(t => t.StartedAt)
+            .ThenByDescending(t => t.TransactionId)
             .Skip((pageNumber - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync();
@@ -93,6 +111,7 @@ public class TransactionService : ITransactionService
         var totalCount = await query.CountAsync();
         var items = await query
             .OrderByDescending(t => t.StartedAt)
+            .ThenByDescending(t => t.TransactionId)
             .Skip((pageNumber - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync();
@@ -145,18 +164,27 @@ public class TransactionService : ITransactionService
         if (newStatus != "SUCCESS" && newStatus != "CANCELLED")
             return false;
 
-        // Idempotency: Kiểm tra trạng thái giao dịch
-        var tx = await _dbContext.Transactions.FindAsync(transactionId);
-        if (tx == null || tx.Status != "PENDING")
-            return false; // Đã được xử lý trước đó hoặc không tồn tại
-
         using var dbTransaction = await _dbContext.Database.BeginTransactionAsync();
         try
         {
-            tx.Status = newStatus;
-            tx.CompletedAt = _clock.Now;
-            tx.ApproverId = adminId;
-            tx.FailureReason = failureReason;
+            // Claim the command atomically. Only one concurrent request can move PENDING
+            // to a terminal state; losers return Conflict through the controller.
+            var completedAt = _clock.Now;
+            var affectedRows = await _dbContext.Transactions
+                .Where(t => t.TransactionId == transactionId && t.Status == "PENDING")
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.Status, newStatus)
+                    .SetProperty(t => t.CompletedAt, completedAt)
+                    .SetProperty(t => t.ApproverId, adminId)
+                    .SetProperty(t => t.FailureReason, failureReason));
+            if (affectedRows != 1)
+            {
+                await dbTransaction.RollbackAsync();
+                return false;
+            }
+
+            var tx = await _dbContext.Transactions.FindAsync(transactionId)
+                ?? throw new InvalidOperationException("Giao dịch vừa được claim nhưng không thể tải lại.");
 
             if (newStatus == "SUCCESS" && tx.Type == "DEPOSIT")
             {
@@ -167,8 +195,8 @@ public class TransactionService : ITransactionService
                     throw new InvalidOperationException("Không thể cập nhật số dư người dùng do lỗi hệ thống.");
                 }
 
-                // Ghi sổ cái (Ledger)
-                await CreateLedgerEntryAsync(tx.UserId, tx.TransactionId, tx.Amount, balanceResult.PrevBalance, balanceResult.CurrBalance, "DEPOSIT", $"Nạp tiền qua giao dịch #{tx.TransactionId}");
+                // Ghi sổ cái (Ledger) qua IBalanceLedgerService (HMAC-SHA256 hash chain)
+                await _ledgerService.AppendEntryAsync(tx.UserId, tx.TransactionId, tx.Amount, balanceResult.PrevBalance, balanceResult.CurrBalance, "DEPOSIT", $"Nạp tiền qua giao dịch #{tx.TransactionId}");
             }
 
             _dbContext.ModerationNotices.Add(new ModerationNotice
@@ -201,13 +229,13 @@ public class TransactionService : ITransactionService
         if (originTx == null || originTx.Status != "SUCCESS")
             return false; // Giao dịch gốc phải thành công mới được hoàn tiền
 
-        // Không cho hoàn tiền của chính giao dịch hoàn tiền hoặc giao dịch không trừ ví
-        if (originTx.Type == "REFUND")
+        // Refund is a credit that reverses a purchase/withdrawal.
+        if (originTx.Type != "WITHDRAW" && originTx.Type != "PURCHASE")
             return false;
 
-        // Kiểm tra xem giao dịch này đã được hoàn tiền trước đó chưa
+        // Kiểm tra xem giao dịch này đã được hoàn tiền trước đó chưa (qua OriginalTransactionId hoặc fallback ReferenceCode)
         bool alreadyRefunded = await _dbContext.Transactions
-            .AnyAsync(t => t.Type == "REFUND" && t.ReferenceCode == originTx.TransactionId.ToString() && t.Status == "SUCCESS");
+            .AnyAsync(t => (t.OriginalTransactionId == originTx.TransactionId || (t.Type == "REFUND" && t.ReferenceCode == originTx.TransactionId.ToString())) && t.Status == "SUCCESS");
         if (alreadyRefunded)
             return false;
 
@@ -221,9 +249,10 @@ public class TransactionService : ITransactionService
             {
                 UserId = originTx.UserId,
                 Amount = refundAmount,
-                Type = "REFUND",
+                Type = "REFUND_PURCHASE",
                 Status = "SUCCESS",
-                ReferenceCode = originTx.TransactionId.ToString(), // Lưu lại TransactionId gốc làm Reference Code
+                OriginalTransactionId = originTx.TransactionId,
+                ReferenceCode = originTx.TransactionId.ToString(),
                 ApproverId = adminId,
                 StartedAt = _clock.Now,
                 CompletedAt = _clock.Now,
@@ -239,30 +268,20 @@ public class TransactionService : ITransactionService
                 throw new InvalidOperationException("Không thể hoàn tiền do cập nhật số dư thất bại.");
             }
 
-            // 3. Ghi Sổ cái (Ledger)
-            await CreateLedgerEntryAsync(originTx.UserId, refundTx.TransactionId, refundAmount, balanceResult.PrevBalance, balanceResult.CurrBalance, "REFUND", $"Hoàn tiền giao dịch #{originTx.TransactionId}. Lý do: {reason}");
+            // 3. Ghi Sổ cái (Ledger) HMAC-SHA256
+            await _ledgerService.AppendEntryAsync(originTx.UserId, refundTx.TransactionId, refundAmount, balanceResult.PrevBalance, balanceResult.CurrBalance, "REFUND_PURCHASE", $"Hoàn tiền mua gói #{originTx.TransactionId}. Lý do: {reason}");
 
-            // 4. Nếu giao dịch bị hoàn là mua Premium (WITHDRAW), ta hạ cấp user về gói Free và ghi lịch sử subscription
-            if (originTx.Type == "WITHDRAW")
+            // 4. Khôi phục gói dịch vụ trước đó của user
+            var user = await _dbContext.Users.FindAsync(originTx.UserId);
+            if (user != null && user.TierId == 3)
             {
-                var user = await _dbContext.Users.FindAsync(originTx.UserId);
-                if (user != null && user.TierId == 3)
-                {
-                    int oldTier = user.TierId ?? 2;
-                    user.TierId = 2; // Hạ cấp về Free
-                    user.ExpiresAt = null;
-                    user.GracePeriodEndsAt = null;
+                var lastHistory = await _dbContext.SubscriptionHistories
+                    .Where(h => h.UserId == user.UserId && h.NewTierId == 3)
+                    .OrderByDescending(h => h.ChangedAt)
+                    .FirstOrDefaultAsync();
 
-                    var subHistory = new SubscriptionHistory
-                    {
-                        UserId = user.UserId,
-                        OldTierId = oldTier,
-                        NewTierId = 2,
-                        ChangeReason = "REFUND_CANCEL",
-                        ChangedAt = _clock.Now
-                    };
-                    _dbContext.SubscriptionHistories.Add(subHistory);
-                }
+                int restoreTier = lastHistory?.OldTierId ?? 2;
+                await _subscriptionPurchaseService.RecordRefundCancelAsync(user.UserId, originTx.TransactionId, restoreTier, "REFUND_CANCEL");
             }
 
             _dbContext.ModerationNotices.Add(new ModerationNotice
@@ -288,68 +307,70 @@ public class TransactionService : ITransactionService
         }
     }
 
-    public async Task<bool> BuyPremiumAsync(int userId)
+    public async Task<bool> ReverseDepositAsync(int transactionId, int adminId, string reason)
     {
-        var sTier = await _dbContext.Subscriptions.FirstOrDefaultAsync(s => s.TierId == 3); // Premium
-        if (sTier == null)
+        var originTx = await _dbContext.Transactions.FindAsync(transactionId);
+        if (originTx == null || originTx.Status != "SUCCESS" || originTx.Type != "DEPOSIT")
+            return false;
+
+        // Check if already reversed
+        bool alreadyReversed = await _dbContext.Transactions
+            .AnyAsync(t => t.OriginalTransactionId == originTx.TransactionId && t.Status == "SUCCESS");
+        if (alreadyReversed)
+            return false;
+
+        var user = await _dbContext.Users.FindAsync(originTx.UserId);
+        if (user == null)
+            return false;
+
+        decimal debitAmount = originTx.Amount; // Positive value of deposit
+        if ((user.Balance ?? 0) < debitAmount)
         {
-            throw new InvalidOperationException("Gói thành viên Premium chưa được cấu hình trong hệ thống.");
+            // Cannot reverse deposit if user does not have sufficient balance
+            return false;
         }
-        decimal premiumCost = sTier.Price ?? throw new InvalidOperationException("Giá của gói Premium chưa được thiết lập.");
 
         using var dbTransaction = await _dbContext.Database.BeginTransactionAsync();
         try
         {
-            var user = await _dbContext.Users.FindAsync(userId);
-            if (user == null)
-                return false;
-
-            if ((user.Balance ?? 0) < premiumCost)
+            // 1. Create REVERSE_DEPOSIT transaction
+            var reverseTx = new Transaction
             {
-                throw new InvalidOperationException("Số dư không đủ để đăng ký Premium.");
-            }
-
-            int oldTierId = user.TierId ?? 2;
-
-            // 1. Khấu trừ số dư với Concurrency control (trừ tiền)
-            var balanceResult = await UpdateUserBalanceWithConcurrencyCheckAsync(userId, -premiumCost);
-            if (!balanceResult.Success)
-            {
-                throw new InvalidOperationException("Lỗi xử lý tài chính.");
-            }
-
-            // 2. Tạo giao dịch WITHDRAW thành công
-            var tx = new Transaction
-            {
-                UserId = userId,
-                Amount = -premiumCost,
-                Type = "WITHDRAW",
+                UserId = originTx.UserId,
+                Amount = -debitAmount,
+                Type = "REVERSE_DEPOSIT",
                 Status = "SUCCESS",
+                OriginalTransactionId = originTx.TransactionId,
+                ReferenceCode = originTx.TransactionId.ToString(),
+                ApproverId = adminId,
                 StartedAt = _clock.Now,
-                CompletedAt = _clock.Now
+                CompletedAt = _clock.Now,
+                FailureReason = reason
             };
-            _dbContext.Transactions.Add(tx);
+            _dbContext.Transactions.Add(reverseTx);
             await _dbContext.SaveChangesAsync();
 
-            // 3. Ghi Sổ cái (Ledger)
-            await CreateLedgerEntryAsync(userId, tx.TransactionId, -premiumCost, balanceResult.PrevBalance, balanceResult.CurrBalance, "WITHDRAW", $"Đăng ký gói Premium hạn 30 ngày");
-
-            // 4. Cập nhật Subscription trên User
-            user.TierId = 3; // Premium
-            user.ExpiresAt = _clock.Now.AddDays(30);
-            user.ExpiryNotified = false;
-            user.GracePeriodEndsAt = null;
-
-            // 5. Ghi nhận Lịch sử Subscription
-            var subHistory = new SubscriptionHistory
+            // 2. Debit balance with OCC concurrency
+            var balanceResult = await UpdateUserBalanceWithConcurrencyCheckAsync(originTx.UserId, -debitAmount);
+            if (!balanceResult.Success)
             {
-                UserId = userId,
-                OldTierId = oldTierId,
-                NewTierId = 3,
-                ChangeReason = "USER_BUY",
-                ChangedAt = _clock.Now
-            };
-            _dbContext.SubscriptionHistories.Add(subHistory);
+                throw new InvalidOperationException("Khấu trừ số dư thất bại khi đảo giao dịch nạp tiền.");
+            }
+
+            // 3. Append Ledger entry
+            await _ledgerService.AppendEntryAsync(originTx.UserId, reverseTx.TransactionId, -debitAmount, balanceResult.PrevBalance, balanceResult.CurrBalance, "REVERSE_DEPOSIT", $"Thu hồi nạp tiền giao dịch #{originTx.TransactionId}. Lý do: {reason}");
+
+            _dbContext.ModerationNotices.Add(new ModerationNotice
+            {
+                UserId = originTx.UserId,
+                TransactionId = reverseTx.TransactionId,
+                Type = "TRANSACTION_RESOLVED",
+                Title = "Giao dịch nạp tiền đã bị thu hồi",
+                Message = $"Giao dịch nạp tiền #{originTx.TransactionId} ({debitAmount:N0}đ) đã bị thu hồi.\nLý do: {reason}",
+                ActionUrl = "/wallet",
+                IsRead = false,
+                CreatedAt = _clock.Now
+            });
 
             await _dbContext.SaveChangesAsync();
             await dbTransaction.CommitAsync();
@@ -360,6 +381,12 @@ public class TransactionService : ITransactionService
             await dbTransaction.RollbackAsync();
             return false;
         }
+    }
+
+    public async Task<bool> BuyPremiumAsync(int userId)
+    {
+        var result = await _subscriptionPurchaseService.PurchaseTierAsync(userId, 3);
+        return result.Success;
     }
 
     public async Task<List<SubscriptionDto>> GetSubscriptionTiersAsync()
@@ -412,33 +439,6 @@ public class TransactionService : ITransactionService
         return (false, 0, 0);
     }
 
-    private async Task CreateLedgerEntryAsync(int userId, int? transactionId, decimal amount, decimal prevBalance, decimal currBalance, string actionType, string? description)
-    {
-        var ledger = new BalanceLedger
-        {
-            UserId = userId,
-            TransactionId = transactionId,
-            Amount = amount,
-            PreviousBalance = prevBalance,
-            CurrentBalance = currBalance,
-            ActionType = actionType,
-            Description = description,
-            CreatedAt = _clock.Now,
-            Signature = ""
-        };
-
-        // Tính chữ ký Signature = SHA256 of "UserId|Amount|PreviousBalance|CurrentBalance|ActionType|CreatedAt|LedgerSecretKey"
-        string input = $"{userId}|{amount:F2}|{prevBalance:F2}|{currBalance:F2}|{actionType}|{ledger.CreatedAt:yyyy-MM-dd HH:mm:ss}|{LedgerSecretKey}";
-        using (var sha = SHA256.Create())
-        {
-            byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
-            ledger.Signature = Convert.ToHexString(bytes).ToLower();
-        }
-
-        _dbContext.BalanceLedgers.Add(ledger);
-        await _dbContext.SaveChangesAsync();
-    }
-
     private TransactionDto MapToDto(Transaction t, string username)
     {
         return new TransactionDto
@@ -455,7 +455,8 @@ public class TransactionService : ITransactionService
             BankId = t.BankId,
             ApproverId = t.ApproverId,
             ApproverName = t.Approver != null ? t.Approver.Username : null,
-            FailureReason = t.FailureReason
+            FailureReason = t.FailureReason,
+            OriginalTransactionId = t.OriginalTransactionId
         };
     }
 

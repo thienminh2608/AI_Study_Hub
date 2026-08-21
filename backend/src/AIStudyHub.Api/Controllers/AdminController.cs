@@ -19,111 +19,70 @@ public class AdminController : ControllerBase
     private readonly IStudyHubDbContext _dbContext;
     private readonly IDocumentService _documentService;
     private readonly ITransactionService _transactionService;
+    private readonly IAdminAnalyticsService _analyticsService;
     private readonly ILogger<AdminController> _logger;
 
     public AdminController(
         IStudyHubDbContext dbContext,
         IDocumentService documentService,
         ITransactionService transactionService,
+        IAdminAnalyticsService analyticsService,
         ILogger<AdminController> logger)
     {
         _dbContext = dbContext;
         _documentService = documentService;
         _transactionService = transactionService;
+        _analyticsService = analyticsService;
         _logger = logger;
     }
 
     [HttpGet("dashboard")]
     public async Task<IActionResult> GetDashboardStats([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
     {
-        // 1. Lọc theo khoảng thời gian nếu có
-        var usersQuery = _dbContext.Users.AsQueryable();
-        var txsQuery = _dbContext.Transactions.AsQueryable();
-        var docsQuery = _dbContext.Documents.AsQueryable();
-        var reportsQuery = _dbContext.DocumentReports.AsQueryable();
+        var stats = await _analyticsService.GetOverviewAnalyticsAsync(startDate, endDate);
+        return Ok(stats);
+    }
 
-        if (startDate.HasValue)
+    [HttpGet("analytics/overview")]
+    public async Task<IActionResult> GetOverviewAnalytics([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+    {
+        var stats = await _analyticsService.GetOverviewAnalyticsAsync(startDate, endDate);
+        return Ok(stats);
+    }
+
+    [HttpGet("analytics/top-contributors")]
+    public async Task<IActionResult> GetTopContributors([FromQuery] int limit = 10)
+    {
+        var contributors = await _analyticsService.GetTopContributorsAsync(limit);
+        return Ok(contributors);
+    }
+
+    [HttpGet("analytics/users/{userId}/contribution-score")]
+    public async Task<IActionResult> GetUserContributionScore(int userId)
+    {
+        try
         {
-            usersQuery = usersQuery.Where(u => u.CreatedAt >= startDate.Value);
-            txsQuery = txsQuery.Where(t => t.StartedAt >= startDate.Value);
-            docsQuery = docsQuery.Where(d => d.CreatedAt >= startDate.Value);
-            reportsQuery = reportsQuery.Where(r => r.CreatedAt >= startDate.Value);
+            var score = await _analyticsService.CalculateUserContributionScoreAsync(userId);
+            return Ok(score);
         }
-
-        if (endDate.HasValue)
+        catch (KeyNotFoundException)
         {
-            usersQuery = usersQuery.Where(u => u.CreatedAt <= endDate.Value);
-            txsQuery = txsQuery.Where(t => t.StartedAt <= endDate.Value);
-            docsQuery = docsQuery.Where(d => d.CreatedAt <= endDate.Value);
-            reportsQuery = reportsQuery.Where(r => r.CreatedAt <= endDate.Value);
+            return NotFound(new { message = "Không tìm thấy người dùng." });
         }
+    }
 
-        int totalUsers = await _dbContext.Users.CountAsync(); // Tổng user mọi thời đại vẫn hiển thị
-        int newUsersInPeriod = await usersQuery.CountAsync(); // User mới trong kỳ
-
-        int activeUsers = await _dbContext.Users.CountAsync(u => u.Status == "ACTIVE");
-        int suspendedUsers = await _dbContext.Users.CountAsync(u => u.Status == "SUSPENDED");
-        int premiumUsers = await _dbContext.Users.CountAsync(u => u.TierId == 3);
-        int studentUsers = await _dbContext.Users.CountAsync(u => u.Role == "STUDENT");
-        int freeUsers = await _dbContext.Users.CountAsync(u => u.Role == "STUDENT" && u.TierId == 2);
-
-        int totalTransactions = await txsQuery.CountAsync();
-        int pendingTransactions = await txsQuery.CountAsync(t => t.Status == "PENDING");
-        
-        // Phân tách Doanh thu (Income) và Chi tiêu/Rút mua gói (Outcome)
-        decimal successfulDeposits = await txsQuery
-            .Where(t => t.Status == "SUCCESS" && t.Type == "DEPOSIT")
-            .SumAsync(t => (decimal?)t.Amount) ?? 0;
-            
-        decimal successfulWithdrawals = await txsQuery
-            .Where(t => t.Status == "SUCCESS" && t.Type == "WITHDRAW")
-            .SumAsync(t => (decimal?)t.Amount) ?? 0;
-
-        int totalDocuments = await docsQuery.CountAsync();
-        int publicDocuments = await docsQuery.CountAsync(d => d.SharingPermission == "PUBLIC");
-        int privateDocuments = await docsQuery.CountAsync(d => d.SharingPermission == "PRIVATE");
-        int flaggedDocuments = await docsQuery.CountAsync(d => d.IsFlagged == true);
-
-        int totalReports = await reportsQuery.CountAsync();
-        int pendingReports = await reportsQuery.CountAsync(r => r.Status == "PENDING");
-
-        var recentTransactions = await _dbContext.Transactions
-            .Include(t => t.User)
-            .OrderByDescending(t => t.StartedAt)
-            .Take(5)
-            .Select(t => new { t.TransactionId, t.User.Username, t.Amount, t.Type, t.Status, t.StartedAt })
-            .ToListAsync();
-
-        var recentReports = await _dbContext.DocumentReports
-            .Include(r => r.Reporter)
-            .Include(r => r.Document)
-            .OrderByDescending(r => r.CreatedAt)
-            .Take(5)
-            .Select(r => new { r.ReportId, r.Document.Title, ReporterName = r.Reporter.Username, r.ReasonCode, r.Status, r.CreatedAt })
-            .ToListAsync();
-
-        return Ok(new
+    [HttpGet("analytics/documents/{documentId}/activities")]
+    public async Task<IActionResult> GetDocumentActivitySummary(int documentId)
+    {
+        try
         {
-            totalUsers,
-            newUsersInPeriod,
-            activeUsers,
-            suspendedUsers,
-            premiumUsers,
-            studentUsers,
-            freeUsers,
-            totalTransactions,
-            pendingTransactions,
-            successfulDeposits,      // Income
-            successfulWithdrawals,   // Outcome
-            totalDocuments,
-            publicDocuments,
-            privateDocuments,
-            flaggedDocuments,
-            totalReports,
-            pendingReports,
-            recentTransactions,
-            recentReports
-        });
+            var summary = await _analyticsService.GetDocumentActivitySummaryAsync(documentId);
+            return Ok(summary);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound(new { message = "Không tìm thấy tài liệu." });
+        }
     }
 
     [HttpGet("users")]
@@ -268,9 +227,11 @@ public class AdminController : ControllerBase
         [FromQuery] int pageSize = 8,
         [FromQuery] string? search = null,
         [FromQuery] string? status = null,
-        [FromQuery] string? type = null)
+        [FromQuery] string? type = null,
+        [FromQuery] DateTime? startDate = null,
+        [FromQuery] DateTime? endDate = null)
     {
-        var result = await _transactionService.GetTransactionsPaginatedAsync(pageNumber, pageSize, search, status, type);
+        var result = await _transactionService.GetTransactionsPaginatedAsync(pageNumber, pageSize, search, status, type, startDate, endDate);
         return Ok(result);
     }
 
@@ -289,7 +250,7 @@ public class AdminController : ControllerBase
             _logger.LogInformation("Admin {AdminId} changed transaction {TransactionId} to {Status}", adminId, transactionId, dto.Status);
             return Ok(new { message = "Đã cập nhật trạng thái giao dịch thành công." });
         }
-        return BadRequest(new { message = "Không thể cập nhật giao dịch (có thể giao dịch đã được xử lý hoặc có lỗi tài chính)." });
+        return Conflict(new { message = "Giao dịch đã được xử lý bởi request khác hoặc không còn ở trạng thái PENDING." });
     }
 
     [HttpPost("transactions/{transactionId}/refund")]
@@ -301,13 +262,83 @@ public class AdminController : ControllerBase
             return Unauthorized();
         }
 
+        var originTx = await _dbContext.Transactions.FindAsync(transactionId);
+        if (originTx == null)
+        {
+            return NotFound(new { message = "Không tìm thấy giao dịch." });
+        }
+
+        if (originTx.Type != "WITHDRAW" && originTx.Type != "PURCHASE")
+        {
+            return UnprocessableEntity(new { message = "Chỉ có thể hoàn tiền cho giao dịch mua gói hoặc rút tiền (WITHDRAW/PURCHASE). Giao dịch nạp tiền phải dùng chức năng Thu hồi nạp tiền." });
+        }
+
+        if (originTx.Status != "SUCCESS")
+        {
+            return UnprocessableEntity(new { message = "Chỉ có thể hoàn tiền cho giao dịch đã hoàn thành thành công." });
+        }
+
+        bool alreadyRefunded = await _dbContext.Transactions
+            .AnyAsync(t => (t.OriginalTransactionId == transactionId || (t.Type == "REFUND" && t.ReferenceCode == transactionId.ToString())) && t.Status == "SUCCESS");
+        if (alreadyRefunded)
+        {
+            return Conflict(new { message = "Giao dịch này đã được hoàn tiền trước đó." });
+        }
+
         bool success = await _transactionService.RefundTransactionAsync(transactionId, adminId, dto.Reason);
         if (success)
         {
             _logger.LogInformation("Admin {AdminId} refunded transaction {TransactionId}. Reason: {Reason}", adminId, transactionId, dto.Reason);
             return Ok(new { message = "Đã thực hiện hoàn tiền giao dịch thành công." });
         }
-        return BadRequest(new { message = "Không thể hoàn tiền giao dịch (giao dịch chưa thành công, đã được hoàn trước đó hoặc không hợp lệ)." });
+        return StatusCode(500, new { message = "Không thể hoàn tiền giao dịch do lỗi hệ thống." });
+    }
+
+    [HttpPost("transactions/{transactionId}/reverse-deposit")]
+    public async Task<IActionResult> ReverseDeposit(int transactionId, [FromBody] ReverseDepositDto dto)
+    {
+        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
+        if (claim == null || !int.TryParse(claim.Value, out int adminId))
+        {
+            return Unauthorized();
+        }
+
+        if (string.IsNullOrWhiteSpace(dto.Reason))
+        {
+            return BadRequest(new { message = "Lý do thu hồi giao dịch là bắt buộc." });
+        }
+
+        var originTx = await _dbContext.Transactions.FindAsync(transactionId);
+        if (originTx == null)
+        {
+            return NotFound(new { message = "Không tìm thấy giao dịch nạp tiền." });
+        }
+
+        if (originTx.Type != "DEPOSIT" || originTx.Status != "SUCCESS")
+        {
+            return UnprocessableEntity(new { message = "Chỉ có thể thu hồi giao dịch nạp tiền (DEPOSIT) đã thành công." });
+        }
+
+        bool alreadyReversed = await _dbContext.Transactions
+            .AnyAsync(t => t.OriginalTransactionId == transactionId && t.Status == "SUCCESS");
+        if (alreadyReversed)
+        {
+            return Conflict(new { message = "Giao dịch nạp tiền này đã được thu hồi trước đó." });
+        }
+
+        var user = await _dbContext.Users.FindAsync(originTx.UserId);
+        if (user == null || (user.Balance ?? 0) < originTx.Amount)
+        {
+            return UnprocessableEntity(new { message = "Số dư ví của người dùng không đủ để thu hồi giao dịch nạp tiền." });
+        }
+
+        bool success = await _transactionService.ReverseDepositAsync(transactionId, adminId, dto.Reason);
+        if (success)
+        {
+            _logger.LogInformation("Admin {AdminId} reversed deposit transaction {TransactionId}. Reason: {Reason}", adminId, transactionId, dto.Reason);
+            return Ok(new { message = "Đã thu hồi giao dịch nạp tiền thành công." });
+        }
+        return StatusCode(500, new { message = "Không thể thực hiện thu hồi giao dịch do lỗi hệ thống." });
     }
 
     [HttpGet("reports")]
@@ -371,7 +402,8 @@ public class AdminController : ControllerBase
             ModeratorNote = r.ModeratorNote,
             AssignedModeratorId = r.AssignedModeratorId,
             PreviousSharingPermission = r.PreviousSharingPermission,
-            RestrictedAt = r.RestrictedAt
+            RestrictedAt = r.RestrictedAt,
+            ReportedVersionId = r.ReportedVersionId
         }).ToList();
 
         return Ok(new PagedResult<DocumentReportResponseDto>(dtos, totalCount, pageNumber, pageSize));
@@ -394,6 +426,82 @@ public class AdminController : ControllerBase
         }
         return BadRequest(new { message = "Không thể xử lý báo cáo." });
     }
+
+    [HttpGet("ai-observability/summary")]
+    public async Task<IActionResult> GetAiObservabilitySummary()
+    {
+        var totalRequests = await _dbContext.AiUsages.CountAsync();
+        var totalPromptTokens = await _dbContext.AiUsages.SumAsync(u => (long)u.PromptTokens);
+        var totalCompletionTokens = await _dbContext.AiUsages.SumAsync(u => (long)u.CompletionTokens);
+        var totalCachedTokens = await _dbContext.AiUsages.SumAsync(u => (long)u.CachedTokens);
+        var totalCost = await _dbContext.AiUsages.SumAsync(u => (decimal?)u.EstimatedCost) ?? 0m;
+        var avgLatency = totalRequests > 0 ? await _dbContext.AiUsages.AverageAsync(u => (double)u.LatencyMs) : 0;
+        var errorCount = await _dbContext.AiUsages.CountAsync(u => u.Status == "ERROR");
+
+        var byModel = await _dbContext.AiUsages
+            .GroupBy(u => u.Model)
+            .Select(g => new { Model = g.Key, Count = g.Count(), Tokens = g.Sum(x => (long)x.TotalTokens), Cost = g.Sum(x => x.EstimatedCost) })
+            .ToListAsync();
+
+        var byOperation = await _dbContext.AiUsages
+            .GroupBy(u => u.Operation)
+            .Select(g => new { Operation = g.Key, Count = g.Count(), Tokens = g.Sum(x => (long)x.TotalTokens), Cost = g.Sum(x => x.EstimatedCost) })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            TotalRequests = totalRequests,
+            TotalPromptTokens = totalPromptTokens,
+            TotalCompletionTokens = totalCompletionTokens,
+            TotalCachedTokens = totalCachedTokens,
+            TotalTokens = totalPromptTokens + totalCompletionTokens,
+            TotalCostUsd = Math.Round(totalCost, 4),
+            AvgLatencyMs = Math.Round(avgLatency, 1),
+            ErrorCount = errorCount,
+            ErrorRatePercent = totalRequests > 0 ? Math.Round((double)errorCount / totalRequests * 100, 2) : 0,
+            ByModel = byModel,
+            ByOperation = byOperation
+        });
+    }
+
+    [HttpGet("ai-observability/usages")]
+    public async Task<IActionResult> GetAiObservabilityUsages([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 20)
+    {
+        if (pageNumber < 1) pageNumber = 1;
+        if (pageSize < 1) pageSize = 20;
+        if (pageSize > 100) pageSize = 100;
+
+        var query = _dbContext.AiUsages.AsNoTracking().Include(u => u.User);
+        var totalCount = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(u => u.CreatedAt)
+            .ThenByDescending(u => u.UsageId)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(u => new
+            {
+                u.UsageId,
+                u.UserId,
+                Username = u.User.Username,
+                u.Provider,
+                u.Model,
+                u.Operation,
+                u.PromptTokens,
+                u.CompletionTokens,
+                u.CachedTokens,
+                u.TotalTokens,
+                u.LatencyMs,
+                u.Status,
+                u.ErrorCode,
+                u.EstimatedCost,
+                u.Currency,
+                u.RequestId,
+                u.CreatedAt
+            })
+            .ToListAsync();
+
+        return Ok(new PagedResult<object>(items.Cast<object>().ToList(), totalCount, pageNumber, pageSize));
+    }
 }
 
 public class UpdateUserDto
@@ -404,9 +512,4 @@ public class UpdateUserDto
     public string Status { get; set; } = null!;
     public int Balance { get; set; }
     public int TierId { get; set; }
-}
-
-public class RefundRequestDto
-{
-    public string? Reason { get; set; }
 }

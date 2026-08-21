@@ -17,6 +17,11 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
     {
     }
 
+    protected StudyHubDbContext(DbContextOptions options)
+        : base(options)
+    {
+    }
+
     public virtual DbSet<Bookmark> Bookmarks
     {
         get; set;
@@ -113,6 +118,16 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
     public virtual DbSet<AuditLog> AuditLogs { get; set; }
     public virtual DbSet<BalanceLedger> BalanceLedgers { get; set; }
     public virtual DbSet<SubscriptionHistory> SubscriptionHistories { get; set; }
+    public virtual DbSet<DocumentProcessingJob> DocumentProcessingJobs { get; set; }
+    public virtual DbSet<AiUsage> AiUsages { get; set; }
+    public virtual DbSet<SubjectCategory> SubjectCategories { get; set; }
+    public virtual DbSet<ChatMessageCitation> ChatMessageCitations { get; set; }
+    public virtual DbSet<RefreshTokenSession> RefreshTokenSessions { get; set; }
+    public virtual DbSet<AuthOtpChallenge> AuthOtpChallenges { get; set; }
+    public virtual DbSet<PasswordResetGrant> PasswordResetGrants { get; set; }
+    public virtual DbSet<PaymentWebhookEvent> PaymentWebhookEvents { get; set; }
+    public virtual DbSet<PaymentReconciliationCase> PaymentReconciliationCases { get; set; }
+    public virtual DbSet<AuthOtpRateLimit> AuthOtpRateLimits { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -159,6 +174,15 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasDefaultValue(true)
                 .HasColumnName("display");
             entity.Property(e => e.MessageContent).HasColumnName("message_content");
+            entity.Property(e => e.AttachmentEpoch)
+                .HasDefaultValue(0)
+                .HasColumnName("attachment_epoch");
+            entity.Property(e => e.ContextDocumentId).HasColumnName("context_document_id");
+            entity.Property(e => e.ContextDocumentVersionId).HasColumnName("context_document_version_id");
+            entity.Property(e => e.MessageKind)
+                .HasMaxLength(30)
+                .HasDefaultValue("USER_MESSAGE")
+                .HasColumnName("message_kind");
             entity.Property(e => e.Sender)
                 .HasMaxLength(10)
                 .HasColumnName("sender");
@@ -183,6 +207,10 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasDefaultValue(false)
                 .HasColumnName("is_pinned");
             entity.Property(e => e.AttachedDocumentId).HasColumnName("attached_document_id");
+            entity.Property(e => e.AttachedDocumentVersionId).HasColumnName("attached_document_version_id");
+            entity.Property(e => e.CurrentAttachmentEpoch)
+                .HasDefaultValue(0)
+                .HasColumnName("current_attachment_epoch");
             entity.Property(e => e.SessionName)
                 .HasMaxLength(255)
                 .HasColumnName("session_name");
@@ -363,13 +391,22 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
 
             entity.ToTable("document_extracted_text");
 
-            entity.HasIndex(e => e.DocumentId, "UQ__document__9666E8AD5264E5FA").IsUnique();
+            entity.HasIndex(e => new { e.DocumentId, e.DocumentVersionId }, "UQ_document_extracted_text_doc_ver")
+                .IsUnique()
+                .HasFilter("[document_version_id] IS NOT NULL");
+
+            entity.HasIndex(e => e.DocumentId, "UQ_document_extracted_text_doc_legacy")
+                .IsUnique()
+                .HasFilter("[document_version_id] IS NULL");
+
+            entity.HasIndex(e => e.DocumentId, "IX_document_extracted_text_doc_id");
 
             entity.Property(e => e.ExtractionId).HasColumnName("extraction_id");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnName("created_at");
             entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.DocumentVersionId).HasColumnName("document_version_id");
             entity.Property(e => e.ExtractedText).HasColumnName("extracted_text");
             entity.Property(e => e.TotalPages).HasColumnName("total_pages");
             entity.Property(e => e.ReadablePages).HasColumnName("readable_pages");
@@ -378,9 +415,15 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.UnreadImageContentWarning).HasColumnName("unread_image_content_warning");
             entity.Property(e => e.OcrRegionCount).HasColumnName("ocr_region_count");
 
-            entity.HasOne(d => d.Document).WithOne(p => p.DocumentExtractedText)
-                .HasForeignKey<DocumentExtractedText>(d => d.DocumentId)
+            entity.HasOne(d => d.Document).WithMany(p => p.DocumentExtractedTexts)
+                .HasForeignKey(d => d.DocumentId)
+                .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK__document___docum__10566F31");
+
+            entity.HasOne(d => d.DocumentVersion).WithMany(v => v.DocumentExtractedTexts)
+                .HasForeignKey(d => d.DocumentVersionId)
+                .OnDelete(DeleteBehavior.NoAction)
+                .HasConstraintName("FK_document_extracted_text_document_versions");
         });
 
             modelBuilder.Entity<DocumentOcrRegion>(entity =>
@@ -435,6 +478,7 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.ReporterId).HasColumnName("reporter_id");
             entity.Property(e => e.ResolvedAt).HasColumnName("resolved_at");
             entity.Property(e => e.ResolvedByAdminId).HasColumnName("resolved_by_admin_id");
+            entity.Property(e => e.ReportedVersionId).HasColumnName("reported_version_id");
             entity.Property(e => e.Status)
                 .HasMaxLength(20)
                 .HasDefaultValue("PENDING")
@@ -443,6 +487,10 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.HasOne(d => d.Document).WithMany(p => p.DocumentReports)
                 .HasForeignKey(d => d.DocumentId)
                 .HasConstraintName("FK__document___docum__245D67DE");
+
+            entity.HasOne(d => d.ReportedVersion).WithMany()
+                .HasForeignKey(d => d.ReportedVersionId)
+                .OnDelete(DeleteBehavior.NoAction);
 
             entity.HasOne(d => d.ReasonCodeNavigation).WithMany(p => p.DocumentReports)
                 .HasForeignKey(d => d.ReasonCode)
@@ -453,6 +501,10 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
                 .HasForeignKey(d => d.ReporterId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK__document___repor__25518C17");
+
+            entity.HasOne(d => d.AssignedModerator).WithMany()
+                .HasForeignKey(d => d.AssignedModeratorId)
+                .OnDelete(DeleteBehavior.NoAction);
 
             entity.HasOne(d => d.ResolvedByAdmin).WithMany(p => p.DocumentReportResolvedByAdmins)
                 .HasForeignKey(d => d.ResolvedByAdminId)
@@ -622,6 +674,7 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
             entity.Property(e => e.ReviewedAt).HasColumnName("reviewed_at");
             entity.HasOne(e => e.Report).WithMany().HasForeignKey(e => e.ReportId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.SubmittedByUser).WithMany().HasForeignKey(e => e.SubmittedByUserId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<ModerationNotice>(entity =>
@@ -647,9 +700,10 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
         {
             entity.HasKey(e => e.ChunkId);
             entity.ToTable("document_chunks");
-            entity.HasIndex(e => new { e.DocumentId, e.ChunkIndex }).IsUnique();
+            entity.HasIndex(e => new { e.DocumentId, e.DocumentVersionId, e.ChunkIndex }).IsUnique();
             entity.Property(e => e.ChunkId).HasColumnName("chunk_id");
             entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.DocumentVersionId).HasColumnName("document_version_id");
             entity.Property(e => e.ChunkIndex).HasColumnName("chunk_index");
             entity.Property(e => e.HeadingPath).HasColumnName("heading_path");
             entity.Property(e => e.PageNumber).HasColumnName("page_number");
@@ -664,6 +718,8 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
             entity.HasOne(e => e.Document).WithMany(d => d.DocumentChunks)
                 .HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.DocumentVersion).WithMany(v => v.DocumentChunks)
+                .HasForeignKey(e => e.DocumentVersionId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<Transaction>(entity =>
@@ -693,6 +749,17 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.BankId).HasMaxLength(50).HasColumnName("bank_id");
             entity.Property(e => e.ApproverId).HasColumnName("approver_id");
             entity.Property(e => e.FailureReason).HasMaxLength(500).HasColumnName("failure_reason");
+            entity.Property(e => e.OriginalTransactionId).HasColumnName("original_transaction_id");
+
+            entity.Property(e => e.PayOsOrderCode).HasColumnName("payos_order_code");
+            entity.Property(e => e.PaymentLinkId).HasMaxLength(100).HasColumnName("payment_link_id");
+            entity.Property(e => e.ReconciliationLockedUntil).HasColumnType("datetime2").HasColumnName("reconciliation_locked_until");
+            entity.Property(e => e.ReconciliationAttempts).HasColumnName("reconciliation_attempts");
+            entity.Property(e => e.LastReconciliationAt).HasColumnType("datetime2").HasColumnName("last_reconciliation_at");
+            entity.Property(e => e.RequiresManualReview).HasColumnName("requires_manual_review");
+            entity.Property(e => e.ReviewReason).HasMaxLength(500).HasColumnName("review_reason");
+            entity.Property(e => e.ExpectedAmount).HasColumnType("decimal(18, 2)").HasColumnName("expected_amount");
+            entity.Property(e => e.ProviderReportedAmount).HasColumnType("decimal(18, 2)").HasColumnName("provider_reported_amount");
 
             entity.HasOne(d => d.User).WithMany(p => p.Transactions)
                 .HasForeignKey(d => d.UserId)
@@ -702,6 +769,17 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.HasOne(d => d.Approver).WithMany()
                 .HasForeignKey(d => d.ApproverId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(d => d.OriginalTransaction).WithMany()
+                .HasForeignKey(d => d.OriginalTransactionId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasIndex(e => e.OriginalTransactionId).IsUnique()
+                .HasFilter("original_transaction_id IS NOT NULL AND status = 'SUCCESS'");
+
+            entity.HasIndex(e => e.PayOsOrderCode, "UQ_transactions_payos_order_code")
+                .HasFilter("[payos_order_code] IS NOT NULL")
+                .IsUnique();
         });
 
         modelBuilder.Entity<User>(entity =>
@@ -774,17 +852,23 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.ToTable("balance_ledgers");
             entity.Property(e => e.LedgerId).HasColumnName("ledger_id");
             entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.LedgerSequence).HasColumnName("ledger_sequence");
             entity.Property(e => e.TransactionId).HasColumnName("transaction_id");
             entity.Property(e => e.Amount).HasColumnType("decimal(10, 2)").HasColumnName("amount");
             entity.Property(e => e.PreviousBalance).HasColumnType("decimal(10, 2)").HasColumnName("previous_balance");
             entity.Property(e => e.CurrentBalance).HasColumnType("decimal(10, 2)").HasColumnName("current_balance");
-            entity.Property(e => e.ActionType).HasMaxLength(20).HasColumnName("action_type");
+            entity.Property(e => e.ActionType).HasMaxLength(30).HasColumnName("action_type");
             entity.Property(e => e.Description).HasMaxLength(500).HasColumnName("description");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
-            entity.Property(e => e.Signature).HasMaxLength(256).HasColumnName("signature");
+            entity.Property(e => e.PreviousHash).HasMaxLength(256).HasColumnName("previous_hash");
+            entity.Property(e => e.CurrentHash).HasMaxLength(256).HasColumnName("current_hash");
+            entity.Property(e => e.HashVersion).HasDefaultValue(1).HasColumnName("hash_version");
+            entity.Property(e => e.KeyVersion).HasDefaultValue(1).HasColumnName("key_version");
+            entity.Property(e => e.CreatedAtUtc).HasDefaultValueSql("(getutcdate())").HasColumnName("created_at_utc");
+
+            entity.HasIndex(e => new { e.UserId, e.LedgerSequence }).IsUnique();
 
             entity.HasOne(d => d.User).WithMany().HasForeignKey(d => d.UserId).OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(d => d.Transaction).WithMany().HasForeignKey(d => d.TransactionId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(d => d.Transaction).WithMany().HasForeignKey(d => d.TransactionId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<SubscriptionHistory>(entity =>
@@ -793,12 +877,297 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.ToTable("subscription_histories");
             entity.Property(e => e.HistoryId).HasColumnName("history_id");
             entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.TransactionId).HasColumnName("transaction_id");
             entity.Property(e => e.OldTierId).HasColumnName("old_tier_id");
             entity.Property(e => e.NewTierId).HasColumnName("new_tier_id");
+            entity.Property(e => e.TierNameSnapshot).HasMaxLength(50).HasColumnName("tier_name_snapshot");
+            entity.Property(e => e.PriceSnapshot).HasColumnType("decimal(18, 2)").HasDefaultValue(0m).HasColumnName("price_snapshot");
+            entity.Property(e => e.CurrencySnapshot).HasMaxLength(10).HasDefaultValue("VND").HasColumnName("currency_snapshot");
+            entity.Property(e => e.DurationDaysSnapshot).HasDefaultValue(30).HasColumnName("duration_days_snapshot");
+            entity.Property(e => e.StorageLimitSnapshot).HasColumnName("storage_limit_snapshot");
+            entity.Property(e => e.AiPromptLimitSnapshot).HasColumnName("ai_prompt_limit_snapshot");
+            entity.Property(e => e.PricingPolicySnapshot).HasMaxLength(50).HasColumnName("pricing_policy_snapshot");
+            entity.Property(e => e.PurchaseType).HasMaxLength(50).HasColumnName("purchase_type");
             entity.Property(e => e.ChangeReason).HasMaxLength(100).HasColumnName("change_reason");
             entity.Property(e => e.ChangedAt).HasDefaultValueSql("(getdate())").HasColumnName("changed_at");
+            entity.Property(e => e.PurchasedAt).HasColumnName("purchased_at");
+            entity.Property(e => e.EffectiveFrom).HasColumnName("effective_from");
+            entity.Property(e => e.EffectiveUntil).HasColumnName("effective_until");
 
             entity.HasOne(d => d.User).WithMany().HasForeignKey(d => d.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(d => d.Transaction).WithMany().HasForeignKey(d => d.TransactionId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<DocumentProcessingJob>(entity =>
+        {
+            entity.HasKey(e => e.JobId);
+            entity.ToTable("document_processing_jobs");
+            entity.Property(e => e.JobId).HasColumnName("job_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.DocumentVersionId).HasColumnName("document_version_id");
+            entity.Property(e => e.Status).HasMaxLength(20).HasDefaultValue("QUEUED").HasColumnName("status");
+            entity.Property(e => e.AttemptCount).HasDefaultValue(0).HasColumnName("attempt_count");
+            entity.Property(e => e.MaxAttempts).HasDefaultValue(3).HasColumnName("max_attempts");
+            entity.Property(e => e.AvailableAt).HasDefaultValueSql("(getutcdate())").HasColumnName("available_at");
+            entity.Property(e => e.LockedAt).HasColumnName("locked_at");
+            entity.Property(e => e.LockedUntil).HasColumnName("locked_until");
+            entity.Property(e => e.LockedBy).HasMaxLength(100).HasColumnName("locked_by");
+            entity.Property(e => e.LastError).HasColumnName("last_error");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getutcdate())").HasColumnName("created_at");
+            entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
+
+            entity.HasOne(d => d.Document).WithMany().HasForeignKey(d => d.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(d => d.DocumentVersion).WithMany().HasForeignKey(d => d.DocumentVersionId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<AiUsage>(entity =>
+        {
+            entity.HasKey(e => e.UsageId);
+            entity.ToTable("ai_usages");
+            entity.HasIndex(e => new { e.UserId, e.CreatedAt });
+            entity.HasIndex(e => e.CreatedAt);
+            entity.Property(e => e.UsageId).HasColumnName("usage_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.Provider).HasMaxLength(50).HasDefaultValue("Google").HasColumnName("provider");
+            entity.Property(e => e.Model).HasMaxLength(100).HasColumnName("model");
+            entity.Property(e => e.Operation).HasMaxLength(50).HasDefaultValue("CHAT").HasColumnName("operation");
+            entity.Property(e => e.PromptTokens).HasColumnName("prompt_tokens");
+            entity.Property(e => e.CompletionTokens).HasColumnName("completion_tokens");
+            entity.Property(e => e.CachedTokens).HasDefaultValue(0).HasColumnName("cached_tokens");
+            entity.Property(e => e.TotalTokens).HasColumnName("total_tokens");
+            entity.Property(e => e.LatencyMs).HasColumnName("latency_ms");
+            entity.Property(e => e.Status).HasMaxLength(20).HasDefaultValue("SUCCESS").HasColumnName("status");
+            entity.Property(e => e.ErrorCode).HasMaxLength(100).HasColumnName("error_code");
+            entity.Property(e => e.EstimatedCost).HasColumnType("decimal(18, 6)").HasDefaultValue(0m).HasColumnName("estimated_cost");
+            entity.Property(e => e.Currency).HasMaxLength(10).HasDefaultValue("USD").HasColumnName("currency");
+            entity.Property(e => e.PricingVersion).HasMaxLength(20).HasDefaultValue("2026.1").HasColumnName("pricing_version");
+            entity.Property(e => e.RequestId).HasMaxLength(100).HasColumnName("request_id");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getutcdate())").HasColumnName("created_at");
+
+            entity.HasOne(d => d.User).WithMany().HasForeignKey(d => d.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SubjectCategory>(entity =>
+        {
+            entity.HasKey(e => e.SubjectId);
+            entity.ToTable("subject_categories");
+            entity.Property(e => e.SubjectId).HasColumnName("subject_id");
+            entity.Property(e => e.Name).HasMaxLength(100).HasColumnName("name");
+            entity.Property(e => e.NormalizedName).HasMaxLength(100).HasColumnName("normalized_name");
+            entity.Property(e => e.ParentSubjectId).HasColumnName("parent_subject_id");
+            entity.Property(e => e.Depth).HasDefaultValue(0).HasColumnName("depth");
+            entity.Property(e => e.SortOrder).HasDefaultValue(0).HasColumnName("sort_order");
+            entity.Property(e => e.Status).HasMaxLength(20).HasDefaultValue("APPROVED").HasColumnName("status");
+            entity.Property(e => e.RequestedByUserId).HasColumnName("requested_by_user_id");
+            entity.Property(e => e.ApprovedByUserId).HasColumnName("approved_by_user_id");
+            entity.Property(e => e.RejectionReason).HasMaxLength(500).HasColumnName("rejection_reason");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasOne(d => d.ParentSubject)
+                .WithMany(p => p.ChildSubjects)
+                .HasForeignKey(d => d.ParentSubjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(d => d.RequestedByUser)
+                .WithMany()
+                .HasForeignKey(d => d.RequestedByUserId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.ApprovedByUser)
+                .WithMany()
+                .HasForeignKey(d => d.ApprovedByUserId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<ChatMessageCitation>(entity =>
+        {
+            entity.HasKey(e => e.CitationId);
+            entity.ToTable("chat_message_citations");
+
+            entity.Property(e => e.CitationId).HasColumnName("citation_id");
+            entity.Property(e => e.MessageId).HasColumnName("message_id");
+            entity.Property(e => e.DocumentId).HasColumnName("document_id");
+            entity.Property(e => e.DocumentVersionId).HasColumnName("document_version_id");
+            entity.Property(e => e.ChunkId).HasColumnName("chunk_id");
+            entity.Property(e => e.DocumentTitleSnapshot).HasMaxLength(255).HasColumnName("document_title_snapshot");
+            entity.Property(e => e.VersionNumberSnapshot).HasColumnName("version_number_snapshot");
+            entity.Property(e => e.FileExtensionSnapshot).HasMaxLength(20).HasColumnName("file_extension_snapshot");
+            entity.Property(e => e.PageNumberSnapshot).HasColumnName("page_number_snapshot");
+            entity.Property(e => e.StartOffsetSnapshot).HasColumnName("start_offset_snapshot");
+            entity.Property(e => e.EndOffsetSnapshot).HasColumnName("end_offset_snapshot");
+            entity.Property(e => e.HeadingPathSnapshot).HasMaxLength(500).HasColumnName("heading_path_snapshot");
+            entity.Property(e => e.Snippet).HasMaxLength(2000).HasColumnName("snippet");
+            entity.Property(e => e.CreatedAt).HasColumnType("datetime2").HasDefaultValueSql("(sysutcdatetime())").HasColumnName("created_at");
+
+            entity.HasIndex(e => new { e.MessageId, e.ChunkId })
+                .HasFilter("[chunk_id] IS NOT NULL")
+                .IsUnique();
+
+            entity.HasOne(d => d.Message)
+                .WithMany(p => p.Citations)
+                .HasForeignKey(d => d.MessageId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(d => d.Document)
+                .WithMany(p => p.ChatMessageCitations)
+                .HasForeignKey(d => d.DocumentId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.DocumentVersion)
+                .WithMany(p => p.ChatMessageCitations)
+                .HasForeignKey(d => d.DocumentVersionId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.Chunk)
+                .WithMany(p => p.ChatMessageCitations)
+                .HasForeignKey(d => d.ChunkId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<RefreshTokenSession>(entity =>
+        {
+            entity.HasKey(e => e.SessionId);
+            entity.ToTable("refresh_token_sessions");
+
+            entity.Property(e => e.SessionId).HasColumnName("session_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.TokenFamilyId).HasColumnName("token_family_id");
+            entity.Property(e => e.ParentSessionId).HasColumnName("parent_session_id");
+            entity.Property(e => e.TokenHash).HasMaxLength(128).HasColumnName("token_hash");
+            entity.Property(e => e.ExpiresAt).HasColumnType("datetime2").HasColumnName("expires_at");
+            entity.Property(e => e.CreatedAt).HasColumnType("datetime2").HasDefaultValueSql("(sysutcdatetime())").HasColumnName("created_at");
+            entity.Property(e => e.CreatedByIp).HasMaxLength(45).HasColumnName("created_by_ip");
+            entity.Property(e => e.UserAgent).HasMaxLength(500).HasColumnName("user_agent");
+            entity.Property(e => e.RevokedAt).HasColumnType("datetime2").HasColumnName("revoked_at");
+            entity.Property(e => e.RevokedReason).HasMaxLength(100).HasColumnName("revoked_reason");
+            entity.Property(e => e.RevokedByIp).HasMaxLength(45).HasColumnName("revoked_by_ip");
+            entity.Property(e => e.ReplacedByTokenHash).HasMaxLength(128).HasColumnName("replaced_by_token_hash");
+            entity.Property(e => e.IsUsed).HasColumnName("is_used");
+            entity.Property(e => e.LastUsedAt).HasColumnType("datetime2").HasColumnName("last_used_at");
+            entity.Property(e => e.RowVersion).IsRowVersion().HasColumnName("row_version");
+
+            entity.HasIndex(e => e.TokenHash, "UQ_refresh_token_sessions_token_hash").IsUnique();
+            entity.HasIndex(e => new { e.UserId, e.TokenFamilyId }, "IX_refresh_token_sessions_user_family");
+
+            entity.HasOne(d => d.User)
+                .WithMany()
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AuthOtpChallenge>(entity =>
+        {
+            entity.HasKey(e => e.ChallengeId);
+            entity.ToTable("auth_otp_challenges");
+
+            entity.Property(e => e.ChallengeId).HasColumnName("challenge_id");
+            entity.Property(e => e.NormalizedEmailHash).HasMaxLength(128).HasColumnName("normalized_email_hash");
+            entity.Property(e => e.Purpose).HasMaxLength(50).HasColumnName("purpose");
+            entity.Property(e => e.OtpHash).HasMaxLength(128).HasColumnName("otp_hash");
+            entity.Property(e => e.Attempts).HasColumnName("attempts");
+            entity.Property(e => e.MaxAttempts).HasColumnName("max_attempts");
+            entity.Property(e => e.CooldownUntil).HasColumnType("datetime2").HasColumnName("cooldown_until");
+            entity.Property(e => e.ExpiresAt).HasColumnType("datetime2").HasColumnName("expires_at");
+            entity.Property(e => e.ConsumedAt).HasColumnType("datetime2").HasColumnName("consumed_at");
+            entity.Property(e => e.CreatedAt).HasColumnType("datetime2").HasDefaultValueSql("(sysutcdatetime())").HasColumnName("created_at");
+            entity.Property(e => e.RowVersion).IsRowVersion().HasColumnName("row_version");
+
+            entity.HasIndex(e => new { e.NormalizedEmailHash, e.Purpose }, "IX_auth_otp_challenges_email_purpose");
+        });
+
+        modelBuilder.Entity<PasswordResetGrant>(entity =>
+        {
+            entity.HasKey(e => e.GrantId);
+            entity.ToTable("password_reset_grants");
+
+            entity.Property(e => e.GrantId).HasColumnName("grant_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.ChallengeId).HasColumnName("challenge_id");
+            entity.Property(e => e.GrantHash).HasMaxLength(128).HasColumnName("grant_hash");
+            entity.Property(e => e.ExpiresAt).HasColumnType("datetime2").HasColumnName("expires_at");
+            entity.Property(e => e.IsConsumed).HasColumnName("is_consumed");
+            entity.Property(e => e.ConsumedAt).HasColumnType("datetime2").HasColumnName("consumed_at");
+            entity.Property(e => e.CreatedAt).HasColumnType("datetime2").HasDefaultValueSql("(sysutcdatetime())").HasColumnName("created_at");
+            entity.Property(e => e.RowVersion).IsRowVersion().HasColumnName("row_version");
+
+            entity.HasIndex(e => e.GrantHash, "UQ_password_reset_grants_hash").IsUnique();
+
+            entity.HasOne(d => d.User)
+                .WithMany()
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PaymentWebhookEvent>(entity =>
+        {
+            entity.HasKey(e => e.WebhookEventId);
+            entity.ToTable("payment_webhook_events");
+
+            entity.Property(e => e.WebhookEventId).HasColumnName("webhook_event_id");
+            entity.Property(e => e.Provider).HasMaxLength(50).HasDefaultValue("PAYOS").HasColumnName("provider");
+            entity.Property(e => e.ProviderEventId).HasMaxLength(150).HasColumnName("provider_event_id");
+            entity.Property(e => e.MerchantOrderCode).HasColumnName("merchant_order_code");
+            entity.Property(e => e.PayloadHash).HasMaxLength(128).HasColumnName("payload_hash");
+            entity.Property(e => e.PayloadSanitized).HasColumnName("payload_sanitized");
+            entity.Property(e => e.ExpectedAmount).HasColumnType("decimal(18, 2)").HasColumnName("expected_amount");
+            entity.Property(e => e.ReceivedAmount).HasColumnType("decimal(18, 2)").HasColumnName("received_amount");
+            entity.Property(e => e.Currency).HasMaxLength(10).HasColumnName("currency");
+            entity.Property(e => e.RequiresManualReview).HasColumnName("requires_manual_review");
+            entity.Property(e => e.ReviewReason).HasMaxLength(500).HasColumnName("review_reason");
+            entity.Property(e => e.IsSyntheticReference).HasColumnName("is_synthetic_reference");
+            entity.Property(e => e.ProcessedAt).HasColumnType("datetime2").HasColumnName("processed_at");
+            entity.Property(e => e.Status).HasMaxLength(30).HasDefaultValue("RECEIVED").HasColumnName("status");
+            entity.Property(e => e.ErrorMessage).HasMaxLength(1000).HasColumnName("error_message");
+            entity.Property(e => e.CreatedAt).HasColumnType("datetime2").HasDefaultValueSql("(sysutcdatetime())").HasColumnName("created_at");
+            entity.Property(e => e.RowVersion).IsRowVersion().HasColumnName("row_version");
+
+            entity.HasIndex(e => new { e.Provider, e.ProviderEventId }, "UQ_payment_webhook_provider_event").IsUnique();
+        });
+
+        modelBuilder.Entity<PaymentReconciliationCase>(entity =>
+        {
+            entity.HasKey(e => e.CaseId);
+            entity.ToTable("payment_reconciliation_cases");
+
+            entity.Property(e => e.CaseId).HasColumnName("case_id");
+            entity.Property(e => e.TransactionId).HasColumnName("transaction_id");
+            entity.Property(e => e.PayOsOrderCode).HasColumnName("payos_order_code");
+            entity.Property(e => e.Provider).HasMaxLength(50).HasDefaultValue("PAYOS").HasColumnName("provider");
+            entity.Property(e => e.IssueType).HasMaxLength(50).HasColumnName("issue_type");
+            entity.Property(e => e.ExpectedAmount).HasColumnType("decimal(18, 2)").HasColumnName("expected_amount");
+            entity.Property(e => e.ProviderReportedAmount).HasColumnType("decimal(18, 2)").HasColumnName("provider_reported_amount");
+            entity.Property(e => e.Currency).HasMaxLength(10).HasDefaultValue("VND").HasColumnName("currency");
+            entity.Property(e => e.Details).HasColumnName("details");
+            entity.Property(e => e.Status).HasMaxLength(30).HasDefaultValue("OPEN").HasColumnName("status");
+            entity.Property(e => e.ResolvedAt).HasColumnType("datetime2").HasColumnName("resolved_at");
+            entity.Property(e => e.ResolvedByUserId).HasColumnName("resolved_by_user_id");
+            entity.Property(e => e.ResolutionNotes).HasColumnName("resolution_notes");
+            entity.Property(e => e.CreatedAt).HasColumnType("datetime2").HasDefaultValueSql("(sysutcdatetime())").HasColumnName("created_at");
+
+            entity.HasIndex(e => new { e.Status, e.CreatedAt }, "IX_payment_reconciliation_cases_status");
+
+            entity.HasOne(d => d.Transaction)
+                .WithMany()
+                .HasForeignKey(d => d.TransactionId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.ResolvedByUser)
+                .WithMany()
+                .HasForeignKey(d => d.ResolvedByUserId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<AuthOtpRateLimit>(entity =>
+        {
+            entity.HasKey(e => new { e.NormalizedEmailHash, e.Purpose });
+            entity.ToTable("auth_otp_rate_limits");
+
+            entity.Property(e => e.NormalizedEmailHash).HasMaxLength(128).HasColumnName("normalized_email_hash");
+            entity.Property(e => e.Purpose).HasMaxLength(50).HasColumnName("purpose");
+            entity.Property(e => e.CooldownUntil).HasColumnType("datetime2").HasColumnName("cooldown_until");
+            entity.Property(e => e.LastSentAt).HasColumnType("datetime2").HasColumnName("last_sent_at");
+            entity.Property(e => e.RequestCount).HasColumnName("request_count");
         });
 
         OnModelCreatingPartial(modelBuilder);

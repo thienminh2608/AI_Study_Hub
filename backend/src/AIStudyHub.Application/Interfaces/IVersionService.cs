@@ -10,4 +10,5 @@ public interface IVersionService
     Task<DocumentVersionDto> CreateNewVersionAsync(int documentId, Stream fileStream, string fileName, string? changeSummary, int userId);
     Task<List<DocumentVersionDto>> GetVersionHistoryAsync(int documentId, int userId);
     Task RestoreVersionAsync(int documentId, int versionId, int userId);
+    Task DeleteVersionAsync(int documentId, int versionId, int userId);
 }
