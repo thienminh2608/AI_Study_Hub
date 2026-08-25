@@ -185,4 +185,39 @@ public class AdminAnalyticsServiceTests : IDisposable
         Assert.Equal(0, result.UniqueDownloads);
         Assert.Equal(0, result.UniqueBookmarks);
     }
+
+    [Fact]
+    public async Task DocumentRanking_Uses_Engagement_Date_Not_Document_Creation_Date()
+    {
+        var owner = new User { UserId = 701, Username = "owner", Email = "owner@test.com", Role = "STUDENT", Status = "ACTIVE", TierId = 2 };
+        var reader = new User { UserId = 702, Username = "reader", Email = "reader@test.com", Role = "STUDENT", Status = "ACTIVE", TierId = 2 };
+        _db.Users.AddRange(owner, reader);
+        _db.Documents.Add(new Document
+        {
+            DocumentId = 301,
+            UserId = owner.UserId,
+            Title = "Older document",
+            SharingPermission = "PUBLIC",
+            IsDeleted = false,
+            CloudStorageUrl = "older.pdf",
+            FileExtension = "pdf",
+            Subject = "Test",
+            CreatedAt = new DateTime(2026, 7, 15)
+        });
+        await _db.SaveChangesAsync();
+        _db.Bookmarks.Add(new Bookmark
+        {
+            DocumentId = 301,
+            UserId = reader.UserId,
+            CreatedAt = new DateTime(2026, 8, 20)
+        });
+        await _db.SaveChangesAsync();
+
+        var result = await _analyticsService.GetDocumentEngagementRankingAsync(
+            "bookmarks", 1, 10, null, new DateTime(2026, 8, 1), new DateTime(2026, 8, 31));
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(301, item.DocumentId);
+        Assert.Equal(1, item.UniqueBookmarks);
+    }
 }

@@ -54,7 +54,8 @@ public class VersionService : IVersionService
                 FileSizeMb = doc.FileSizeMb,
                 ChangeSummary = "Phiên bản gốc",
                 CreatedByUserId = doc.UserId,
-                CreatedAt = doc.CreatedAt ?? DateTime.UtcNow
+                CreatedAt = doc.CreatedAt ?? DateTime.UtcNow,
+                AiParsingStatus = doc.AiParsingStatus ?? "PENDING"
             };
             _db.DocumentVersions.Add(initialVersion);
             await _db.SaveChangesAsync();
@@ -83,7 +84,8 @@ public class VersionService : IVersionService
             FileSizeMb = fileSizeMb,
             ChangeSummary = changeSummary ?? $"Cập nhật phiên bản {nextVersionNumber}",
             CreatedByUserId = userId,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            AiParsingStatus = "QUEUED"
         };
         _db.DocumentVersions.Add(newVersion);
         await _db.SaveChangesAsync();
@@ -143,7 +145,8 @@ public class VersionService : IVersionService
             CreatedByUserId = userId,
             CreatedByName = user?.Username ?? "",
             CreatedAt = newVersion.CreatedAt,
-            IsCurrent = true
+            IsCurrent = true,
+            AiParsingStatus = newVersion.AiParsingStatus
         };
     }
 
@@ -172,7 +175,8 @@ public class VersionService : IVersionService
                 CreatedByUserId = v.CreatedByUserId,
                 CreatedByName = v.CreatedByUser.Username,
                 CreatedAt = v.CreatedAt,
-                IsCurrent = doc.CurrentVersionId.HasValue ? doc.CurrentVersionId.Value == v.VersionId : (v.CloudStorageUrl == doc.CloudStorageUrl)
+                IsCurrent = doc.CurrentVersionId.HasValue ? doc.CurrentVersionId.Value == v.VersionId : (v.CloudStorageUrl == doc.CloudStorageUrl),
+                AiParsingStatus = v.AiParsingStatus
             })
             .ToListAsync();
 
@@ -197,11 +201,17 @@ public class VersionService : IVersionService
         doc.FileExtension = version.FileExtension;
         doc.FileSizeMb = version.FileSizeMb;
         doc.CurrentVersionId = version.VersionId;
-        doc.AiParsingStatus = "QUEUED";
+        doc.AiParsingStatus = version.AiParsingStatus;
         doc.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
-        await _queue.EnqueueJobAsync(doc.DocumentId, version.VersionId);
+        if (!string.Equals(version.AiParsingStatus, "READY", StringComparison.OrdinalIgnoreCase))
+        {
+            version.AiParsingStatus = "QUEUED";
+            doc.AiParsingStatus = "QUEUED";
+            await _db.SaveChangesAsync();
+            await _queue.EnqueueJobAsync(doc.DocumentId, version.VersionId);
+        }
         await _permissionService.LogAuditAsync(userId, "VERSION_RESTORED", "DOCUMENT", documentId, $"Restored to version {version.VersionNumber}");
     }
 

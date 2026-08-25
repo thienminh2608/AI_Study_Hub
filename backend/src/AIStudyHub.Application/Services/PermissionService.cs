@@ -6,16 +6,28 @@ using AIStudyHub.Application.DTOs;
 using AIStudyHub.Application.Interfaces;
 using AIStudyHub.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace AIStudyHub.Application.Services;
 
 public class PermissionService : IPermissionService
 {
     private readonly IStudyHubDbContext _db;
+    private readonly IMailService? _mailService;
+    private readonly IConfiguration? _configuration;
+    private readonly ILogger<PermissionService>? _logger;
 
-    public PermissionService(IStudyHubDbContext db)
+    public PermissionService(
+        IStudyHubDbContext db,
+        IMailService? mailService = null,
+        IConfiguration? configuration = null,
+        ILogger<PermissionService>? logger = null)
     {
         _db = db;
+        _mailService = mailService;
+        _configuration = configuration;
+        _logger = logger;
     }
 
     public async Task<string> GetEffectiveDocumentRoleAsync(int documentId, int userId, string? shareToken = null)
@@ -433,6 +445,8 @@ public class PermissionService : IPermissionService
         if (targetUser.UserId == currentUserId) throw new InvalidOperationException("Cannot share document with yourself");
 
         var existingShare = await _db.DocumentShares.FirstOrDefaultAsync(s => s.DocumentId == documentId && s.SharedWithUserId == targetUser.UserId);
+        bool isNewShare = existingShare == null;
+        DateTime sharedAt = DateTime.Now;
         if (existingShare != null)
         {
             existingShare.Role = role;
@@ -446,11 +460,56 @@ public class PermissionService : IPermissionService
                 OwnerUserId = currentUserId,
                 SharedWithUserId = targetUser.UserId,
                 Role = role,
-                CreatedAt = DateTime.Now
+                CreatedAt = sharedAt
             });
             await LogAuditAsync(currentUserId, "SHARE_ADDED", "DOCUMENT", documentId, $"Shared with {email} as {role}");
         }
         await _db.SaveChangesAsync();
+
+        if (isNewShare && _mailService != null && !string.IsNullOrWhiteSpace(targetUser.Email))
+        {
+            try
+            {
+                string? frontendBaseUrl = _configuration?["Frontend:BaseUrl"];
+                var owner = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == currentUserId);
+
+                if (Uri.TryCreate(frontendBaseUrl, UriKind.Absolute, out var baseUri) && owner != null)
+                {
+                    string documentUrl = new Uri(baseUri, $"/document/{documentId}").ToString();
+                    bool emailSent = await _mailService.SendDocumentSharedNotificationAsync(
+                        targetUser.Email,
+                        targetUser.Username,
+                        owner.Username,
+                        doc.Title,
+                        role,
+                        sharedAt,
+                        documentUrl);
+
+                    if (!emailSent)
+                    {
+                        _logger?.LogWarning(
+                            "Document {DocumentId} was shared with user {TargetUserId}, but the email notification failed",
+                            documentId,
+                            targetUser.UserId);
+                    }
+                }
+                else
+                {
+                    _logger?.LogWarning(
+                        "Document {DocumentId} was shared with user {TargetUserId}, but the email notification was skipped because Frontend:BaseUrl or owner information is invalid",
+                        documentId,
+                        targetUser.UserId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(
+                    ex,
+                    "Document {DocumentId} was shared with user {TargetUserId}, but the email notification raised an exception",
+                    documentId,
+                    targetUser.UserId);
+            }
+        }
     }
 
     public async Task AddOrUpdateFolderUserShareAsync(int folderId, string email, string role, int currentUserId)

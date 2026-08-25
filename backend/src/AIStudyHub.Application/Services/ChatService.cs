@@ -30,6 +30,7 @@ public class ChatService : IChatService
     private const int DefaultMaxMapReduceGroups = 20;
 
     private const string HistorySummaryMarker = "[TÓM TẮT LỊCH SỬ CŨ]";
+    private const string InsufficientContextResponse = "Không tìm thấy nội dung liên quan đến câu hỏi của bạn trong tài liệu.";
 
     public ChatService(IStudyHubDbContext dbContext, IGeminiService geminiService, IPermissionService permissionService, IConfiguration configuration)
     {
@@ -516,8 +517,32 @@ public class ChatService : IChatService
 
             string trimmedResponse = aiResponse.Trim();
 
+            bool hasGroundedResponse = TryParseGroundedResponse(
+                trimmedResponse,
+                allowedCitationChunkIds,
+                out var groundedResponse,
+                out var groundedCitedChunkIds);
+            bool isInsufficientContextResponse = hasGroundedResponse &&
+                string.Equals(groundedResponse, InsufficientContextResponse, StringComparison.Ordinal);
+
+            if (!isInsufficientContextResponse &&
+                trimmedResponse.StartsWith("RESPONSE:", StringComparison.OrdinalIgnoreCase))
+            {
+                string responsePayload = trimmedResponse.Substring("RESPONSE:".Length).Trim();
+                isInsufficientContextResponse =
+                    responsePayload.Contains("không tìm thấy tài liệu liên quan", StringComparison.OrdinalIgnoreCase) ||
+                    responsePayload.Contains("không tìm thấy nội dung liên quan", StringComparison.OrdinalIgnoreCase) ||
+                    responsePayload.Contains("không đủ thông tin", StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (isInsufficientContextResponse)
+            {
+                finalResponse = InsufficientContextResponse;
+                break;
+            }
+
             var isToolCommand = trimmedResponse.StartsWith("SEARCH", StringComparison.OrdinalIgnoreCase) ||
-                                trimmedResponse.StartsWith("VIEW/", StringComparison.OrdinalIgnoreCase) ||
+                                 trimmedResponse.StartsWith("VIEW/", StringComparison.OrdinalIgnoreCase) ||
                                 trimmedResponse.StartsWith("VIEW /", StringComparison.OrdinalIgnoreCase) ||
                                 trimmedResponse.StartsWith("TODAY", StringComparison.OrdinalIgnoreCase) ||
                                 trimmedResponse.StartsWith("GETLINK/", StringComparison.OrdinalIgnoreCase) ||
@@ -540,7 +565,7 @@ public class ChatService : IChatService
                 continue;
             }
 
-            if (TryParseGroundedResponse(trimmedResponse, allowedCitationChunkIds, out var groundedResponse, out var groundedCitedChunkIds))
+            if (hasGroundedResponse)
             {
                 finalResponse = groundedResponse;
                 citedChunkIds = groundedCitedChunkIds;
@@ -589,7 +614,7 @@ public class ChatService : IChatService
                         await _dbContext.SaveChangesAsync();
                         continue;
                     }
-                    finalResponse = "Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.";
+                    finalResponse = InsufficientContextResponse;
                     break;
                 }
                 finalResponse = trimmedResponse.Substring("RESPONSE:".Length).Trim();
@@ -728,7 +753,7 @@ public class ChatService : IChatService
                                 allowedCitationChunkIds = selected.ChunkIds.ToHashSet();
                                 if (!selected.HasRelevantMatch)
                                 {
-                                    finalResponse = "Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.";
+                                    finalResponse = InsufficientContextResponse;
                                     systemResponseText = "Không tìm thấy chunk nào liên quan đến câu hỏi. Không được dùng kiến thức bên ngoài để trả lời.";
                                 }
                                 else systemResponseText = $"Document: \"{doc.Title}\". Only use the context below. "
@@ -857,6 +882,11 @@ public class ChatService : IChatService
                 break;
             }
         }
+
+        if (finalResponse == null)
+        {
+            throw new InvalidOperationException("AI không thể tạo phản hồi hợp lệ sau số lần xử lý cho phép.");
+        }
         }
         catch (Exception) when (finalResponse == null)
         {
@@ -864,13 +894,6 @@ public class ChatService : IChatService
             user.LastPromptReset = lastResetBeforeThisRequest;
             await _dbContext.SaveChangesAsync();
             throw;
-        }
-
-        if (finalResponse == null)
-        {
-            finalResponse = documentInventoryRequest && !attachedDocumentId.HasValue
-                ? await BuildChatScopeDocumentInventoryResponseAsync(userId, ownedDocumentInventoryRequest)
-                : "Xin lỗi, hệ thống AI đang gặp sự cố xử lý. Vui lòng thử lại sau.";
         }
 
         finalResponse = NormalizeModelAnswer(finalResponse);
@@ -1306,21 +1329,23 @@ public class ChatService : IChatService
     {
         response = string.Empty;
         citedChunkIds = [];
-        if (allowedIds.Count == 0)
-            return false;
         try
         {
             if (!TryGetJsonEnvelope(value, out var json))
                 return false;
             var parsed = JsonSerializer.Deserialize<GroundedAiResponse>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (parsed == null || string.IsNullOrWhiteSpace(parsed.Answer))
+            if (parsed == null)
                 return false;
-            var valid = parsed.Citations.Where(c => allowedIds.Contains(c.ChunkId)).DistinctBy(c => c.ChunkId).ToList();
             if (parsed.InsufficientContext)
             {
-                response = "Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.";
+                response = InsufficientContextResponse;
                 return true;
             }
+            if (string.IsNullOrWhiteSpace(parsed.Answer))
+                return false;
+            var valid = parsed.Citations.Where(c => allowedIds.Contains(c.ChunkId)).DistinctBy(c => c.ChunkId).ToList();
+            if (allowedIds.Count == 0)
+                return false;
             response = parsed.Answer.Trim();
             if (valid.Count > 0)
             {
@@ -1346,7 +1371,7 @@ public class ChatService : IChatService
             if (parsed == null || string.IsNullOrWhiteSpace(parsed.Answer))
                 return false;
             answer = parsed.InsufficientContext
-                ? "Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên."
+                ? InsufficientContextResponse
                 : parsed.Answer.Trim();
             return true;
         }
@@ -1422,7 +1447,7 @@ public class ChatService : IChatService
                + "--- STRICT RULES ---\n"
                + "0. LANGUAGE: Every user-facing answer must be in natural Vietnamese. Do not answer in English unless the user explicitly asks for English.\n"
                + (attachedDocument == null
-                   ? "0A. KNOWLEDGE SCOPE: For every substantive question, only answer from the user's accessible uploaded documents. First use SEARCH and then VIEW the most relevant document. Never use outside knowledge. If no document is relevant, reply exactly: 'RESPONSE: Không tìm thấy tài liệu liên quan đến câu hỏi của bạn trong các tài liệu đã tải lên.'\n"
+                   ? $"0A. KNOWLEDGE SCOPE: For every substantive question, only answer from the user's accessible uploaded documents. First use SEARCH and then VIEW the most relevant document. Never use outside knowledge. If no document is relevant, reply exactly: 'RESPONSE: {InsufficientContextResponse}'\n"
                    : $"0A. LOCKED KNOWLEDGE SCOPE: This session is locked exclusively to document ID {attachedDocument.DocumentId} ({attachedDocument.Title}). You MUST use VIEW/{attachedDocument.DocumentId}. Never SEARCH, VIEW another ID, mention other documents, or use outside knowledge. If this document does not support the answer, report insufficient context.\n")
                + "0B. CITATIONS: When citing facts or concepts from viewed chunks, append the exact chunk marker [CHUNK:{chunkId}] (e.g. [CHUNK:42]) where that fact was retrieved from.\n"
                + "1. DATA PRIVACY: NEVER expose raw Folder IDs, Document IDs, or raw Creation Dates to the user in your normal responses. If asked to show the folder tree, format it into a friendly, clean list (e.g., using bullet points or emojis) without the system IDs or timestamps.\n"

@@ -128,18 +128,36 @@ export const Dashboard: React.FC = () => {
   const [duplicateDocId, setDuplicateDocId] = useState<number | null>(null);
 
   // Modals for Access & Versioning
-  const [accessModalItem, setAccessModalItem] = useState<{ type: 'document' | 'folder'; id: number } | null>(null);
+  const [accessModalItem, setAccessModalItem] = useState<{
+    type: 'document' | 'folder';
+    id: number;
+  } | null>(null);
   const [versionModalDocId, setVersionModalDocId] = useState<number | null>(null);
 
   // Subject Categories
   const [approvedSubjects, setApprovedSubjects] = useState<string[]>([
-    'Toán học', 'Vật lý', 'Hóa học', 'Sinh học', 'Ngữ văn', 'Tiếng Anh', 'Tin học', 'Kinh tế', 'Kỹ năng mềm', 'Triết học', 'Lịch sử', 'Địa lý', 'Khác'
+    'Toán học',
+    'Vật lý',
+    'Hóa học',
+    'Sinh học',
+    'Ngữ văn',
+    'Tiếng Anh',
+    'Tin học',
+    'Kinh tế',
+    'Kỹ năng mềm',
+    'Triết học',
+    'Lịch sử',
+    'Địa lý',
+    'Khác',
   ]);
   const [subjectTree, setSubjectTree] = useState<SubjectTreeNode[]>([]);
   const [selectedRootSubjectId, setSelectedRootSubjectId] = useState<number | null>(null);
   const [customSubjectInput, setCustomSubjectInput] = useState('');
-  const selectedUploadRoot = subjectTree.find((node) => node.subjectId === selectedRootSubjectId) ?? null;
-  const uploadChildSubjects = selectedUploadRoot ? flattenSubjectNodes(selectedUploadRoot.children || []) : [];
+  const selectedUploadRoot =
+    subjectTree.find((node) => node.subjectId === selectedRootSubjectId) ?? null;
+  const uploadChildSubjects = selectedUploadRoot
+    ? flattenSubjectNodes(selectedUploadRoot.children || [])
+    : [];
 
   // Task 16: List/Grid View & Bulk Actions
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
@@ -183,25 +201,35 @@ export const Dashboard: React.FC = () => {
         : String(bv).localeCompare(String(av), 'vi');
     });
   }, [documents, docSortKey, docSortDirection]);
-  const sortedSharedDocuments = React.useMemo(() => [...sharedWithMe].sort((a, b) => {
-    const av: any = (a as any)[sharedSortKey] ?? '';
-    const bv: any = (b as any)[sharedSortKey] ?? '';
-    const result = typeof av === 'number' && typeof bv === 'number'
-      ? av - bv
-      : String(av).localeCompare(String(bv), 'vi', { numeric: true });
-    return sharedSortDirection === 'asc' ? result : -result;
-  }), [sharedWithMe, sharedSortKey, sharedSortDirection]);
-  const sortedPendingReviews = React.useMemo(() => [...(analytics.pendingReviewDocuments ?? [])].sort((a: any, b: any) => {
-    const value = (item: any) => pendingSortKey === 'status'
-      ? item.moderationStatus || item.status || ''
-      : item[pendingSortKey] ?? '';
-    const av = value(a);
-    const bv = value(b);
-    const result = /At$/.test(pendingSortKey)
-      ? new Date(av || 0).getTime() - new Date(bv || 0).getTime()
-      : String(av).localeCompare(String(bv), 'vi', { numeric: true });
-    return pendingSortDirection === 'asc' ? result : -result;
-  }), [analytics.pendingReviewDocuments, pendingSortKey, pendingSortDirection]);
+  const sortedSharedDocuments = React.useMemo(
+    () =>
+      [...sharedWithMe].sort((a, b) => {
+        const av: any = (a as any)[sharedSortKey] ?? '';
+        const bv: any = (b as any)[sharedSortKey] ?? '';
+        const result =
+          typeof av === 'number' && typeof bv === 'number'
+            ? av - bv
+            : String(av).localeCompare(String(bv), 'vi', { numeric: true });
+        return sharedSortDirection === 'asc' ? result : -result;
+      }),
+    [sharedWithMe, sharedSortKey, sharedSortDirection],
+  );
+  const sortedPendingReviews = React.useMemo(
+    () =>
+      [...(analytics.pendingReviewDocuments ?? [])].sort((a: any, b: any) => {
+        const value = (item: any) =>
+          pendingSortKey === 'status'
+            ? item.moderationStatus || item.status || ''
+            : (item[pendingSortKey] ?? '');
+        const av = value(a);
+        const bv = value(b);
+        const result = /At$/.test(pendingSortKey)
+          ? new Date(av || 0).getTime() - new Date(bv || 0).getTime()
+          : String(av).localeCompare(String(bv), 'vi', { numeric: true });
+        return pendingSortDirection === 'asc' ? result : -result;
+      }),
+    [analytics.pendingReviewDocuments, pendingSortKey, pendingSortDirection],
+  );
 
   const renderDocSortHeader = (key: string, label: string) => (
     <button
@@ -226,18 +254,33 @@ export const Dashboard: React.FC = () => {
     </button>
   );
   const renderSharedSortHeader = (key: string, label: string) => (
-    <button type="button" className="dashboard-sort-header" onClick={() => {
-      if (sharedSortKey === key) setSharedSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
-      else { setSharedSortKey(key); setSharedSortDirection('asc'); }
-    }}>
+    <button
+      type="button"
+      className="dashboard-sort-header"
+      onClick={() => {
+        if (sharedSortKey === key)
+          setSharedSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+        else {
+          setSharedSortKey(key);
+          setSharedSortDirection('asc');
+        }
+      }}
+    >
       {label} {sharedSortKey === key ? (sharedSortDirection === 'asc' ? '↑' : '↓') : '↕'}
     </button>
   );
   const renderPendingSortHeader = (key: string, label: string) => (
-    <button type="button" onClick={() => {
-      if (pendingSortKey === key) setPendingSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
-      else { setPendingSortKey(key); setPendingSortDirection('asc'); }
-    }}>
+    <button
+      type="button"
+      onClick={() => {
+        if (pendingSortKey === key)
+          setPendingSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+        else {
+          setPendingSortKey(key);
+          setPendingSortDirection('asc');
+        }
+      }}
+    >
       {label} {pendingSortKey === key ? (pendingSortDirection === 'asc' ? '↑' : '↓') : '↕'}
     </button>
   );
@@ -309,60 +352,63 @@ export const Dashboard: React.FC = () => {
   const [deleteDocumentTarget, setDeleteDocumentTarget] = useState<DocumentItem | null>(null);
 
   // Background Polling for AI Processing State
-  const pollDocumentStatus = useCallback((docId: number) => {
-    if (pollingTimersRef.current.has(docId)) return;
+  const pollDocumentStatus = useCallback(
+    (docId: number) => {
+      if (pollingTimersRef.current.has(docId)) return;
 
-    let delay = 2000;
-    const maxDelay = 10000;
-    const startTime = Date.now();
-    const maxDuration = 120000; // 2 minutes timeout
+      let delay = 2000;
+      const maxDelay = 10000;
+      const startTime = Date.now();
+      const maxDuration = 120000; // 2 minutes timeout
 
-    const checkStatus = async () => {
-      if (Date.now() - startTime > maxDuration) {
-        pollingTimersRef.current.delete(docId);
-        return;
-      }
-
-      try {
-        const details = await api.document.getById(docId);
-        const status = details.aiParsingStatus;
-
-        if (status === 'READY') {
-          setDocuments((prev) =>
-            prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: 'READY' } : d)),
-          );
-          notify(`Tài liệu "${details.title}" đã được bóc tách và sẵn sàng cho AI!`, 'success');
+      const checkStatus = async () => {
+        if (Date.now() - startTime > maxDuration) {
           pollingTimersRef.current.delete(docId);
           return;
         }
 
-        if (status === 'FAILED') {
+        try {
+          const details = await api.document.getById(docId);
+          const status = details.aiParsingStatus;
+
+          if (status === 'READY') {
+            setDocuments((prev) =>
+              prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: 'READY' } : d)),
+            );
+            notify(`Tài liệu "${details.title}" đã được bóc tách và sẵn sàng cho AI!`, 'success');
+            pollingTimersRef.current.delete(docId);
+            return;
+          }
+
+          if (status === 'FAILED') {
+            setDocuments((prev) =>
+              prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: 'FAILED' } : d)),
+            );
+            notify(`Xử lý nội dung AI cho tài liệu "${details.title}" thất bại.`, 'error');
+            pollingTimersRef.current.delete(docId);
+            return;
+          }
+
+          // Non-terminal: update active status in list
           setDocuments((prev) =>
-            prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: 'FAILED' } : d)),
+            prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: status } : d)),
           );
-          notify(`Xử lý nội dung AI cho tài liệu "${details.title}" thất bại.`, 'error');
+
+          // Schedule next poll with backoff
+          delay = Math.min(delay * 1.5, maxDelay);
+          const timer = setTimeout(checkStatus, delay);
+          pollingTimersRef.current.set(docId, timer);
+        } catch {
+          // If 401/403/404 or connection loss, stop polling
           pollingTimersRef.current.delete(docId);
-          return;
         }
+      };
 
-        // Non-terminal: update active status in list
-        setDocuments((prev) =>
-          prev.map((d) => (d.documentId === docId ? { ...d, aiParsingStatus: status } : d)),
-        );
-
-        // Schedule next poll with backoff
-        delay = Math.min(delay * 1.5, maxDelay);
-        const timer = setTimeout(checkStatus, delay);
-        pollingTimersRef.current.set(docId, timer);
-      } catch {
-        // If 401/403/404 or connection loss, stop polling
-        pollingTimersRef.current.delete(docId);
-      }
-    };
-
-    const initialTimer = setTimeout(checkStatus, delay);
-    pollingTimersRef.current.set(docId, initialTimer);
-  }, [notify]);
+      const initialTimer = setTimeout(checkStatus, delay);
+      pollingTimersRef.current.set(docId, initialTimer);
+    },
+    [notify],
+  );
 
   // Load Folder Content
   const loadFolderContent = useCallback(async () => {
@@ -446,7 +492,10 @@ export const Dashboard: React.FC = () => {
     try {
       await api.documentExtra.bulkMove(ids, folder?.folderId ?? null);
       setSelectedDocIds(new Set());
-      notify(`Đã chuyển ${ids.length} tài liệu vào ${folder ? `thư mục “${folder.folderName}”` : 'thư mục gốc'}.`, 'success');
+      notify(
+        `Đã chuyển ${ids.length} tài liệu vào ${folder ? `thư mục “${folder.folderName}”` : 'thư mục gốc'}.`,
+        'success',
+      );
       await loadFolderContent();
     } catch (err: any) {
       notify(err.message || 'Không thể chuyển tài liệu vào thư mục.', 'error');
@@ -469,18 +518,22 @@ export const Dashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    Promise.all([api.subjects.getApproved(), api.subjects.getTree('APPROVED')]).then(([list, tree]) => {
-      if (list && list.length > 0) {
-        const names = list.map((s) => s.name);
-        if (!names.includes('Khác')) names.push('Khác');
-        setApprovedSubjects(names);
-      }
-      if (Array.isArray(tree)) {
-        setSubjectTree(tree);
-        const other = tree.find((node) => node.name === 'Khác');
-        setSelectedRootSubjectId((current) => current ?? other?.subjectId ?? tree[0]?.subjectId ?? null);
-      }
-    }).catch(() => {});
+    Promise.all([api.subjects.getApproved(), api.subjects.getTree('APPROVED')])
+      .then(([list, tree]) => {
+        if (list && list.length > 0) {
+          const names = list.map((s) => s.name);
+          if (!names.includes('Khác')) names.push('Khác');
+          setApprovedSubjects(names);
+        }
+        if (Array.isArray(tree)) {
+          setSubjectTree(tree);
+          const other = tree.find((node) => node.name === 'Khác');
+          setSelectedRootSubjectId(
+            (current) => current ?? other?.subjectId ?? tree[0]?.subjectId ?? null,
+          );
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Folder CRUD
@@ -529,7 +582,11 @@ export const Dashboard: React.FC = () => {
     if (!file) return;
     const title = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
     setCustomSubjectInput('');
-    setSelectedRootSubjectId(subjectTree.find((node) => node.name === 'Khác')?.subjectId ?? subjectTree[0]?.subjectId ?? null);
+    setSelectedRootSubjectId(
+      subjectTree.find((node) => node.name === 'Khác')?.subjectId ??
+        subjectTree[0]?.subjectId ??
+        null,
+    );
     setUploadDraft({ file, title, subject: 'Khác', sharingPermission: 'PRIVATE' });
     e.target.value = '';
   };
@@ -586,7 +643,10 @@ export const Dashboard: React.FC = () => {
           sharingPermission,
           currentFolderId,
         );
-        notify(`Đã tải lên tài liệu "${finalTitle}". Hệ thống đang xử lý văn bản ở chế độ nền.`, 'success');
+        notify(
+          `Đã tải lên tài liệu "${finalTitle}". Hệ thống đang xử lý văn bản ở chế độ nền.`,
+          'success',
+        );
         await loadFolderContent();
         pollDocumentStatus(response.documentId);
         setUploading(false);
@@ -694,9 +754,18 @@ export const Dashboard: React.FC = () => {
         <button
           className={`tree-node ${currentFolderId === f.folderId ? 'active' : ''} ${dragOverFolderId === f.folderId ? 'document-drop-target' : ''}`}
           onClick={() => setCurrentFolderId(f.folderId)}
-          onDragEnter={(event) => { event.preventDefault(); setDragOverFolderId(f.folderId); }}
-          onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
-          onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverFolderId(null); }}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            setDragOverFolderId(f.folderId);
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node))
+              setDragOverFolderId(null);
+          }}
           onDrop={(event) => dropDocumentsIntoFolder(event, f)}
         >
           <Folder size={16} />
@@ -774,9 +843,18 @@ export const Dashboard: React.FC = () => {
           <button
             className={`tree-node root-node ${dragOverFolderId === -1 ? 'document-drop-target' : ''}`}
             onClick={() => setCurrentFolderId(undefined)}
-            onDragEnter={(event) => { event.preventDefault(); setDragOverFolderId(-1); }}
-            onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
-            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverFolderId(null); }}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setDragOverFolderId(-1);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+            }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node))
+                setDragOverFolderId(null);
+            }}
             onDrop={(event) => dropDocumentsIntoFolder(event)}
           >
             <FolderOpen size={16} />
@@ -805,8 +883,14 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Operations & View Toggle */}
-            <div className="actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <div className="glass-card flex items-center p-1 rounded-lg" style={{ display: 'flex', gap: '0.2rem', padding: '0.25rem' }}>
+            <div
+              className="actions"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <div
+                className="glass-card flex items-center p-1 rounded-lg"
+                style={{ display: 'flex', gap: '0.2rem', padding: '0.25rem' }}
+              >
                 <button
                   onClick={() => toggleViewMode('grid')}
                   className={`action-btn ${viewMode === 'grid' ? 'active' : ''}`}
@@ -846,11 +930,31 @@ export const Dashboard: React.FC = () => {
 
           {/* Bulk Operations Bar */}
           {selectedDocIds.size > 0 && (
-            <div className="glass-card p-3 my-3 flex items-center justify-between rounded-xl" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', margin: '0.75rem 0', background: 'rgba(30, 41, 59, 0.9)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '12px' }}>
+            <div
+              className="glass-card p-3 my-3 flex items-center justify-between rounded-xl"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.75rem 1rem',
+                margin: '0.75rem 0',
+                background: 'rgba(30, 41, 59, 0.9)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: '12px',
+              }}
+            >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 <button
                   onClick={toggleSelectAllDocs}
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'none', border: 'none', color: '#e2e8f0', cursor: 'pointer' }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    background: 'none',
+                    border: 'none',
+                    color: '#e2e8f0',
+                    cursor: 'pointer',
+                  }}
                 >
                   {selectedDocIds.size === documents.length ? (
                     <CheckSquare size={18} style={{ color: '#60a5fa' }} />
@@ -867,7 +971,13 @@ export const Dashboard: React.FC = () => {
                   onClick={handleBulkDownload}
                   disabled={bulkProcessing}
                   className="btn-secondary"
-                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    fontSize: '0.85rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                  }}
                 >
                   <Download size={15} />
                   <span>Tải về ({selectedDocIds.size})</span>
@@ -876,7 +986,13 @@ export const Dashboard: React.FC = () => {
                   onClick={handleBulkDelete}
                   disabled={bulkProcessing}
                   className="btn-danger"
-                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    fontSize: '0.85rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                  }}
                 >
                   <Trash2 size={15} />
                   <span>Xóa ({selectedDocIds.size})</span>
@@ -944,10 +1060,17 @@ export const Dashboard: React.FC = () => {
                       <div
                         key={folder.folderId}
                         className={`item-card folder-card glass-card ${dragOverFolderId === folder.folderId ? 'document-drop-target' : ''}`}
-                        onDragEnter={(event) => { event.preventDefault(); setDragOverFolderId(folder.folderId); }}
-                        onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+                        onDragEnter={(event) => {
+                          event.preventDefault();
+                          setDragOverFolderId(folder.folderId);
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = 'move';
+                        }}
                         onDragLeave={(event) => {
-                          if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverFolderId(null);
+                          if (!event.currentTarget.contains(event.relatedTarget as Node))
+                            setDragOverFolderId(null);
                         }}
                         onDrop={(event) => dropDocumentsIntoFolder(event, folder)}
                       >
@@ -992,24 +1115,63 @@ export const Dashboard: React.FC = () => {
                   <h4>Tài liệu ({documents.length})</h4>
 
                   {viewMode === 'list' ? (
-                    <div className="glass-card overflow-hidden my-3" style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                    <div
+                      className="glass-card overflow-hidden my-3"
+                      style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}
+                    >
+                      <table
+                        style={{
+                          width: '100%',
+                          borderCollapse: 'collapse',
+                          textAlign: 'left',
+                          fontSize: '0.9rem',
+                        }}
+                      >
                         <thead>
-                          <tr style={{ background: 'rgba(15, 23, 42, 0.7)', color: '#94a3b8', borderBottom: '1px solid rgba(255,255,255,0.1)', fontSize: '0.8rem', textTransform: 'uppercase' }}>
-                            <th style={{ padding: '0.75rem', width: '2.5rem', textAlign: 'center' }}>
-                              <button onClick={toggleSelectAllDocs} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>
-                                {selectedDocIds.size > 0 && selectedDocIds.size === documents.length ? (
+                          <tr
+                            style={{
+                              background: 'rgba(15, 23, 42, 0.7)',
+                              color: '#94a3b8',
+                              borderBottom: '1px solid rgba(255,255,255,0.1)',
+                              fontSize: '0.8rem',
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            <th
+                              style={{ padding: '0.75rem', width: '2.5rem', textAlign: 'center' }}
+                            >
+                              <button
+                                onClick={toggleSelectAllDocs}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'inherit',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {selectedDocIds.size > 0 &&
+                                selectedDocIds.size === documents.length ? (
                                   <CheckSquare size={16} style={{ color: '#60a5fa' }} />
                                 ) : (
                                   <Square size={16} />
                                 )}
                               </button>
                             </th>
-                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('title', 'Tài liệu')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('subject', 'Môn học')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('fileSizeMb', 'Dung lượng')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('aiParsingStatus', 'Trạng thái AI')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderDocSortHeader('createdAt', 'Ngày tạo')}</th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderDocSortHeader('title', 'Tài liệu')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderDocSortHeader('subject', 'Môn học')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderDocSortHeader('fileSizeMb', 'Dung lượng')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderDocSortHeader('aiParsingStatus', 'Trạng thái AI')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderDocSortHeader('createdAt', 'Ngày tạo')}
+                            </th>
                             <th style={{ padding: '0.75rem', textAlign: 'right' }}>Thao tác</th>
                           </tr>
                         </thead>
@@ -1021,31 +1183,131 @@ export const Dashboard: React.FC = () => {
                                 key={doc.documentId}
                                 draggable={!bulkProcessing}
                                 onDragStart={(event) => startDocumentDrag(event, doc.documentId)}
-                                onDragEnd={() => { setDraggedDocIds([]); setDragOverFolderId(null); }}
+                                onDragEnd={() => {
+                                  setDraggedDocIds([]);
+                                  setDragOverFolderId(null);
+                                }}
                                 className="draggable-document"
-                                style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent' }}
+                                style={{
+                                  borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                  background: isSelected
+                                    ? 'rgba(59, 130, 246, 0.1)'
+                                    : 'transparent',
+                                }}
                               >
                                 <td style={{ padding: '0.75rem', textAlign: 'center' }}>
-                                  <button onClick={() => toggleSelectDoc(doc.documentId)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}>
-                                    {isSelected ? <CheckSquare size={16} style={{ color: '#60a5fa' }} /> : <Square size={16} style={{ color: '#64748b' }} />}
+                                  <button
+                                    onClick={() => toggleSelectDoc(doc.documentId)}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      cursor: 'pointer',
+                                      color: 'inherit',
+                                    }}
+                                  >
+                                    {isSelected ? (
+                                      <CheckSquare size={16} style={{ color: '#60a5fa' }} />
+                                    ) : (
+                                      <Square size={16} style={{ color: '#64748b' }} />
+                                    )}
                                   </button>
                                 </td>
                                 <td style={{ padding: '0.75rem', fontWeight: 500 }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => navigate(`/document/${doc.documentId}`)}>
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '0.5rem',
+                                      cursor: 'pointer',
+                                    }}
+                                    onClick={() => navigate(`/document/${doc.documentId}`)}
+                                  >
                                     <FileTypeIcon extension={doc.fileExtension} size={22} />
-                                    <span style={{ textDecoration: 'underline' }}>{getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}</span>
+                                    <span style={{ textDecoration: 'underline' }}>
+                                      {getCleanTitle(doc.title, doc.fileExtension)}.
+                                      {doc.fileExtension}
+                                    </span>
                                   </div>
                                 </td>
-                                <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.subject || 'Khác'}</td>
-                                <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.fileSizeMb.toFixed(2)} MB</td>
-                                <td style={{ padding: '0.75rem' }}><span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', background: 'rgba(51, 65, 85, 0.6)', color: '#cbd5e1' }}>{doc.aiParsingStatus}</span></td>
-                                <td style={{ padding: '0.75rem', color: '#94a3b8', fontSize: '0.8rem' }}>{doc.createdAt ? formatDateTime(doc.createdAt) : '-'}</td>
+                                <td style={{ padding: '0.75rem', color: '#94a3b8' }}>
+                                  {doc.subject || 'Khác'}
+                                </td>
+                                <td style={{ padding: '0.75rem', color: '#94a3b8' }}>
+                                  {doc.fileSizeMb.toFixed(2)} MB
+                                </td>
+                                <td style={{ padding: '0.75rem' }}>
+                                  <span
+                                    style={{
+                                      padding: '0.2rem 0.5rem',
+                                      borderRadius: '4px',
+                                      fontSize: '0.75rem',
+                                      background: 'rgba(51, 65, 85, 0.6)',
+                                      color: '#cbd5e1',
+                                    }}
+                                  >
+                                    {doc.aiParsingStatus}
+                                  </span>
+                                </td>
+                                <td
+                                  style={{
+                                    padding: '0.75rem',
+                                    color: '#94a3b8',
+                                    fontSize: '0.8rem',
+                                  }}
+                                >
+                                  {doc.createdAt ? formatDateTime(doc.createdAt) : '-'}
+                                </td>
                                 <td style={{ padding: '0.75rem', textAlign: 'right' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem' }}>
-                                    <button onClick={(e) => { e.stopPropagation(); setAccessModalItem({ type: 'document', id: doc.documentId }); }} className="action-btn" title="Chia sẻ & Quản lý quyền"><Share2 size={15} /></button>
-                                    <button onClick={(e) => { e.stopPropagation(); setVersionModalDocId(doc.documentId); }} className="action-btn" title="Lịch sử phiên bản"><History size={15} /></button>
-                                    <button onClick={() => handleAskAi(doc)} className="action-btn ask-ai-btn" title="Hỏi AI" disabled={askingDocumentId === doc.documentId}>{askingDocumentId === doc.documentId ? <Loader className="spin" size={15} /> : <Bot size={15} />}</button>
-                                    <button onClick={() => setDeleteDocumentTarget(doc)} className="delete-item-btn" title="Xóa tài liệu"><Trash2 size={15} /></button>
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'flex-end',
+                                      gap: '0.3rem',
+                                    }}
+                                  >
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setAccessModalItem({
+                                          type: 'document',
+                                          id: doc.documentId,
+                                        });
+                                      }}
+                                      className="action-btn"
+                                      title="Chia sẻ & Quản lý quyền"
+                                    >
+                                      <Share2 size={15} />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setVersionModalDocId(doc.documentId);
+                                      }}
+                                      className="action-btn"
+                                      title="Lịch sử phiên bản"
+                                    >
+                                      <History size={15} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleAskAi(doc)}
+                                      className="action-btn ask-ai-btn"
+                                      title="Hỏi AI"
+                                      disabled={askingDocumentId === doc.documentId}
+                                    >
+                                      {askingDocumentId === doc.documentId ? (
+                                        <Loader className="spin" size={15} />
+                                      ) : (
+                                        <Bot size={15} />
+                                      )}
+                                    </button>
+                                    <button
+                                      onClick={() => setDeleteDocumentTarget(doc)}
+                                      className="delete-item-btn"
+                                      title="Xóa tài liệu"
+                                    >
+                                      <Trash2 size={15} />
+                                    </button>
                                   </div>
                                 </td>
                               </tr>
@@ -1063,19 +1325,41 @@ export const Dashboard: React.FC = () => {
                             key={doc.documentId}
                             draggable={!bulkProcessing}
                             onDragStart={(event) => startDocumentDrag(event, doc.documentId)}
-                            onDragEnd={() => { setDraggedDocIds([]); setDragOverFolderId(null); }}
+                            onDragEnd={() => {
+                              setDraggedDocIds([]);
+                              setDragOverFolderId(null);
+                            }}
                             className={`item-card doc-card glass-card draggable-document ${isSelected ? 'selected-card' : ''}`}
-                            style={isSelected ? { border: '1px solid #60a5fa', background: 'rgba(59, 130, 246, 0.08)' } : {}}
+                            style={
+                              isSelected
+                                ? {
+                                    border: '1px solid #60a5fa',
+                                    background: 'rgba(59, 130, 246, 0.08)',
+                                  }
+                                : {}
+                            }
                           >
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 toggleSelectDoc(doc.documentId);
                               }}
-                              style={{ position: 'absolute', top: '0.6rem', right: '0.6rem', background: 'none', border: 'none', cursor: 'pointer', zIndex: 2 }}
+                              style={{
+                                position: 'absolute',
+                                top: '0.6rem',
+                                right: '0.6rem',
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                zIndex: 2,
+                              }}
                               title="Chọn tài liệu"
                             >
-                              {isSelected ? <CheckSquare size={18} style={{ color: '#60a5fa' }} /> : <Square size={18} style={{ color: '#64748b' }} />}
+                              {isSelected ? (
+                                <CheckSquare size={18} style={{ color: '#60a5fa' }} />
+                              ) : (
+                                <Square size={18} style={{ color: '#64748b' }} />
+                              )}
                             </button>
                             <div
                               onClick={() => navigate(`/document/${doc.documentId}`)}
@@ -1087,7 +1371,10 @@ export const Dashboard: React.FC = () => {
                                 className="doc-icon"
                               />
                               <div className="doc-metadata">
-                                <span className="item-title" title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}>
+                                <span
+                                  className="item-title"
+                                  title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}
+                                >
                                   {getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}
                                 </span>
                                 <span className="doc-size">
@@ -1163,53 +1450,153 @@ export const Dashboard: React.FC = () => {
                   <h4>Được bạn bè chia sẻ ({sharedWithMe.length})</h4>
 
                   {viewMode === 'list' ? (
-                    <div className="glass-card overflow-hidden my-3" style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                    <div
+                      className="glass-card overflow-hidden my-3"
+                      style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}
+                    >
+                      <table
+                        style={{
+                          width: '100%',
+                          borderCollapse: 'collapse',
+                          textAlign: 'left',
+                          fontSize: '0.9rem',
+                        }}
+                      >
                         <thead>
-                          <tr style={{ background: 'rgba(15, 23, 42, 0.7)', color: '#94a3b8', borderBottom: '1px solid rgba(255,255,255,0.1)', fontSize: '0.8rem', textTransform: 'uppercase' }}>
-                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('title', 'Tài liệu')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('uploaderName', 'Người chia sẻ')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('subject', 'Môn học')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('fileSizeMb', 'Dung lượng')}</th>
-                            <th style={{ padding: '0.75rem' }}>{renderSharedSortHeader('aiParsingStatus', 'Trạng thái AI')}</th>
+                          <tr
+                            style={{
+                              background: 'rgba(15, 23, 42, 0.7)',
+                              color: '#94a3b8',
+                              borderBottom: '1px solid rgba(255,255,255,0.1)',
+                              fontSize: '0.8rem',
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderSharedSortHeader('title', 'Tài liệu')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderSharedSortHeader('uploaderName', 'Người chia sẻ')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderSharedSortHeader('subject', 'Môn học')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderSharedSortHeader('fileSizeMb', 'Dung lượng')}
+                            </th>
+                            <th style={{ padding: '0.75rem' }}>
+                              {renderSharedSortHeader('aiParsingStatus', 'Trạng thái AI')}
+                            </th>
                             <th style={{ padding: '0.75rem', textAlign: 'right' }}>Thao tác</th>
                           </tr>
                         </thead>
                         <tbody>
                           {sortedSharedDocuments.map((doc) => (
-                            <tr key={`shared-list-${doc.documentId}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <tr
+                              key={`shared-list-${doc.documentId}`}
+                              style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}
+                            >
                               <td style={{ padding: '0.75rem', fontWeight: 500 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => navigate(`/document/${doc.documentId}`)}>
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    cursor: 'pointer',
+                                  }}
+                                  onClick={() => navigate(`/document/${doc.documentId}`)}
+                                >
                                   <FileTypeIcon extension={doc.fileExtension} size={22} />
-                                  <span style={{ textDecoration: 'underline' }}>{getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}</span>
+                                  <span style={{ textDecoration: 'underline' }}>
+                                    {getCleanTitle(doc.title, doc.fileExtension)}.
+                                    {doc.fileExtension}
+                                  </span>
                                 </div>
                               </td>
-                              <td style={{ padding: '0.75rem', color: 'var(--accent-blue)', fontSize: '0.85rem' }}>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                              <td
+                                style={{
+                                  padding: '0.75rem',
+                                  color: 'var(--accent-blue)',
+                                  fontSize: '0.85rem',
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                  }}
+                                >
                                   <Users size={14} /> {doc.uploaderName || 'Bạn bè'}
                                 </span>
                               </td>
-                              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.subject || 'Khác'}</td>
-                              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{doc.fileSizeMb ? doc.fileSizeMb.toFixed(2) : '0.00'} MB</td>
+                              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>
+                                {doc.subject || 'Khác'}
+                              </td>
+                              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>
+                                {doc.fileSizeMb ? doc.fileSizeMb.toFixed(2) : '0.00'} MB
+                              </td>
                               <td style={{ padding: '0.75rem' }}>
-                                <span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', background: 'rgba(51, 65, 85, 0.6)', color: '#cbd5e1' }}>
+                                <span
+                                  style={{
+                                    padding: '0.2rem 0.5rem',
+                                    borderRadius: '4px',
+                                    fontSize: '0.75rem',
+                                    background: 'rgba(51, 65, 85, 0.6)',
+                                    color: '#cbd5e1',
+                                  }}
+                                >
                                   {doc.aiParsingStatus || 'READY'}
                                 </span>
                               </td>
                               <td style={{ padding: '0.75rem', textAlign: 'right' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem' }}>
-                                  <button onClick={() => handleAskAi(doc)} className="action-btn ask-ai-btn" title="Hỏi AI về tài liệu" disabled={askingDocumentId === doc.documentId}>
-                                    {askingDocumentId === doc.documentId ? <Loader className="spin" size={15} /> : <Bot size={15} />}
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'flex-end',
+                                    gap: '0.3rem',
+                                  }}
+                                >
+                                  <button
+                                    onClick={() => handleAskAi(doc)}
+                                    className="action-btn ask-ai-btn"
+                                    title="Hỏi AI về tài liệu"
+                                    disabled={askingDocumentId === doc.documentId}
+                                  >
+                                    {askingDocumentId === doc.documentId ? (
+                                      <Loader className="spin" size={15} />
+                                    ) : (
+                                      <Bot size={15} />
+                                    )}
                                   </button>
-                                  <button onClick={(e) => { e.stopPropagation(); setVersionModalDocId(doc.documentId); }} className="action-btn" title="Lịch sử phiên bản">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setVersionModalDocId(doc.documentId);
+                                    }}
+                                    className="action-btn"
+                                    title="Lịch sử phiên bản"
+                                  >
                                     <History size={15} />
                                   </button>
                                   {doc.cloudStorageUrl && (
-                                    <button onClick={(e) => { e.stopPropagation(); window.open(doc.cloudStorageUrl, '_blank'); }} className="action-btn" title="Tải xuống tài liệu">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        window.open(doc.cloudStorageUrl, '_blank');
+                                      }}
+                                      className="action-btn"
+                                      title="Tải xuống tài liệu"
+                                    >
                                       <Download size={15} />
                                     </button>
                                   )}
-                                  <button onClick={() => navigate(`/document/${doc.documentId}`)} className="action-btn" title="Xem chi tiết tài liệu">
+                                  <button
+                                    onClick={() => navigate(`/document/${doc.documentId}`)}
+                                    className="action-btn"
+                                    title="Xem chi tiết tài liệu"
+                                  >
                                     <Eye size={15} />
                                   </button>
                                 </div>
@@ -1236,7 +1623,10 @@ export const Dashboard: React.FC = () => {
                               className="doc-icon"
                             />
                             <div className="doc-metadata">
-                              <span className="item-title" title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}>
+                              <span
+                                className="item-title"
+                                title={`${getCleanTitle(doc.title, doc.fileExtension)}.${doc.fileExtension}`}
+                              >
                                 {getCleanTitle(doc.title, doc.fileExtension)}.{doc.fileExtension}
                               </span>
                               <span className="doc-size">
@@ -1244,7 +1634,10 @@ export const Dashboard: React.FC = () => {
                                 {doc.aiParsingStatus || 'READY'}
                               </span>
                               <span className="shared-badge">
-                                <Users size={12} /> {doc.uploaderName ? `Chia sẻ bởi ${doc.uploaderName}` : 'Được bạn bè chia sẻ'}
+                                <Users size={12} />{' '}
+                                {doc.uploaderName
+                                  ? `Chia sẻ bởi ${doc.uploaderName}`
+                                  : 'Được bạn bè chia sẻ'}
                               </span>
                             </div>
                           </div>
@@ -1373,13 +1766,17 @@ export const Dashboard: React.FC = () => {
                   className="input-control"
                   value={selectedRootSubjectId ?? ''}
                   onChange={(e) => {
-                    const root = subjectTree.find((node) => node.subjectId === Number(e.target.value));
+                    const root = subjectTree.find(
+                      (node) => node.subjectId === Number(e.target.value),
+                    );
                     setSelectedRootSubjectId(root?.subjectId ?? null);
                     if (root) setUploadDraft({ ...uploadDraft, subject: root.name });
                   }}
                 >
                   {subjectTree.map((root) => (
-                    <option key={root.subjectId} value={root.subjectId}>{root.name}</option>
+                    <option key={root.subjectId} value={root.subjectId}>
+                      {root.name}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -1388,13 +1785,23 @@ export const Dashboard: React.FC = () => {
                   Chuyên mục môn học
                   <select
                     className="input-control"
-                    value={uploadChildSubjects.some((child) => child.name === uploadDraft.subject) ? uploadDraft.subject : ''}
-                    onChange={(e) => setUploadDraft({ ...uploadDraft, subject: e.target.value || selectedUploadRoot.name })}
+                    value={
+                      uploadChildSubjects.some((child) => child.name === uploadDraft.subject)
+                        ? uploadDraft.subject
+                        : ''
+                    }
+                    onChange={(e) =>
+                      setUploadDraft({
+                        ...uploadDraft,
+                        subject: e.target.value || selectedUploadRoot.name,
+                      })
+                    }
                   >
                     <option value="">Không có chuyên mục</option>
                     {uploadChildSubjects.map((child) => (
                       <option key={child.subjectId} value={child.name}>
-                        {'— '.repeat(Math.max(0, child.depth - selectedUploadRoot.depth - 1))}{child.name}
+                        {'— '.repeat(Math.max(0, child.depth - selectedUploadRoot.depth - 1))}
+                        {child.name}
                       </option>
                     ))}
                   </select>
@@ -1403,10 +1810,14 @@ export const Dashboard: React.FC = () => {
                   </small>
                 </label>
               )}
-              {(selectedUploadRoot?.name === 'Khác' || !approvedSubjects.includes(uploadDraft.subject)) && (
+              {(selectedUploadRoot?.name === 'Khác' ||
+                !approvedSubjects.includes(uploadDraft.subject)) && (
                 <label style={{ marginTop: '0.4rem' }}>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    Nhập tên môn học khác <small style={{ color: 'var(--text-muted)' }}>(Hệ thống sẽ đối soát hoặc gửi kiểm duyệt nếu mới)</small>
+                    Nhập tên môn học khác{' '}
+                    <small style={{ color: 'var(--text-muted)' }}>
+                      (Hệ thống sẽ đối soát hoặc gửi kiểm duyệt nếu mới)
+                    </small>
                   </span>
                   <input
                     type="text"
@@ -1562,17 +1973,17 @@ export const Dashboard: React.FC = () => {
                 </thead>
                 <tbody>
                   {sortedPendingReviews.map((doc: any) => (
-                      <tr key={doc.documentId}>
-                        <td>
-                          {doc.title}.{doc.fileExtension}
-                        </td>
-                        <td>
-                          {doc.moderationStatus === 'IN_REVIEW' ? 'Đang xử lý' : 'Chờ xét duyệt'}
-                        </td>
-                        <td>{formatDateTime(doc.moderationSubmittedAt)}</td>
-                        <td>{formatDateTime(doc.moderatedAt)}</td>
-                      </tr>
-                    ))}
+                    <tr key={doc.documentId}>
+                      <td>
+                        {doc.title}.{doc.fileExtension}
+                      </td>
+                      <td>
+                        {doc.moderationStatus === 'IN_REVIEW' ? 'Đang xử lý' : 'Chờ xét duyệt'}
+                      </td>
+                      <td>{formatDateTime(doc.moderationSubmittedAt)}</td>
+                      <td>{formatDateTime(doc.moderatedAt)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
               {!analytics.pendingReviewDocuments?.length && (
@@ -1816,6 +2227,7 @@ export const Dashboard: React.FC = () => {
         }
 
         .doc-card {
+          position: relative;
           flex-direction: column;
           align-items: stretch;
           gap: 0.6rem;

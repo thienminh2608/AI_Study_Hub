@@ -89,3 +89,35 @@ public class DocumentActivitySummaryDto
     public int UniqueBookmarks { get; set; }
     public int ViewCount { get; set; }
 }
+
+public class CommunityAnalyticsSummaryDto
+{
+    public ReportedAccountAnalyticsDto? MostReportedAccount { get; set; }
+    public DocumentEngagementAnalyticsDto? MostDownloadedDocument { get; set; }
+    public DocumentEngagementAnalyticsDto? MostBookmarkedDocument { get; set; }
+}
+
+public class ReportedAccountAnalyticsDto
+{
+    public int UserId { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public int ReportedDocumentCount { get; set; }
+    public int TotalReports { get; set; }
+    public int PendingReports { get; set; }
+    public int ConfirmedReports { get; set; }
+}
+
+public class DocumentEngagementAnalyticsDto
+{
+    public int DocumentId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public int OwnerUserId { get; set; }
+    public string OwnerUsername { get; set; } = string.Empty;
+    public string? FileExtension { get; set; }
+    public string SharingPermission { get; set; } = string.Empty;
+    public int UniqueDownloads { get; set; }
+    public int UniqueBookmarks { get; set; }
+    public int ViewCount { get; set; }
+}

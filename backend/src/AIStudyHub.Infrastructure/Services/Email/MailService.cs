@@ -1,7 +1,9 @@
 using System;
+using System.Net;
 using AIStudyHub.Application.Interfaces;
 using MailKit.Net.Smtp;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using MimeKit;
 
 namespace AIStudyHub.Infrastructure.Services.Email;
@@ -11,12 +13,14 @@ public class MailService : IMailService
     private readonly string _senderEmail;
     private readonly string _senderPassword;
     private readonly string _displayName;
+    private readonly ILogger<MailService> _logger;
 
-    public MailService(IConfiguration configuration)
+    public MailService(IConfiguration configuration, ILogger<MailService> logger)
     {
         _senderEmail = configuration["MailSettings:SenderEmail"] ?? throw new InvalidOperationException("LỖI BẢO MẬT: Chưa cấu hình MailSettings:SenderEmail trong appsettings.json hoặc biến môi trường!");
         _senderPassword = configuration["MailSettings:SenderPassword"] ?? throw new InvalidOperationException("LỖI BẢO MẬT: Chưa cấu hình MailSettings:SenderPassword trong appsettings.json hoặc biến môi trường!");
         _displayName = configuration["MailSettings:DisplayName"] ?? "AI Study Hub";
+        _logger = logger;
     }
 
     private bool SendHtmlEmail(string toEmail, string subject, string htmlBody)
@@ -41,7 +45,31 @@ public class MailService : IMailService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"SMTP Error: {ex.Message}");
+            _logger.LogError(ex, "SMTP failed to send email to {RecipientEmail}", toEmail);
+            return false;
+        }
+    }
+
+    private async Task<bool> SendHtmlEmailAsync(string toEmail, string subject, string htmlBody)
+    {
+        try
+        {
+            var message = new MimeMessage();
+            message.From.Add(new MailboxAddress(_displayName, _senderEmail));
+            message.To.Add(new MailboxAddress("", toEmail));
+            message.Subject = subject;
+            message.Body = new BodyBuilder { HtmlBody = htmlBody }.ToMessageBody();
+
+            using var client = new SmtpClient();
+            await client.ConnectAsync("smtp.gmail.com", 587, MailKit.Security.SecureSocketOptions.StartTls);
+            await client.AuthenticateAsync(_senderEmail, _senderPassword);
+            await client.SendAsync(message);
+            await client.DisconnectAsync(true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SMTP failed to send email to {RecipientEmail}", toEmail);
             return false;
         }
     }
@@ -77,6 +105,42 @@ public class MailService : IMailService
             + "Bạn có thể nạp Coin và nâng cấp lại Premium bất cứ lúc nào."
         );
         return SendHtmlEmail(toEmail, subject, htmlBody);
+    }
+
+    public Task<bool> SendDocumentSharedNotificationAsync(
+        string toEmail,
+        string recipientName,
+        string sharedByName,
+        string documentTitle,
+        string role,
+        DateTime sharedAt,
+        string documentUrl)
+    {
+        string safeRecipientName = WebUtility.HtmlEncode(recipientName);
+        string safeSharedByName = WebUtility.HtmlEncode(sharedByName);
+        string safeDocumentTitle = WebUtility.HtmlEncode(documentTitle);
+        string safeDocumentUrl = WebUtility.HtmlEncode(documentUrl);
+        string roleLabel = string.Equals(role, "EDITOR", StringComparison.OrdinalIgnoreCase)
+            ? "Chỉnh sửa"
+            : "Xem";
+
+        string subject = $"Tài liệu được chia sẻ: {documentTitle}";
+        string bodyHtml = $@"
+<p>Xin chào <strong>{safeRecipientName}</strong>,</p>
+<p><strong>{safeSharedByName}</strong> đã chia sẻ tài liệu <strong>“{safeDocumentTitle}”</strong> với bạn.</p>
+<p>
+    <strong>Thời gian chia sẻ:</strong> {sharedAt:dd/MM/yyyy HH:mm}<br>
+    <strong>Quyền truy cập:</strong> {roleLabel}
+</p>
+<p style=""margin:28px 0;text-align:center;"">
+    <a href=""{safeDocumentUrl}"" style=""display:inline-block;padding:12px 24px;background:#5c3cf5;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;"">Xem tài liệu</a>
+</p>
+<p style=""font-size:12.5px;color:#9ca3af;"">Bạn cần đăng nhập bằng tài khoản được chia sẻ để truy cập tài liệu.</p>";
+
+        return SendHtmlEmailAsync(
+            toEmail,
+            subject,
+            BuildSimpleNoticeHtml("Bạn nhận được một tài liệu", bodyHtml));
     }
 
     private string BuildOtpEmailHtml(string otp)

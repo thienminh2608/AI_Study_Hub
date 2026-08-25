@@ -202,6 +202,9 @@ export const DocumentVersionHistoryModal: React.FC<DocumentVersionHistoryModalPr
                         <div className="version-title-row">
                           <span className="version-num">v{v.versionNumber}</span>
                           {v.isCurrent && <span className="current-badge">Hiện tại</span>}
+                          <span className={`current-badge ai-status-${v.aiParsingStatus?.toLowerCase()}`}>
+                            AI: {v.aiParsingStatus || 'PENDING'}
+                          </span>
                         </div>
                         <p className="version-summary">{v.changeSummary || 'Không có ghi chú'}</p>
                         <p className="version-details">

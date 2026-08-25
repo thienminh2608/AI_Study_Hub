@@ -195,13 +195,22 @@ public class ChatBotController : ControllerBase
                 retryable = false
             });
         }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("LỖI BẢO MẬT:", StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError, new
+            {
+                message = ex.Message,
+                code = "AI_CONFIGURATION_ERROR",
+                retryable = false
+            });
+        }
         catch (InvalidOperationException ex)
         {
             return StatusCode(StatusCodes.Status500InternalServerError, new
             {
                 message = ex.Message,
                 code = "AI_PROCESSING_ERROR",
-                retryable = false
+                retryable = true
             });
         }
         catch (ArgumentException ex)
@@ -222,7 +231,9 @@ public class ChatBotController : ControllerBase
         {
             return StatusCode(StatusCodes.Status504GatewayTimeout, new
             {
-                message = ex.Message
+                message = ex.Message,
+                code = "AI_TIMEOUT",
+                retryable = true
             });
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
@@ -241,7 +252,9 @@ public class ChatBotController : ControllerBase
         {
             return StatusCode(500, new
             {
-                message = $"Lỗi kết nối AI: {ex.Message}"
+                message = $"Lỗi kết nối AI: {ex.Message}",
+                code = "AI_SYSTEM_ERROR",
+                retryable = true
             });
         }
     }

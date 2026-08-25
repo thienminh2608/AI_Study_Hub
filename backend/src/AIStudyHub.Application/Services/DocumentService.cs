@@ -482,6 +482,15 @@ public class DocumentService : IDocumentService
         if (doc == null)
             return null;
         var dto = MapToDto(doc, doc.User.Username);
+        var currentExtraction = await _dbContext.DocumentExtractedTexts.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.DocumentId == documentId && t.DocumentVersionId == doc.CurrentVersionId);
+        if (currentExtraction != null)
+        {
+            dto.ExtractionCoverage = currentExtraction.ExtractionCoverage;
+            dto.ImageContentDetected = currentExtraction.ImageContentDetected;
+            dto.UnreadImageContentWarning = currentExtraction.UnreadImageContentWarning;
+            dto.OcrRegionCount = currentExtraction.OcrRegionCount;
+        }
         dto.RequiresAppeal = await _dbContext.DocumentReports.AsNoTracking().AnyAsync(r =>
             r.DocumentId == documentId &&
             (r.Status == "VIOLATION_CONFIRMED" || r.Status == "ACTION_TAKEN" || r.Status == "ACTIONED") &&
@@ -960,7 +969,12 @@ public class DocumentService : IDocumentService
     // TEXT EXTRACTION LOGIC
     // ─────────────────────────────────────────────────────────────────────────
 
-    private sealed record ExtractionResult(string Text, double? CoveragePercent, IReadOnlyDictionary<int, double>? PageOcrConfidence = null);
+    private sealed record ExtractionResult(
+        string Text,
+        double? CoveragePercent,
+        IReadOnlyDictionary<int, double>? PageOcrConfidence = null,
+        bool ImageContentDetected = false,
+        bool UnreadImageContentWarning = false);
 
     private async Task<ExtractionResult> ExtractTextFromFileAsync(string filePath, string fileExtension)
     {
@@ -972,16 +986,22 @@ public class DocumentService : IDocumentService
                 return new ExtractionResult(await File.ReadAllTextAsync(filePath, Encoding.UTF8), 1.0);
 
             case "docx":
-                return new ExtractionResult(ExtractTextFromDocx(filePath), null);
+                return CreateOfficeExtractionResult(ExtractTextFromDocx(filePath), filePath, "word/media/");
 
             case "xlsx":
-                return new ExtractionResult(ExtractTextFromXlsx(filePath), null);
+                return CreateOfficeExtractionResult(ExtractTextFromXlsx(filePath), filePath, "xl/media/");
 
             case "pdf":
                 return ExtractTextFromPdf(filePath);
 
             case "pptx":
-                return ExtractTextFromPptx(filePath);
+                var pptxResult = ExtractTextFromPptx(filePath);
+                bool pptxHasImages = HasEmbeddedMedia(filePath, "ppt/media/");
+                return pptxResult with
+                {
+                    ImageContentDetected = pptxHasImages,
+                    UnreadImageContentWarning = pptxHasImages
+                };
 
             case "png":
             case "jpg":
@@ -1106,6 +1126,27 @@ public class DocumentService : IDocumentService
         }
     }
 
+    private static ExtractionResult CreateOfficeExtractionResult(string text, string filePath, string mediaPrefix)
+    {
+        bool hasEmbeddedImages = HasEmbeddedMedia(filePath, mediaPrefix);
+        return new ExtractionResult(text, null, null, hasEmbeddedImages, hasEmbeddedImages);
+    }
+
+    private static bool HasEmbeddedMedia(string filePath, string mediaPrefix)
+    {
+        try
+        {
+            using var archive = ZipFile.OpenRead(filePath);
+            return archive.Entries.Any(entry =>
+                entry.FullName.StartsWith(mediaPrefix, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(entry.Name));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private const string OcrLanguages = "vie+eng";
     private static readonly string TessDataPath = Path.Combine(AppContext.BaseDirectory, "tessdata");
 
@@ -1114,12 +1155,14 @@ public class DocumentService : IDocumentService
         try
         {
             byte[] pdfBytes = File.ReadAllBytes(filePath);
+            bool hasPdfImages = Regex.IsMatch(Encoding.ASCII.GetString(pdfBytes), @"/Subtype\s*/Image\b");
             using (var document = PdfDocument.Open(filePath))
             {
                 var sb = new StringBuilder();
                 int totalPages = 0;
                 int coveredPages = 0;
                 var pageOcrConfidence = new Dictionary<int, double>();
+                bool hasNativeText = false;
                 Tesseract.TesseractEngine? ocrEngine = null;
                 try
                 {
@@ -1141,6 +1184,7 @@ public class DocumentService : IDocumentService
                             }
                             continue;
                         }
+                        hasNativeText = true;
                         coveredPages++;
                         var lines = words.GroupBy(w => Math.Round(w.BoundingBox.Bottom / 4.0) * 4)
                             .OrderByDescending(group => group.Key)
@@ -1155,7 +1199,12 @@ public class DocumentService : IDocumentService
                     ocrEngine?.Dispose();
                 }
                 double? coverage = totalPages > 0 ? (double)coveredPages / totalPages : null;
-                return new ExtractionResult(sb.ToString(), coverage, pageOcrConfidence.Count > 0 ? pageOcrConfidence : null);
+                return new ExtractionResult(
+                    sb.ToString(),
+                    coverage,
+                    pageOcrConfidence.Count > 0 ? pageOcrConfidence : null,
+                    hasPdfImages,
+                    hasPdfImages && hasNativeText);
             }
         }
         catch (Exception ex)
@@ -1338,20 +1387,22 @@ public class DocumentService : IDocumentService
         string relativePath = doc.CloudStorageUrl.TrimStart('/');
         string fileExtension = doc.FileExtension;
 
+        DocumentVersion? processingVersion = null;
         if (versionId.HasValue)
         {
-            var version = await _dbContext.DocumentVersions.FirstOrDefaultAsync(v => v.VersionId == versionId.Value && v.DocumentId == documentId);
-            if (version != null && !string.IsNullOrWhiteSpace(version.CloudStorageUrl))
+            processingVersion = await _dbContext.DocumentVersions.FirstOrDefaultAsync(v => v.VersionId == versionId.Value && v.DocumentId == documentId);
+            if (processingVersion != null && !string.IsNullOrWhiteSpace(processingVersion.CloudStorageUrl))
             {
-                relativePath = version.CloudStorageUrl.TrimStart('/');
-                fileExtension = version.FileExtension;
+                relativePath = processingVersion.CloudStorageUrl.TrimStart('/');
+                fileExtension = processingVersion.FileExtension;
             }
         }
 
         var extractionStartTime = _clock.UtcNow.AddSeconds(-2);
         try
         {
-            doc.AiParsingStatus = "PROCESSING";
+            if (processingVersion != null) processingVersion.AiParsingStatus = "PROCESSING";
+            if (!versionId.HasValue || doc.CurrentVersionId == versionId) doc.AiParsingStatus = "PROCESSING";
             await _dbContext.SaveChangesAsync();
 
             string physicalPath = _fileStorage.GetPhysicalPath(relativePath);
@@ -1368,7 +1419,8 @@ public class DocumentService : IDocumentService
                 extractedText = $"[Tài liệu không chứa lớp văn bản trích xuất được hoặc tệp ảnh rỗng: {doc.Title}]";
             }
 
-            doc.AiParsingStatus = "CHUNKING";
+            if (processingVersion != null) processingVersion.AiParsingStatus = "CHUNKING";
+            if (!versionId.HasValue || doc.CurrentVersionId == versionId) doc.AiParsingStatus = "CHUNKING";
             await _dbContext.SaveChangesAsync();
 
             int? targetVersionId = versionId ?? doc.CurrentVersionId;
@@ -1435,6 +1487,10 @@ public class DocumentService : IDocumentService
                 }
             }
 
+            processingVersion ??= targetVersionId.HasValue
+                ? await _dbContext.DocumentVersions.FirstOrDefaultAsync(v => v.VersionId == targetVersionId.Value && v.DocumentId == documentId)
+                : null;
+
             // 1. Upsert DocumentExtractedText for (documentId, targetVersionId)
             var existingText = await _dbContext.DocumentExtractedTexts
                 .FirstOrDefaultAsync(e => e.DocumentId == documentId && e.DocumentVersionId == targetVersionId);
@@ -1445,12 +1501,20 @@ public class DocumentService : IDocumentService
                     DocumentId = documentId,
                     DocumentVersionId = targetVersionId,
                     ExtractedText = extractedText,
+                    ExtractionCoverage = (decimal)Math.Clamp(extraction.CoveragePercent ?? 1.0, 0, 1),
+                    ImageContentDetected = extraction.ImageContentDetected,
+                    UnreadImageContentWarning = extraction.UnreadImageContentWarning,
+                    OcrRegionCount = extraction.PageOcrConfidence?.Count ?? 0,
                     CreatedAt = _clock.UtcNow
                 });
             }
             else
             {
                 existingText.ExtractedText = extractedText;
+                existingText.ExtractionCoverage = (decimal)Math.Clamp(extraction.CoveragePercent ?? 1.0, 0, 1);
+                existingText.ImageContentDetected = extraction.ImageContentDetected;
+                existingText.UnreadImageContentWarning = extraction.UnreadImageContentWarning;
+                existingText.OcrRegionCount = extraction.PageOcrConfidence?.Count ?? 0;
             }
 
             try
@@ -1472,6 +1536,10 @@ public class DocumentService : IDocumentService
                 if (concurrentText != null)
                 {
                     concurrentText.ExtractedText = extractedText;
+                    concurrentText.ExtractionCoverage = (decimal)Math.Clamp(extraction.CoveragePercent ?? 1.0, 0, 1);
+                    concurrentText.ImageContentDetected = extraction.ImageContentDetected;
+                    concurrentText.UnreadImageContentWarning = extraction.UnreadImageContentWarning;
+                    concurrentText.OcrRegionCount = extraction.PageOcrConfidence?.Count ?? 0;
                     await _dbContext.SaveChangesAsync();
                 }
                 else
@@ -1503,9 +1571,13 @@ public class DocumentService : IDocumentService
             var newChunks = DocumentChunker.Chunk(documentId, extractedText, _clock.UtcNow, extraction.PageOcrConfidence, targetVersionId);
             _dbContext.DocumentChunks.AddRange(newChunks);
 
-            doc.ExtractionCoveragePercent = extraction.CoveragePercent ?? 1.0;
-            doc.AiParsingStatus = "READY";
-            doc.UpdatedAt = _clock.UtcNow;
+            if (processingVersion != null) processingVersion.AiParsingStatus = "READY";
+            if (doc.CurrentVersionId == targetVersionId)
+            {
+                doc.ExtractionCoveragePercent = extraction.CoveragePercent ?? 1.0;
+                doc.AiParsingStatus = "READY";
+                doc.UpdatedAt = _clock.UtcNow;
+            }
 
             // 3. Add ModerationNotice
             _dbContext.ModerationNotices.Add(new ModerationNotice
@@ -1568,7 +1640,8 @@ public class DocumentService : IDocumentService
         catch (Exception ex)
         {
             Console.WriteLine($"[TextExtraction] Failed to extract text for doc {documentId}: {ex.Message}");
-            doc.AiParsingStatus = "FAILED";
+            if (processingVersion != null) processingVersion.AiParsingStatus = "FAILED";
+            if (!versionId.HasValue || doc.CurrentVersionId == versionId) doc.AiParsingStatus = "FAILED";
             await _dbContext.SaveChangesAsync();
             throw; // Rethrow so queue marks job FAILED/DEAD
         }
@@ -1581,9 +1654,15 @@ public class DocumentService : IDocumentService
         if (doc.UserId != userId) throw new UnauthorizedAccessException("Chỉ chủ sở hữu mới có quyền yêu cầu trích xuất lại");
 
         doc.AiParsingStatus = "QUEUED";
+        if (doc.CurrentVersionId.HasValue)
+        {
+            var currentVersion = await _dbContext.DocumentVersions
+                .FirstOrDefaultAsync(v => v.VersionId == doc.CurrentVersionId.Value && v.DocumentId == documentId);
+            if (currentVersion != null) currentVersion.AiParsingStatus = "QUEUED";
+        }
         await _dbContext.SaveChangesAsync();
 
-        await _queue.EnqueueJobAsync(documentId);
+        await _queue.EnqueueJobAsync(documentId, doc.CurrentVersionId);
     }
 
     public async Task<StorageQuotaDto> GetUserStorageQuotaAsync(int userId)
@@ -1598,13 +1677,17 @@ public class DocumentService : IDocumentService
         decimal maxStorageMb = user.Tier?.MaxStorageMb ?? 50m;
         string tierName = user.Tier?.TierName ?? "Free";
 
+        var aiPromptsToday = user.AiPromptsToday ?? 0;
+        if (user.LastPromptReset.HasValue && (DateTime.Now - user.LastPromptReset.Value).TotalHours >= 24)
+            aiPromptsToday = 0;
+
         return new StorageQuotaDto
         {
             UserId = userId,
             TierName = tierName,
             UsedStorageMb = Math.Round((decimal)usedMb, 2),
             MaxStorageMb = maxStorageMb,
-            AiPromptsToday = user.AiPromptsToday ?? 0,
+            AiPromptsToday = aiPromptsToday,
             AiPromptLimitPerDay = user.Tier?.AiPromptLimitPerDay ?? 10
         };
     }

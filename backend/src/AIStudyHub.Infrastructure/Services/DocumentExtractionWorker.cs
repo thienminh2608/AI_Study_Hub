@@ -57,7 +57,11 @@ public class DocumentExtractionWorker : BackgroundService
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Failed extraction job {JobId} for DocumentId: {DocumentId}", job.JobId, job.DocumentId);
-                    await _queue.FailJobAsync(job.JobId, ex.Message);
+                    var rootCause = ex.GetBaseException();
+                    var persistedError = ReferenceEquals(rootCause, ex)
+                        ? ex.Message
+                        : $"{ex.Message} Root cause: {rootCause.Message}";
+                    await _queue.FailJobAsync(job.JobId, persistedError);
                 }
             }
             catch (OperationCanceledException)

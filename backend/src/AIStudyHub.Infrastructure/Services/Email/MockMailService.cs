@@ -31,4 +31,23 @@ public class MockMailService : IMailService
         _logger.LogWarning("[MOCK EMAIL] Premium Downgraded notification sent to {Email} ({Username}).", toEmail, username);
         return true;
     }
+
+    public Task<bool> SendDocumentSharedNotificationAsync(
+        string toEmail,
+        string recipientName,
+        string sharedByName,
+        string documentTitle,
+        string role,
+        DateTime sharedAt,
+        string documentUrl)
+    {
+        _logger.LogWarning(
+            "[MOCK EMAIL] Document share notification sent to {Email}. Document: {DocumentTitle}, Role: {Role}, SharedAt: {SharedAt}, Url: {DocumentUrl}",
+            toEmail,
+            documentTitle,
+            role,
+            sharedAt,
+            documentUrl);
+        return Task.FromResult(true);
+    }
 }

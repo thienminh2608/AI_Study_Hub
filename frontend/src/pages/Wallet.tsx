@@ -35,7 +35,6 @@ export const Wallet: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   // Forms
-  const [depositMethod, setDepositMethod] = useState<'PAYOS' | 'MANUAL'>('PAYOS');
   const [amount, setAmount] = useState<number | null>(null);
   const [customAmount, setCustomAmount] = useState<string>('');
   const [showDepositModal, setShowDepositModal] = useState(false);
@@ -147,22 +146,6 @@ export const Wallet: React.FC = () => {
 
     setSubmitting(true);
 
-    if (depositMethod === 'PAYOS') {
-      try {
-        const res = await api.transaction.createPayosLink(targetAmount);
-        if (res?.checkoutUrl) {
-          window.location.href = res.checkoutUrl;
-        } else {
-          setError('Không nhận được link thanh toán PayOS.');
-          setSubmitting(false);
-        }
-      } catch (err: any) {
-        setError(err.message || 'Tạo liên kết thanh toán thất bại.');
-        setSubmitting(false);
-      }
-      return;
-    }
-
     // Manual bank transfer method
     if (!bankId.trim() || !referenceCode.trim()) {
       setError('Vui lòng nhập đầy đủ ngân hàng và mã giao dịch để đối soát.');
@@ -175,7 +158,7 @@ export const Wallet: React.FC = () => {
         amount: targetAmount,
         type: 'DEPOSIT',
         bankId: bankId.trim(),
-        referenceCode: referenceCode.trim()
+        referenceCode: referenceCode.trim(),
       });
       setSuccess(
         `Đã gửi yêu cầu nạp ${targetAmount.toLocaleString('vi-VN')}đ. Vui lòng đợi Quản trị viên phê duyệt.`,
@@ -279,41 +262,9 @@ export const Wallet: React.FC = () => {
             <p className="deposit-modal-subtitle">Chọn phương thức và số tiền bạn muốn nạp</p>
             {error && <div className="error-alert">{error}</div>}
 
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
-              <button
-                type="button"
-                className={`btn-tab ${depositMethod === 'PAYOS' ? 'active' : ''}`}
-                onClick={() => setDepositMethod('PAYOS')}
-                style={{
-                  flex: 1,
-                  padding: '8px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  background: depositMethod === 'PAYOS' ? 'var(--primary-color, #3b82f6)' : 'transparent',
-                  color: depositMethod === 'PAYOS' ? '#fff' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: 600
-                }}
-              >
-                Tự Động (PayOS / VietQR)
-              </button>
-              <button
-                type="button"
-                className={`btn-tab ${depositMethod === 'MANUAL' ? 'active' : ''}`}
-                onClick={() => setDepositMethod('MANUAL')}
-                style={{
-                  flex: 1,
-                  padding: '8px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  background: depositMethod === 'MANUAL' ? 'var(--primary-color, #3b82f6)' : 'transparent',
-                  color: depositMethod === 'MANUAL' ? '#fff' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: 600
-                }}
-              >
-                Chuyển Khoản Thủ Công
-              </button>
+            <div className="manual-transfer-heading">
+              <strong>Chuyển khoản VietQR</strong>
+              <span>Sau khi chuyển khoản, gửi mã giao dịch để Admin đối soát và duyệt.</span>
             </div>
 
             <form onSubmit={handleSubmitTransaction}>
@@ -337,7 +288,9 @@ export const Wallet: React.FC = () => {
               </div>
 
               <div style={{ marginTop: '12px', textAlign: 'left' }}>
-                <label style={{ fontSize: '13px', display: 'block', marginBottom: '4px' }}>Hoặc nhập số tiền khác (tối thiểu 2,000đ):</label>
+                <label style={{ fontSize: '13px', display: 'block', marginBottom: '4px' }}>
+                  Hoặc nhập số tiền khác (tối thiểu 2,000đ):
+                </label>
                 <input
                   type="number"
                   min="2000"
@@ -361,86 +314,108 @@ export const Wallet: React.FC = () => {
                   {amount
                     ? `${amount.toLocaleString('vi-VN')}đ`
                     : customAmount
-                    ? `${parseInt(customAmount || '0', 10).toLocaleString('vi-VN')}đ`
-                    : 'Chưa chọn'}
+                      ? `${parseInt(customAmount || '0', 10).toLocaleString('vi-VN')}đ`
+                      : 'Chưa chọn'}
                 </strong>
               </div>
 
-              {depositMethod === 'MANUAL' && (
-                <>
-                  {(amount || customAmount) &&
-                    (transferConfig?.isActive && qrUrl ? (
-                      <section className="transfer-qr-panel" aria-live="polite">
-                        <img
-                          src={qrUrl}
-                          alt={`Mã QR chuyển khoản`}
-                        />
-                        <div className="transfer-details">
-                          <strong>{transferConfig.bankName || transferConfig.bankCode}</strong>
-                          <span>
-                            Số tài khoản: <b>{transferConfig.accountNumber}</b>
-                          </span>
-                          <span>
-                            Chủ tài khoản: <b>{transferConfig.accountName}</b>
-                          </span>
-                          <span>
-                            Nội dung: <b>{transferContent}</b>
-                          </span>
-                          <small>Quét QR đúng mệnh giá rồi gửi yêu cầu để Admin xác nhận.</small>
-                        </div>
-                      </section>
-                    ) : (
-                      <div className="error-alert">
-                        Admin chưa bật cấu hình chuyển khoản. Vui lòng thử lại sau.
+              <>
+                {(amount || customAmount) &&
+                  (transferConfig?.isActive && qrUrl ? (
+                    <section className="transfer-qr-panel" aria-live="polite">
+                      <img src={qrUrl} alt={`Mã QR chuyển khoản`} />
+                      <div className="transfer-details">
+                        <strong>{transferConfig.bankName || transferConfig.bankCode}</strong>
+                        <span>
+                          Số tài khoản: <b>{transferConfig.accountNumber}</b>
+                        </span>
+                        <span>
+                          Chủ tài khoản: <b>{transferConfig.accountName}</b>
+                        </span>
+                        <span>
+                          Nội dung: <b>{transferContent}</b>
+                        </span>
+                        <small>Quét QR đúng mệnh giá rồi gửi yêu cầu để Admin xác nhận.</small>
                       </div>
-                    ))}
-                  {(amount || customAmount) && transferConfig?.isActive && (
-                    <div className="reconciliation-inputs" style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '15px', marginBottom: '15px' }}>
-                      <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Thông tin đối soát giao dịch:</strong>
-                      <div>
-                        <label style={{ fontSize: '13px', display: 'block', marginBottom: '4px', textAlign: 'left' }}>Ngân hàng bạn đã dùng để chuyển khoản:</label>
-                        <input
-                          type="text"
-                          className="input-control"
-                          placeholder="Ví dụ: Vietcombank, Techcombank..."
-                          required
-                          value={bankId}
-                          onChange={(e) => setBankId(e.target.value)}
-                          disabled={submitting}
-                          style={{ width: '100%' }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ fontSize: '13px', display: 'block', marginBottom: '4px', textAlign: 'left' }}>Mã tham chiếu / Mã giao dịch ngân hàng (Reference Code):</label>
-                        <input
-                          type="text"
-                          className="input-control"
-                          placeholder="Mã GD ngân hàng cung cấp trên biên lai"
-                          required
-                          value={referenceCode}
-                          onChange={(e) => setReferenceCode(e.target.value)}
-                          disabled={submitting}
-                          style={{ width: '100%' }}
-                        />
-                      </div>
+                    </section>
+                  ) : (
+                    <div className="error-alert">
+                      Admin chưa bật cấu hình chuyển khoản. Vui lòng thử lại sau.
                     </div>
-                  )}
-                </>
-              )}
+                  ))}
+                {(amount || customAmount) && transferConfig?.isActive && (
+                  <div
+                    className="reconciliation-inputs"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                      marginTop: '15px',
+                      marginBottom: '15px',
+                    }}
+                  >
+                    <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>
+                      Thông tin đối soát giao dịch:
+                    </strong>
+                    <div>
+                      <label
+                        style={{
+                          fontSize: '13px',
+                          display: 'block',
+                          marginBottom: '4px',
+                          textAlign: 'left',
+                        }}
+                      >
+                        Ngân hàng bạn đã dùng để chuyển khoản:
+                      </label>
+                      <input
+                        type="text"
+                        className="input-control"
+                        placeholder="Ví dụ: Vietcombank, Techcombank..."
+                        required
+                        value={bankId}
+                        onChange={(e) => setBankId(e.target.value)}
+                        disabled={submitting}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{
+                          fontSize: '13px',
+                          display: 'block',
+                          marginBottom: '4px',
+                          textAlign: 'left',
+                        }}
+                      >
+                        Mã tham chiếu / Mã giao dịch ngân hàng (Reference Code):
+                      </label>
+                      <input
+                        type="text"
+                        className="input-control"
+                        placeholder="Mã GD ngân hàng cung cấp trên biên lai"
+                        required
+                        value={referenceCode}
+                        onChange={(e) => setReferenceCode(e.target.value)}
+                        disabled={submitting}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
 
               <button
                 type="submit"
                 className="btn-primary tx-submit"
-                disabled={submitting || (!amount && (!customAmount || parseInt(customAmount, 10) < 2000)) || (depositMethod === 'MANUAL' && !transferConfig?.isActive)}
+                disabled={
+                  submitting ||
+                  (!amount && (!customAmount || parseInt(customAmount, 10) < 2000)) ||
+                  !transferConfig?.isActive
+                }
                 style={{ marginTop: '16px', width: '100%' }}
               >
-                {submitting ? (
-                  <Loader className="spin" size={18} />
-                ) : depositMethod === 'PAYOS' ? (
-                  'Thanh toán tức thì qua PayOS'
-                ) : (
-                  'Xác nhận nạp tiền thủ công'
-                )}
+                {submitting ? <Loader className="spin" size={18} /> : 'Gửi yêu cầu nạp tiền'}
               </button>
             </form>
           </div>
@@ -498,7 +473,12 @@ export const Wallet: React.FC = () => {
                             type="button"
                             className="btn-secondary"
                             onClick={() => handleViewInvoice(tx.transactionId)}
-                            style={{ padding: '4px 8px', fontSize: '12px', height: 'auto', width: 'auto' }}
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '12px',
+                              height: 'auto',
+                              width: 'auto',
+                            }}
                             disabled={invoiceLoading}
                           >
                             Biên lai
@@ -518,11 +498,23 @@ export const Wallet: React.FC = () => {
 
       {showInvoiceModal && selectedInvoice && (
         <div className="deposit-modal-overlay" onMouseDown={() => setShowInvoiceModal(false)}>
-          <div className="deposit-modal glass-panel animate-slide-up" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+          <div
+            className="deposit-modal glass-panel animate-slide-up"
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{ maxWidth: '500px' }}
+          >
             <button className="deposit-modal-close" onClick={() => setShowInvoiceModal(false)}>
               <X size={20} />
             </button>
-            <div style={{ padding: '20px', border: '1px dashed #ccc', borderRadius: '8px', background: '#fafafa', color: '#333' }}>
+            <div
+              style={{
+                padding: '20px',
+                border: '1px dashed #ccc',
+                borderRadius: '8px',
+                background: '#fafafa',
+                color: '#333',
+              }}
+            >
               <div style={{ textAlign: 'center', marginBottom: '20px' }}>
                 <h3 style={{ margin: 0, color: '#333' }}>BIÊN LAI GIAO DỊCH</h3>
                 <small>{selectedInvoice.companyName}</small>
@@ -531,22 +523,46 @@ export const Wallet: React.FC = () => {
               </div>
               <hr />
               <div style={{ fontSize: '14px', lineHeight: '2', textAlign: 'left' }}>
-                <div><strong>Mã hóa đơn:</strong> {selectedInvoice.invoiceNumber}</div>
-                <div><strong>Mã giao dịch:</strong> #{selectedInvoice.transactionId}</div>
-                <div><strong>Khách hàng:</strong> {selectedInvoice.username} ({selectedInvoice.email})</div>
-                <div><strong>Nội dung:</strong> {selectedInvoice.description}</div>
-                <div><strong>Loại giao dịch:</strong> {selectedInvoice.type}</div>
-                <div><strong>Thời gian hoàn thành:</strong> {formatDateTime(selectedInvoice.date)}</div>
-                <div><strong>Địa chỉ:</strong> {selectedInvoice.address}</div>
+                <div>
+                  <strong>Mã hóa đơn:</strong> {selectedInvoice.invoiceNumber}
+                </div>
+                <div>
+                  <strong>Mã giao dịch:</strong> #{selectedInvoice.transactionId}
+                </div>
+                <div>
+                  <strong>Khách hàng:</strong> {selectedInvoice.username} ({selectedInvoice.email})
+                </div>
+                <div>
+                  <strong>Nội dung:</strong> {selectedInvoice.description}
+                </div>
+                <div>
+                  <strong>Loại giao dịch:</strong> {selectedInvoice.type}
+                </div>
+                <div>
+                  <strong>Thời gian hoàn thành:</strong> {formatDateTime(selectedInvoice.date)}
+                </div>
+                <div>
+                  <strong>Địa chỉ:</strong> {selectedInvoice.address}
+                </div>
                 <hr />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 'bold', marginTop: '10px' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    marginTop: '10px',
+                  }}
+                >
                   <span>Số tiền:</span>
                   <span>{selectedInvoice.amount.toLocaleString()} VNĐ</span>
                 </div>
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
-              <button className="btn-primary" onClick={() => setShowInvoiceModal(false)}>Đóng</button>
+              <button className="btn-primary" onClick={() => setShowInvoiceModal(false)}>
+                Đóng
+              </button>
             </div>
           </div>
         </div>
@@ -635,10 +651,13 @@ export const Wallet: React.FC = () => {
 
         .wallet-alert { margin: 0; }
         .deposit-modal-overlay { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 1rem; background: rgba(3, 7, 18, .76); backdrop-filter: blur(8px); }
-        .deposit-modal { position: relative; width: min(520px, 100%); padding: 2rem; border-radius: var(--radius-md); }
+        .deposit-modal { position: relative; width: min(520px, 100%); max-height: calc(100dvh - 2rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 2rem; border-radius: var(--radius-md); }
         .deposit-modal-close { position: absolute; top: 1rem; right: 1rem; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
         .deposit-modal h3 { font-size: 1.4rem; }
         .deposit-modal-subtitle { margin: .35rem 0 1.25rem; color: var(--text-secondary); }
+        .manual-transfer-heading { display: flex; flex-direction: column; gap: .3rem; margin-bottom: 1rem; padding: .85rem 1rem; border: 1px solid rgba(59,130,246,.28); border-radius: var(--radius-sm); background: rgba(59,130,246,.08); text-align: left; }
+        .manual-transfer-heading strong { color: var(--text-primary); }
+        .manual-transfer-heading span { color: var(--text-secondary); font-size: .82rem; line-height: 1.45; }
         .deposit-amount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; }
         .deposit-amount-option { display: flex; flex-direction: column; align-items: center; gap: .2rem; padding: 1rem .5rem; border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-sm); background: rgba(255,255,255,.035); color: var(--text-primary); cursor: pointer; transition: var(--transition-fast); }
         .deposit-amount-option:hover { border-color: rgba(16,185,129,.45); transform: translateY(-2px); }

@@ -22,6 +22,8 @@ import {
   Bot,
   Cpu,
   Zap,
+  Download,
+  Bookmark,
 } from 'lucide-react';
 
 interface UserItem {
@@ -52,6 +54,8 @@ interface TransactionItem {
   failureReason?: string;
 }
 
+type TransactionAction = 'APPROVE' | 'REJECT' | 'REFUND' | 'REVERSE_DEPOSIT';
+
 interface ReportItem {
   reportId: number;
   documentId: number;
@@ -62,6 +66,29 @@ interface ReportItem {
   additionalDetails?: string;
   status: string; // "PENDING" | "RESOLVED"
   createdAt?: string;
+}
+
+interface ReportedAccountAnalytics {
+  userId: number;
+  username: string;
+  email?: string;
+  status: string;
+  reportedDocumentCount: number;
+  totalReports: number;
+  pendingReports: number;
+  confirmedReports: number;
+}
+
+interface DocumentEngagementAnalytics {
+  documentId: number;
+  title: string;
+  ownerUserId: number;
+  ownerUsername: string;
+  fileExtension?: string;
+  sharingPermission: string;
+  uniqueDownloads: number;
+  uniqueBookmarks: number;
+  viewCount: number;
 }
 
 const Pagination: React.FC<{
@@ -104,7 +131,9 @@ export const AdminDashboard: React.FC = () => {
     requestedTab === 'system-config' ||
     requestedTab === 'transfer-config' ||
     requestedTab === 'audit-log' ||
-    requestedTab === 'ai-observability'
+    requestedTab === 'ai-observability' ||
+    requestedTab === 'account-analytics' ||
+    requestedTab === 'document-analytics'
       ? requestedTab
       : 'overview';
 
@@ -125,14 +154,25 @@ export const AdminDashboard: React.FC = () => {
   const [auditTotalCount, setAuditTotalCount] = useState(0);
   const [aiSummary, setAiSummary] = useState<any>(null);
   const [aiUsages, setAiUsages] = useState<any[]>([]);
+  const [communitySummary, setCommunitySummary] = useState<any>(null);
+  const [communityLoadFailed, setCommunityLoadFailed] = useState(false);
+  const [reportedAccounts, setReportedAccounts] = useState<ReportedAccountAnalytics[]>([]);
+  const [documentEngagement, setDocumentEngagement] = useState<DocumentEngagementAnalytics[]>([]);
   const [loading, setLoading] = useState(true);
-  
+  const analyticsMetric: 'downloads' | 'bookmarks' =
+    searchParams.get('metric') === 'bookmarks' ? 'bookmarks' : 'downloads';
+  const [filtersReadyTab, setFiltersReadyTab] = useState(() =>
+    adminTab === 'account-analytics' || adminTab === 'document-analytics' ? '' : adminTab,
+  );
+
   // Date states for Overview (Thuần Việt)
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState<number>(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(now.getFullYear());
   const dashboardMonth = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
-  
+  const dashboardStartDate = `${dashboardMonth}-01`;
+  const dashboardEndDate = `${dashboardMonth}-${String(new Date(selectedYear, selectedMonth, 0).getDate()).padStart(2, '0')}`;
+
   const [searchText, setSearchText] = useState('');
   const debouncedSearchText = useDebouncedValue(searchText, 1000);
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -141,7 +181,7 @@ export const AdminDashboard: React.FC = () => {
   const [endDate, setEndDate] = useState('');
   const [sortKey, setSortKey] = useState('createdAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  
+
   // Pagination
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
@@ -167,6 +207,13 @@ export const AdminDashboard: React.FC = () => {
   const [editBalance, setEditBalance] = useState(0);
   const [editTierId, setEditTierId] = useState(2);
   const [updatingUser, setUpdatingUser] = useState(false);
+  const [transactionAction, setTransactionAction] = useState<{
+    transaction: TransactionItem;
+    action: TransactionAction;
+  } | null>(null);
+  const [transactionActionReason, setTransactionActionReason] = useState('');
+  const [transactionActionError, setTransactionActionError] = useState('');
+  const [processingTransaction, setProcessingTransaction] = useState(false);
   const [selectedReport, setSelectedReport] = useState<ReportItem | null>(null);
   const [selectedReportDocument, setSelectedReportDocument] = useState<any | null>(null);
   const [reportPreviewLoading, setReportPreviewLoading] = useState(false);
@@ -201,17 +248,28 @@ export const AdminDashboard: React.FC = () => {
         adminTab === 'transfer-config'
       )
         return;
+      if (
+        (adminTab === 'account-analytics' || adminTab === 'document-analytics') &&
+        filtersReadyTab !== adminTab
+      )
+        return;
       if (adminTab === 'overview') {
-        let mStart: string | undefined = undefined;
-        let mEnd: string | undefined = undefined;
-        if (dashboardMonth) {
-          const [y, m] = dashboardMonth.split('-').map(Number);
-          mStart = `${dashboardMonth}-01`;
-          const lastDay = new Date(y, m, 0).getDate();
-          mEnd = `${dashboardMonth}-${String(lastDay).padStart(2, '0')}`;
+        const mStart = dashboardStartDate;
+        const mEnd = dashboardEndDate;
+        const [dashboardResult, communityResult] = await Promise.allSettled([
+          api.admin.getDashboard(mStart, mEnd),
+          api.admin.getCommunityAnalyticsSummary(mStart, mEnd),
+        ]);
+        if (dashboardResult.status === 'rejected') throw dashboardResult.reason;
+        setStats(dashboardResult.value);
+        if (communityResult.status === 'fulfilled') {
+          setCommunitySummary(communityResult.value);
+          setCommunityLoadFailed(false);
+        } else {
+          console.error('Không thể tải thống kê cộng đồng:', communityResult.reason);
+          setCommunitySummary(null);
+          setCommunityLoadFailed(true);
         }
-        const data = await api.admin.getDashboard(mStart, mEnd);
-        setStats(data);
       } else if (adminTab === 'users') {
         const data = await api.admin.getUsers(page, pageSize, debouncedSearchText, statusFilter);
         setUsers(data.items || []);
@@ -224,13 +282,38 @@ export const AdminDashboard: React.FC = () => {
           statusFilter,
           typeFilter,
           startDate,
-          endDate
+          endDate,
         );
         setTransactions(data.items || []);
         setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'reports') {
         const data = await api.admin.getReports(page, pageSize, debouncedSearchText, statusFilter);
         setReports(data.items || []);
+        setTotalCount(data.totalCount || 0);
+      } else if (adminTab === 'account-analytics') {
+        const data = await api.admin.getReportedAccounts(
+          page,
+          pageSize,
+          debouncedSearchText,
+          startDate,
+          endDate,
+          sortKey,
+          sortDirection,
+        );
+        setReportedAccounts(data.items || []);
+        setTotalCount(data.totalCount || 0);
+      } else if (adminTab === 'document-analytics') {
+        const data = await api.admin.getDocumentEngagementRanking(
+          analyticsMetric,
+          page,
+          pageSize,
+          debouncedSearchText,
+          startDate,
+          endDate,
+          sortKey,
+          sortDirection,
+        );
+        setDocumentEngagement(data.items || []);
         setTotalCount(data.totalCount || 0);
       } else if (adminTab === 'audit-log') {
         const res = await api.admin.getAuditLogs(page, pageSize);
@@ -251,18 +334,42 @@ export const AdminDashboard: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [adminTab, dashboardMonth, page, pageSize, debouncedSearchText, statusFilter, typeFilter, startDate, endDate]);
+  }, [
+    adminTab,
+    dashboardStartDate,
+    dashboardEndDate,
+    page,
+    pageSize,
+    debouncedSearchText,
+    statusFilter,
+    typeFilter,
+    startDate,
+    endDate,
+    analyticsMetric,
+    sortKey,
+    sortDirection,
+    filtersReadyTab,
+  ]);
 
   useEffect(() => {
     setLoading(true);
     setPage(1);
-    setSearchText('');
-    setStatusFilter('ALL');
+    setSearchText(searchParams.get('q') || '');
+    setStatusFilter(searchParams.get('status') || 'ALL');
     setTypeFilter('ALL');
-    setStartDate('');
-    setEndDate('');
+    setStartDate(searchParams.get('startDate') || '');
+    setEndDate(searchParams.get('endDate') || '');
+    setFiltersReadyTab(adminTab);
     setSortKey(
-      adminTab === 'users' ? 'userId' : adminTab === 'transactions' ? 'transactionId' : 'reportId',
+      adminTab === 'users'
+        ? 'userId'
+        : adminTab === 'transactions'
+          ? 'transactionId'
+          : adminTab === 'account-analytics'
+            ? 'totalReports'
+            : adminTab === 'document-analytics'
+              ? analyticsMetric === 'downloads' ? 'uniqueDownloads' : 'uniqueBookmarks'
+              : 'reportId',
     );
     setSortDirection('desc');
     setShowCreateUserModal(false);
@@ -272,17 +379,39 @@ export const AdminDashboard: React.FC = () => {
     setSelectedReport(null);
     setSelectedReportDocument(null);
     setReportPreviewLoading(false);
-  }, [adminTab]);
+  }, [adminTab, searchParams, analyticsMetric]);
 
   useEffect(() => {
     loadDashboardData();
   }, [loadDashboardData]);
 
-  const goToAdminTab = (tab: string, options?: { query?: string; status?: string }) => {
+  const goToAdminTab = (
+    tab: string,
+    options?: {
+      query?: string;
+      status?: string;
+      metric?: 'downloads' | 'bookmarks';
+      startDate?: string;
+      endDate?: string;
+    },
+  ) => {
     const params = new URLSearchParams({ tab });
     if (options?.query) params.set('q', options.query);
     if (options?.status) params.set('status', options.status);
+    if (options?.metric) params.set('metric', options.metric);
+    if (options?.startDate) params.set('startDate', options.startDate);
+    if (options?.endDate) params.set('endDate', options.endDate);
     navigate(`/admin?${params.toString()}`);
+  };
+
+  const showCommunityAnalyticsAllTime = () => {
+    setPage(1);
+    setStartDate('');
+    setEndDate('');
+    goToAdminTab(
+      adminTab,
+      adminTab === 'document-analytics' ? { metric: analyticsMetric } : undefined,
+    );
   };
 
   const closeEditUserModal = () => {
@@ -388,30 +517,34 @@ export const AdminDashboard: React.FC = () => {
     });
   }, [rawRows, sortKey, sortDirection]);
   const sortRows = useCallback(
-    (rows: any[]) => [...rows].sort((a, b) => {
-      const value = (item: any) => {
-        if (sortKey === 'logId') return item.logId || item.id || 0;
-        if (sortKey === 'actor') return item.actorName || item.username || item.actorUserId || '';
-        if (sortKey === 'username') return item.username || item.userId || '';
-        if (sortKey === 'target') return `${item.targetType || ''} ${item.targetId || ''}`;
-        if (sortKey === 'modelOperation') return `${item.model || ''} ${item.operation || ''}`;
-        return item[sortKey] ?? '';
-      };
-      const av = value(a);
-      const bv = value(b);
-      let result: number;
-      if (typeof av === 'number' && typeof bv === 'number') result = av - bv;
-      else if (/at$|time|timestamp/i.test(sortKey)) {
-        result = new Date(av || 0).getTime() - new Date(bv || 0).getTime();
-      } else result = String(av).localeCompare(String(bv), 'vi', { numeric: true });
-      return sortDirection === 'asc' ? result : -result;
-    }),
+    (rows: any[]) =>
+      [...rows].sort((a, b) => {
+        const value = (item: any) => {
+          if (sortKey === 'logId') return item.logId || item.id || 0;
+          if (sortKey === 'actor') return item.actorName || item.username || item.actorUserId || '';
+          if (sortKey === 'username') return item.username || item.userId || '';
+          if (sortKey === 'target') return `${item.targetType || ''} ${item.targetId || ''}`;
+          if (sortKey === 'modelOperation') return `${item.model || ''} ${item.operation || ''}`;
+          return item[sortKey] ?? '';
+        };
+        const av = value(a);
+        const bv = value(b);
+        let result: number;
+        if (typeof av === 'number' && typeof bv === 'number') result = av - bv;
+        else if (/at$|time|timestamp/i.test(sortKey)) {
+          result = new Date(av || 0).getTime() - new Date(bv || 0).getTime();
+        } else result = String(av).localeCompare(String(bv), 'vi', { numeric: true });
+        return sortDirection === 'asc' ? result : -result;
+      }),
     [sortKey, sortDirection],
   );
   const sortedAuditLogs = useMemo(() => sortRows(auditLogs), [auditLogs, sortRows]);
   const sortedAiUsages = useMemo(() => sortRows(aiUsages), [aiUsages, sortRows]);
   const sortedAiModels = useMemo(() => sortRows(aiSummary?.byModel || []), [aiSummary, sortRows]);
-  const sortedAiOperations = useMemo(() => sortRows(aiSummary?.byOperation || []), [aiSummary, sortRows]);
+  const sortedAiOperations = useMemo(
+    () => sortRows(aiSummary?.byOperation || []),
+    [aiSummary, sortRows],
+  );
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const pagedRows = activeRows;
 
@@ -500,53 +633,59 @@ export const AdminDashboard: React.FC = () => {
   };
 
   // Transaction Approval Actions
-  const handleApproveTransaction = async (txId: number, status: 'SUCCESS' | 'CANCELLED') => {
-    const actionText = status === 'SUCCESS' ? 'Duyệt thành công' : 'Hủy bỏ';
-    let failureReason: string | undefined = undefined;
-    
-    if (status === 'CANCELLED') {
-      const reason = prompt('Vui lòng nhập lý do từ chối/hủy giao dịch này:');
-      if (reason === null) return;
-      if (!reason.trim()) {
-        notify('Lý do hủy bỏ không được để trống.', 'error');
-        return;
-      }
-      failureReason = reason.trim();
-    } else {
-      if (
-        !(await confirm({
-          title: 'Xử lý giao dịch',
-          message: `Xác nhận ${actionText} giao dịch này?`,
-          confirmLabel: actionText,
-          danger: false,
-        }))
-      )
-        return;
-    }
-
-    try {
-      await api.admin.updateTransaction(txId, status, failureReason);
-      loadDashboardData();
-      notify('Giao dịch đã được cập nhật.', 'success');
-    } catch (err: any) {
-      notify(err.message || 'Thao tác giao dịch thất bại.', 'error');
-    }
+  const openTransactionAction = (transaction: TransactionItem, action: TransactionAction) => {
+    setTransactionAction({ transaction, action });
+    setTransactionActionReason('');
+    setTransactionActionError('');
   };
 
-  const handleRefundTransaction = async (txId: number) => {
-    const reason = prompt('Vui lòng nhập lý do hoàn tiền giao dịch này:');
-    if (reason === null) return;
-    if (!reason.trim()) {
-      notify('Lý do hoàn tiền không được để trống.', 'error');
+  const closeTransactionAction = () => {
+    if (processingTransaction) return;
+    setTransactionAction(null);
+    setTransactionActionReason('');
+    setTransactionActionError('');
+  };
+
+  const handleTransactionActionSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!transactionAction) return;
+
+    const { transaction, action } = transactionAction;
+    const reason = transactionActionReason.trim();
+    if (action !== 'APPROVE' && !reason) {
+      setTransactionActionError('Vui lòng nhập lý do để lưu vào lịch sử đối soát.');
       return;
     }
 
+    setProcessingTransaction(true);
+    setTransactionActionError('');
     try {
-      await api.admin.refundTransaction(txId, reason.trim());
-      loadDashboardData();
-      notify('Đã hoàn tiền giao dịch thành công.', 'success');
+      if (action === 'APPROVE') {
+        await api.admin.updateTransaction(transaction.transactionId, 'SUCCESS');
+      } else if (action === 'REJECT') {
+        await api.admin.updateTransaction(transaction.transactionId, 'CANCELLED', reason);
+      } else if (action === 'REVERSE_DEPOSIT') {
+        await api.admin.reverseDeposit(transaction.transactionId, reason);
+      } else {
+        await api.admin.refundTransaction(transaction.transactionId, reason);
+      }
+
+      const successMessage =
+        action === 'APPROVE'
+          ? 'Đã duyệt giao dịch thành công.'
+          : action === 'REJECT'
+            ? 'Đã từ chối giao dịch.'
+            : action === 'REVERSE_DEPOSIT'
+              ? 'Đã thu hồi giao dịch nạp tiền.'
+              : 'Đã hoàn tiền giao dịch thành công.';
+      setTransactionAction(null);
+      setTransactionActionReason('');
+      await loadDashboardData();
+      notify(successMessage, 'success');
     } catch (err: any) {
-      notify(err.message || 'Hoàn tiền giao dịch thất bại.', 'error');
+      setTransactionActionError(err.message || 'Không thể xử lý giao dịch.');
+    } finally {
+      setProcessingTransaction(false);
     }
   };
 
@@ -579,7 +718,10 @@ export const AdminDashboard: React.FC = () => {
       <div className="admin-header glass-card">
         <div className="admin-header-text">
           <h1>Bảng Điều Khiển Quản Trị</h1>
-          <p>Quản trị hệ thống, phê duyệt giao dịch ví, kiểm duyệt tài liệu và theo dõi vận hành nền tảng.</p>
+          <p>
+            Quản trị hệ thống, phê duyệt giao dịch ví, kiểm duyệt tài liệu và theo dõi vận hành nền
+            tảng.
+          </p>
         </div>
         <button
           type="button"
@@ -664,11 +806,98 @@ export const AdminDashboard: React.FC = () => {
                 </button>
               </div>
 
+              <section className="community-analytics-section" aria-labelledby="community-analytics-title">
+                <div className="admin-section-heading community-analytics-heading">
+                  <div>
+                    <h3 id="community-analytics-title">Thống kê cộng đồng</h3>
+                    <p className="section-subtitle">
+                      Xếp hạng theo người dùng · Tháng {selectedMonth}/{selectedYear}
+                    </p>
+                    {communityLoadFailed && (
+                      <p className="analytics-load-warning">
+                        Chưa tải được thống kê cộng đồng. Hãy khởi động lại backend để áp dụng API mới.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="stats-grid community-stats-grid">
+                  <button
+                    type="button"
+                    className="stat-box stat-link glass-card"
+                    onClick={() =>
+                      goToAdminTab('account-analytics', {
+                        startDate: dashboardStartDate,
+                        endDate: dashboardEndDate,
+                      })
+                    }
+                  >
+                    <AlertOctagon size={28} className="stat-icon red" />
+                    <div className="stat-details">
+                      <span className="stat-label">Tài khoản bị báo cáo nhiều nhất</span>
+                      <span className="stat-value">
+                        {communityLoadFailed ? '—' : (communitySummary?.mostReportedAccount?.totalReports ?? 0)}
+                      </span>
+                      <small>
+                        {communitySummary?.mostReportedAccount
+                          ? `${communitySummary.mostReportedAccount.username} · ${communitySummary.mostReportedAccount.reportedDocumentCount} tài liệu`
+                          : 'Chưa có báo cáo trong kỳ'}
+                      </small>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="stat-box stat-link glass-card"
+                    onClick={() =>
+                      goToAdminTab('document-analytics', {
+                        metric: 'downloads',
+                        startDate: dashboardStartDate,
+                        endDate: dashboardEndDate,
+                      })
+                    }
+                  >
+                    <Download size={28} className="stat-icon blue" />
+                    <div className="stat-details">
+                      <span className="stat-label">Tài liệu được tải nhiều nhất</span>
+                      <span className="stat-value">
+                        {communityLoadFailed ? '—' : (communitySummary?.mostDownloadedDocument?.uniqueDownloads ?? 0)}
+                      </span>
+                      <small>
+                        {communitySummary?.mostDownloadedDocument?.title ?? 'Chưa có lượt tải trong kỳ'}
+                      </small>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="stat-box stat-link glass-card"
+                    onClick={() =>
+                      goToAdminTab('document-analytics', {
+                        metric: 'bookmarks',
+                        startDate: dashboardStartDate,
+                        endDate: dashboardEndDate,
+                      })
+                    }
+                  >
+                    <Bookmark size={28} className="stat-icon purple" />
+                    <div className="stat-details">
+                      <span className="stat-label">Tài liệu được lưu nhiều nhất</span>
+                      <span className="stat-value">
+                        {communityLoadFailed ? '—' : (communitySummary?.mostBookmarkedDocument?.uniqueBookmarks ?? 0)}
+                      </span>
+                      <small>
+                        {communitySummary?.mostBookmarkedDocument?.title ?? 'Chưa có lượt lưu trong kỳ'}
+                      </small>
+                    </div>
+                  </button>
+                </div>
+              </section>
+
               <div className="overview-finance-section">
                 <div className="overview-finance-header">
                   <div className="overview-finance-title">
                     <h4>Doanh thu & Biến động ví theo tháng</h4>
-                    <p className="text-muted">Theo dõi tổng tiền nạp và tổng giá trị các gói Premium kích hoạt</p>
+                    <p className="text-muted">
+                      Theo dõi tổng tiền nạp và tổng giá trị các gói Premium kích hoạt
+                    </p>
                   </div>
                   <div className="month-picker-wrapper">
                     <span className="month-picker-label">Thời gian:</span>
@@ -696,7 +925,8 @@ export const AdminDashboard: React.FC = () => {
                         </option>
                       ))}
                     </select>
-                    {(selectedMonth !== now.getMonth() + 1 || selectedYear !== now.getFullYear()) && (
+                    {(selectedMonth !== now.getMonth() + 1 ||
+                      selectedYear !== now.getFullYear()) && (
                       <button
                         type="button"
                         className="btn-secondary month-reset-btn"
@@ -719,9 +949,13 @@ export const AdminDashboard: React.FC = () => {
                   >
                     <div className="finance-header">
                       <span>Tổng tiền nạp vào ví</span>
-                      <small>Nạp tiền thành công (Tháng {selectedMonth}/{selectedYear})</small>
+                      <small>
+                        Nạp tiền thành công (Tháng {selectedMonth}/{selectedYear})
+                      </small>
                     </div>
-                    <strong>{Number(stats.successfulDeposits ?? 0).toLocaleString('vi-VN')}đ</strong>
+                    <strong>
+                      {Number(stats.successfulDeposits ?? 0).toLocaleString('vi-VN')}đ
+                    </strong>
                   </button>
                   <button
                     type="button"
@@ -730,9 +964,13 @@ export const AdminDashboard: React.FC = () => {
                   >
                     <div className="finance-header">
                       <span>Tổng giá trị các gói Premium đã mua</span>
-                      <small>Gói Premium đã kích hoạt (Tháng {selectedMonth}/{selectedYear})</small>
+                      <small>
+                        Gói Premium đã kích hoạt (Tháng {selectedMonth}/{selectedYear})
+                      </small>
                     </div>
-                    <strong className="premium-revenue-text">{Number(Math.abs(stats.successfulWithdrawals ?? 0)).toLocaleString('vi-VN')}đ</strong>
+                    <strong className="premium-revenue-text">
+                      {Number(Math.abs(stats.successfulWithdrawals ?? 0)).toLocaleString('vi-VN')}đ
+                    </strong>
                   </button>
                 </div>
               </div>
@@ -741,7 +979,11 @@ export const AdminDashboard: React.FC = () => {
                 <section className="activity-panel glass-card">
                   <div className="activity-panel-header">
                     <h4>Giao dịch gần đây</h4>
-                    <button type="button" className="activity-view-all-btn" onClick={() => goToAdminTab('transactions')}>
+                    <button
+                      type="button"
+                      className="activity-view-all-btn"
+                      onClick={() => goToAdminTab('transactions')}
+                    >
                       Xem tất cả →
                     </button>
                   </div>
@@ -755,7 +997,9 @@ export const AdminDashboard: React.FC = () => {
                           className="activity-row activity-link"
                           key={transaction.transactionId}
                           onClick={() =>
-                            goToAdminTab('transactions', { query: String(transaction.transactionId) })
+                            goToAdminTab('transactions', {
+                              query: String(transaction.transactionId),
+                            })
                           }
                         >
                           <div>
@@ -764,7 +1008,9 @@ export const AdminDashboard: React.FC = () => {
                               #{transaction.transactionId} · {transaction.status}
                             </small>
                           </div>
-                          <span className="amount-badge">{Number(transaction.amount).toLocaleString('vi-VN')}đ</span>
+                          <span className="amount-badge">
+                            {Number(transaction.amount).toLocaleString('vi-VN')}đ
+                          </span>
                         </button>
                       ))
                     )}
@@ -773,7 +1019,11 @@ export const AdminDashboard: React.FC = () => {
                 <section className="activity-panel glass-card">
                   <div className="activity-panel-header">
                     <h4>Report gần đây</h4>
-                    <button type="button" className="activity-view-all-btn" onClick={() => goToAdminTab('reports')}>
+                    <button
+                      type="button"
+                      className="activity-view-all-btn"
+                      onClick={() => goToAdminTab('reports')}
+                    >
                       Xem tất cả →
                     </button>
                   </div>
@@ -794,7 +1044,9 @@ export const AdminDashboard: React.FC = () => {
                               {report.reporterName} · {report.reasonCode}
                             </small>
                           </div>
-                          <span className={`report-status-tag ${report.status === 'PENDING' ? 'pending' : ''}`}>
+                          <span
+                            className={`report-status-tag ${report.status === 'PENDING' ? 'pending' : ''}`}
+                          >
                             {report.status}
                           </span>
                         </button>
@@ -803,6 +1055,105 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 </section>
               </div>
+            </div>
+          ) : adminTab === 'account-analytics' ? (
+            <div className="users-pane animate-fade-in">
+              <div className="admin-section-heading">
+                <div>
+                  <h3>Tài khoản có tài liệu bị báo cáo nhiều nhất</h3>
+                  <p className="section-subtitle">
+                    Báo cáo chưa xác minh được hiển thị riêng; thứ hạng này không đồng nghĩa tài khoản đã vi phạm.
+                  </p>
+                </div>
+              </div>
+              <div className="admin-toolbar analytics-toolbar">
+                <input
+                  className="input-control"
+                  placeholder="Tìm tên hoặc email chủ tài liệu..."
+                  value={searchText}
+                  onChange={(event) => { setSearchText(event.target.value); setPage(1); }}
+                />
+                <input type="date" className="input-control" value={startDate} onChange={(event) => { setStartDate(event.target.value); setPage(1); }} title="Từ ngày" />
+                <input type="date" className="input-control" value={endDate} onChange={(event) => { setEndDate(event.target.value); setPage(1); }} title="Đến ngày" />
+                <button
+                  type="button"
+                  className="btn-secondary analytics-all-time-btn"
+                  onClick={showCommunityAnalyticsAllTime}
+                  disabled={!startDate && !endDate}
+                >
+                  Toàn thời gian
+                </button>
+              </div>
+              <div className="table-scroll">
+                <table className="admin-table">
+                  <thead><tr><th>{sortHeader('rank', 'Hạng')}</th><th>{sortHeader('username', 'Tài khoản')}</th><th>{sortHeader('reportedDocumentCount', 'Tài liệu bị báo cáo')}</th><th>{sortHeader('totalReports', 'Tổng báo cáo')}</th><th>{sortHeader('pendingReports', 'Chờ xác minh')}</th><th>{sortHeader('confirmedReports', 'Đã xác nhận')}</th><th>{sortHeader('status', 'Trạng thái')}</th><th>Thao tác</th></tr></thead>
+                  <tbody>
+                    {reportedAccounts.length === 0 ? (
+                      <tr><td colSpan={8} className="analytics-empty-cell">Không có dữ liệu phù hợp trong khoảng thời gian này.</td></tr>
+                    ) : reportedAccounts.map((account, index) => (
+                      <tr key={account.userId}>
+                        <td className="monospace-text">#{sortKey === 'rank' && sortDirection === 'desc' ? totalCount - (page - 1) * pageSize - index : (page - 1) * pageSize + index + 1}</td>
+                        <td><strong>{account.username}</strong><br /><small>{account.email || `ID #${account.userId}`}</small></td>
+                        <td>{account.reportedDocumentCount}</td>
+                        <td className="bold-text">{account.totalReports}</td>
+                        <td>{account.pendingReports}</td>
+                        <td>{account.confirmedReports}</td>
+                        <td><span className={`status-badge ${account.status}`}>{account.status === 'ACTIVE' ? 'Hoạt động' : account.status}</span></td>
+                        <td><button className="btn-secondary" onClick={() => goToAdminTab('users', { query: account.email || account.username })}>Xem tài khoản</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination page={page} totalPages={totalPages} setPage={setPage} total={totalCount} />
+            </div>
+          ) : adminTab === 'document-analytics' ? (
+            <div className="users-pane animate-fade-in">
+              <div className="admin-section-heading">
+                <div>
+                  <h3>{analyticsMetric === 'downloads' ? 'Tài liệu được tải nhiều nhất' : 'Tài liệu được lưu nhiều nhất'}</h3>
+                  <p className="section-subtitle">Mỗi người dùng chỉ được tính một lần cho mỗi tài liệu; không tính chủ sở hữu.</p>
+                </div>
+                <div className="analytics-metric-switch">
+                  <button className={analyticsMetric === 'downloads' ? 'btn-primary' : 'btn-secondary'} onClick={() => goToAdminTab('document-analytics', { metric: 'downloads', startDate, endDate })}>Lượt tải</button>
+                  <button className={analyticsMetric === 'bookmarks' ? 'btn-primary' : 'btn-secondary'} onClick={() => goToAdminTab('document-analytics', { metric: 'bookmarks', startDate, endDate })}>Lượt lưu</button>
+                </div>
+              </div>
+              <div className="admin-toolbar analytics-toolbar">
+                <input className="input-control" placeholder="Tìm tài liệu hoặc chủ sở hữu..." value={searchText} onChange={(event) => { setSearchText(event.target.value); setPage(1); }} />
+                <input type="date" className="input-control" value={startDate} onChange={(event) => { setStartDate(event.target.value); setPage(1); }} title="Từ ngày" />
+                <input type="date" className="input-control" value={endDate} onChange={(event) => { setEndDate(event.target.value); setPage(1); }} title="Đến ngày" />
+                <button
+                  type="button"
+                  className="btn-secondary analytics-all-time-btn"
+                  onClick={showCommunityAnalyticsAllTime}
+                  disabled={!startDate && !endDate}
+                >
+                  Toàn thời gian
+                </button>
+              </div>
+              <div className="table-scroll">
+                <table className="admin-table">
+                  <thead><tr><th>{sortHeader('rank', 'Hạng')}</th><th>{sortHeader('title', 'Tài liệu')}</th><th>{sortHeader('ownerUsername', 'Chủ sở hữu')}</th><th>{sortHeader('uniqueDownloads', 'Lượt tải')}</th><th>{sortHeader('uniqueBookmarks', 'Lượt lưu')}</th><th>{sortHeader('viewCount', 'Lượt xem')}</th><th>{sortHeader('sharingPermission', 'Quyền xem')}</th><th>Thao tác</th></tr></thead>
+                  <tbody>
+                    {documentEngagement.length === 0 ? (
+                      <tr><td colSpan={8} className="analytics-empty-cell">Không có dữ liệu phù hợp trong khoảng thời gian này.</td></tr>
+                    ) : documentEngagement.map((document, index) => (
+                      <tr key={document.documentId}>
+                        <td className="monospace-text">#{sortKey === 'rank' && sortDirection === 'desc' ? totalCount - (page - 1) * pageSize - index : (page - 1) * pageSize + index + 1}</td>
+                        <td><div className="document-analytics-title"><FileTypeIcon extension={document.fileExtension || ''} size={20} /><strong>{document.title}</strong></div><small>ID #{document.documentId}</small></td>
+                        <td>{document.ownerUsername}</td>
+                        <td className={analyticsMetric === 'downloads' ? 'bold-text' : ''}>{document.uniqueDownloads}</td>
+                        <td className={analyticsMetric === 'bookmarks' ? 'bold-text' : ''}>{document.uniqueBookmarks}</td>
+                        <td>{document.viewCount}</td>
+                        <td><span className="role-badge">{document.sharingPermission}</span></td>
+                        <td><button className="btn-secondary" onClick={() => goToAdminTab('documents', { query: document.title })}>Xem tài liệu</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination page={page} totalPages={totalPages} setPage={setPage} total={totalCount} />
             </div>
           ) : adminTab === 'users' ? (
             <div className="users-pane animate-fade-in">
@@ -1014,7 +1365,11 @@ export const AdminDashboard: React.FC = () => {
                           <td className="bold-text">{tx.username}</td>
                           <td>
                             <span className={`role-badge ${tx.type}`}>
-                              {tx.type === 'DEPOSIT' ? 'Nạp tiền' : tx.type === 'WITHDRAW' ? 'Mua Premium' : 'Hoàn tiền'}
+                              {tx.type === 'DEPOSIT'
+                                ? 'Nạp tiền'
+                                : tx.type === 'WITHDRAW'
+                                  ? 'Mua Premium'
+                                  : 'Hoàn tiền'}
                             </span>
                           </td>
                           <td className={`tx-value ${tx.amount > 0 ? 'positive' : 'negative'}`}>
@@ -1028,7 +1383,9 @@ export const AdminDashboard: React.FC = () => {
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
                               <span className={`tx-status-badge ${tx.status}`}>{tx.status}</span>
                               {tx.failureReason && (
-                                <small style={{ color: '#ef4444', fontSize: '11px', marginTop: '2px' }}>
+                                <small
+                                  style={{ color: '#ef4444', fontSize: '11px', marginTop: '2px' }}
+                                >
                                   Lý do: {tx.failureReason}
                                 </small>
                               )}
@@ -1039,18 +1396,14 @@ export const AdminDashboard: React.FC = () => {
                             {isPending ? (
                               <div className="table-actions">
                                 <button
-                                  onClick={() =>
-                                    handleApproveTransaction(tx.transactionId, 'SUCCESS')
-                                  }
+                                  onClick={() => openTransactionAction(tx, 'APPROVE')}
                                   className="action-btn approve"
                                   title="Duyệt giao dịch"
                                 >
                                   <Check size={14} />
                                 </button>
                                 <button
-                                  onClick={() =>
-                                    handleApproveTransaction(tx.transactionId, 'CANCELLED')
-                                  }
+                                  onClick={() => openTransactionAction(tx, 'REJECT')}
                                   className="action-btn reject"
                                   title="Từ chối giao dịch"
                                 >
@@ -1061,16 +1414,34 @@ export const AdminDashboard: React.FC = () => {
                               <div className="table-actions">
                                 {tx.status === 'SUCCESS' && tx.type !== 'REFUND' && (
                                   <button
-                                    onClick={() => handleRefundTransaction(tx.transactionId)}
+                                    onClick={() =>
+                                      openTransactionAction(
+                                        tx,
+                                        tx.type === 'DEPOSIT' ? 'REVERSE_DEPOSIT' : 'REFUND',
+                                      )
+                                    }
                                     className="action-btn reject"
-                                    title="Hoàn tiền giao dịch"
-                                    style={{ padding: '4px 8px', fontSize: '11px', height: 'auto', width: 'auto' }}
+                                    title={
+                                      tx.type === 'DEPOSIT'
+                                        ? 'Thu hồi tiền nạp'
+                                        : 'Hoàn tiền giao dịch'
+                                    }
+                                    style={{
+                                      padding: '4px 8px',
+                                      fontSize: '11px',
+                                      height: 'auto',
+                                      width: 'auto',
+                                    }}
                                   >
-                                    Hoàn tiền
+                                    {tx.type === 'DEPOSIT' ? 'Thu hồi' : 'Hoàn tiền'}
                                   </button>
                                 )}
-                                {tx.status !== 'SUCCESS' && <span className="text-muted">Đã xử lý</span>}
-                                {tx.status === 'SUCCESS' && tx.type === 'REFUND' && <span className="text-muted">Đã hoàn tiền</span>}
+                                {tx.status !== 'SUCCESS' && (
+                                  <span className="text-muted">Đã xử lý</span>
+                                )}
+                                {tx.status === 'SUCCESS' && tx.type === 'REFUND' && (
+                                  <span className="text-muted">Đã hoàn tiền</span>
+                                )}
                               </div>
                             )}
                           </td>
@@ -1226,7 +1597,10 @@ export const AdminDashboard: React.FC = () => {
               />
             </div>
           ) : adminTab === 'audit-log' ? (
-            <div className="reports-pane animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div
+              className="reports-pane animate-fade-in"
+              style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
+            >
               <div className="admin-section-tabs">
                 <NavLink to="/admin?tab=reports">Báo cáo vi phạm</NavLink>
                 <NavLink to="/admin?tab=documents">Tài liệu</NavLink>
@@ -1238,7 +1612,8 @@ export const AdminDashboard: React.FC = () => {
                 <h3>Nhật ký hoạt động hệ thống (Audit Logs)</h3>
               </div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginBottom: '1rem' }}>
-                Theo dõi nhật ký các thay đổi quyền truy cập, chia sẻ tài liệu/thư mục và tác vụ hệ thống.
+                Theo dõi nhật ký các thay đổi quyền truy cập, chia sẻ tài liệu/thư mục và tác vụ hệ
+                thống.
               </p>
 
               <div className="table-scroll">
@@ -1256,7 +1631,14 @@ export const AdminDashboard: React.FC = () => {
                   <tbody>
                     {auditLogs.length === 0 ? (
                       <tr>
-                        <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                        <td
+                          colSpan={6}
+                          style={{
+                            textAlign: 'center',
+                            padding: '2rem',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
                           Chưa có nhật ký hoạt động nào.
                         </td>
                       </tr>
@@ -1265,13 +1647,17 @@ export const AdminDashboard: React.FC = () => {
                         <tr key={log.logId || log.id}>
                           <td className="monospace-text">#{log.logId || log.id}</td>
                           <td>
-                            <strong>{log.actorName || log.username || `User #${log.actorUserId}`}</strong>
+                            <strong>
+                              {log.actorName || log.username || `User #${log.actorUserId}`}
+                            </strong>
                           </td>
                           <td>
                             <span className="role-badge ADMIN">{log.action}</span>
                           </td>
                           <td>
-                            <span className="bold-text">{log.targetType} #{log.targetId}</span>
+                            <span className="bold-text">
+                              {log.targetType} #{log.targetId}
+                            </span>
                           </td>
                           <td>{log.details || 'N/A'}</td>
                           <td>{formatDateTime(log.createdAt || log.timestamp)}</td>
@@ -1295,7 +1681,8 @@ export const AdminDashboard: React.FC = () => {
                 <div>
                   <h3>Giám sát Hệ thống AI (AI Observability)</h3>
                   <p className="section-subtitle">
-                    Theo dõi chi phí API, độ trễ phản hồi, tổng token tiêu thụ và hiệu năng mô hình AI
+                    Theo dõi chi phí API, độ trễ phản hồi, tổng token tiêu thụ và hiệu năng mô hình
+                    AI
                   </p>
                 </div>
               </div>
@@ -1306,7 +1693,9 @@ export const AdminDashboard: React.FC = () => {
                   <Bot size={28} className="stat-icon blue" />
                   <div className="stat-details">
                     <span className="stat-label">Tổng lượt gọi AI</span>
-                    <span className="stat-value">{aiSummary?.totalRequests?.toLocaleString() || 0}</span>
+                    <span className="stat-value">
+                      {aiSummary?.totalRequests?.toLocaleString() || 0}
+                    </span>
                     <small>
                       Lỗi: {aiSummary?.errorCount || 0} ({aiSummary?.errorRatePercent || 0}%)
                     </small>
@@ -1317,9 +1706,12 @@ export const AdminDashboard: React.FC = () => {
                   <Cpu size={28} className="stat-icon purple" />
                   <div className="stat-details">
                     <span className="stat-label">Tokens Tiêu Thụ</span>
-                    <span className="stat-value">{aiSummary?.totalTokens?.toLocaleString() || 0}</span>
+                    <span className="stat-value">
+                      {aiSummary?.totalTokens?.toLocaleString() || 0}
+                    </span>
                     <small>
-                      In: {aiSummary?.totalPromptTokens?.toLocaleString() || 0} · Out: {aiSummary?.totalCompletionTokens?.toLocaleString() || 0}
+                      In: {aiSummary?.totalPromptTokens?.toLocaleString() || 0} · Out:{' '}
+                      {aiSummary?.totalCompletionTokens?.toLocaleString() || 0}
                     </small>
                   </div>
                 </div>
@@ -1328,8 +1720,12 @@ export const AdminDashboard: React.FC = () => {
                   <DollarSign size={28} className="stat-icon green" />
                   <div className="stat-details">
                     <span className="stat-label">Tổng Chi Phí Ước Tính</span>
-                    <span className="stat-value" style={{ color: '#34d399' }}>${aiSummary?.totalCostUsd || '0.0000'}</span>
-                    <small>Cache Tokens: {aiSummary?.totalCachedTokens?.toLocaleString() || 0}</small>
+                    <span className="stat-value" style={{ color: '#34d399' }}>
+                      ${aiSummary?.totalCostUsd || '0.0000'}
+                    </span>
+                    <small>
+                      Cache Tokens: {aiSummary?.totalCachedTokens?.toLocaleString() || 0}
+                    </small>
                   </div>
                 </div>
 
@@ -1337,7 +1733,9 @@ export const AdminDashboard: React.FC = () => {
                   <Zap size={28} className="stat-icon yellow" />
                   <div className="stat-details">
                     <span className="stat-label">Độ Trễ Trung Bình</span>
-                    <span className="stat-value" style={{ color: '#fbbf24' }}>{aiSummary?.avgLatencyMs || 0} ms</span>
+                    <span className="stat-value" style={{ color: '#fbbf24' }}>
+                      {aiSummary?.avgLatencyMs || 0} ms
+                    </span>
                     <small>Thời gian phản hồi trung bình</small>
                   </div>
                 </div>
@@ -1351,7 +1749,9 @@ export const AdminDashboard: React.FC = () => {
                       <Cpu size={18} className="ai-breakdown-icon blue" />
                       <h4>Phân bổ theo Model AI</h4>
                     </div>
-                    <span className="ai-chart-badge">{aiSummary?.byModel?.length || 0} Mô hình</span>
+                    <span className="ai-chart-badge">
+                      {aiSummary?.byModel?.length || 0} Mô hình
+                    </span>
                   </div>
                   <div className="table-scroll">
                     <table className="admin-table mini-table">
@@ -1367,14 +1767,23 @@ export const AdminDashboard: React.FC = () => {
                         {aiSummary?.byModel && aiSummary.byModel.length > 0 ? (
                           sortedAiModels.map((m: any, idx: number) => (
                             <tr key={idx}>
-                              <td><strong className="model-name">{m.model}</strong></td>
+                              <td>
+                                <strong className="model-name">{m.model}</strong>
+                              </td>
                               <td>{m.count?.toLocaleString()}</td>
                               <td>{m.tokens?.toLocaleString()}</td>
                               <td className="cost-tag">${Number(m.cost || 0).toFixed(4)}</td>
                             </tr>
                           ))
                         ) : (
-                          <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Chưa có dữ liệu</td></tr>
+                          <tr>
+                            <td
+                              colSpan={4}
+                              style={{ textAlign: 'center', color: 'var(--text-muted)' }}
+                            >
+                              Chưa có dữ liệu
+                            </td>
+                          </tr>
                         )}
                       </tbody>
                     </table>
@@ -1387,7 +1796,9 @@ export const AdminDashboard: React.FC = () => {
                       <Zap size={18} className="ai-breakdown-icon yellow" />
                       <h4>Phân bổ theo Tác vụ (Operation)</h4>
                     </div>
-                    <span className="ai-chart-badge">{aiSummary?.byOperation?.length || 0} Tác vụ</span>
+                    <span className="ai-chart-badge">
+                      {aiSummary?.byOperation?.length || 0} Tác vụ
+                    </span>
                   </div>
                   <div className="table-scroll">
                     <table className="admin-table mini-table">
@@ -1403,14 +1814,23 @@ export const AdminDashboard: React.FC = () => {
                         {aiSummary?.byOperation && aiSummary.byOperation.length > 0 ? (
                           sortedAiOperations.map((op: any, idx: number) => (
                             <tr key={idx}>
-                              <td><span className="role-badge ADMIN">{op.operation}</span></td>
+                              <td>
+                                <span className="role-badge ADMIN">{op.operation}</span>
+                              </td>
                               <td>{op.count?.toLocaleString()}</td>
                               <td>{op.tokens?.toLocaleString()}</td>
                               <td className="cost-tag">${Number(op.cost || 0).toFixed(4)}</td>
                             </tr>
                           ))
                         ) : (
-                          <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Chưa có dữ liệu</td></tr>
+                          <tr>
+                            <td
+                              colSpan={4}
+                              style={{ textAlign: 'center', color: 'var(--text-muted)' }}
+                            >
+                              Chưa có dữ liệu
+                            </td>
+                          </tr>
                         )}
                       </tbody>
                     </table>
@@ -1423,7 +1843,9 @@ export const AdminDashboard: React.FC = () => {
                 <div className="ai-logs-header">
                   <div>
                     <h4>Nhật ký gọi AI gần đây (Audit Usage Logs)</h4>
-                    <p className="text-muted">Chi tiết các request gọi API, độ trễ và chi phí theo thời gian thực</p>
+                    <p className="text-muted">
+                      Chi tiết các request gọi API, độ trễ và chi phí theo thời gian thực
+                    </p>
                   </div>
                 </div>
                 <div className="table-scroll">
@@ -1453,25 +1875,36 @@ export const AdminDashboard: React.FC = () => {
                             <td className="monospace-text">#{u.usageId}</td>
                             <td className="bold-text">{u.username || `User #${u.userId}`}</td>
                             <td>
-                              <div><strong>{u.model}</strong></div>
-                              <small style={{ color: 'var(--text-secondary)' }}>{u.operation}</small>
+                              <div>
+                                <strong>{u.model}</strong>
+                              </div>
+                              <small style={{ color: 'var(--text-secondary)' }}>
+                                {u.operation}
+                              </small>
                             </td>
                             <td>
                               <strong>{u.totalTokens?.toLocaleString()}</strong>
                               <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                                In: {u.promptTokens} · Out: {u.completionTokens} · Cache: {u.cachedTokens}
+                                In: {u.promptTokens} · Out: {u.completionTokens} · Cache:{' '}
+                                {u.cachedTokens}
                               </div>
                             </td>
                             <td>
-                              <span className={`latency-tag ${u.latencyMs > 2000 ? 'high' : u.latencyMs > 1000 ? 'medium' : 'good'}`}>
+                              <span
+                                className={`latency-tag ${u.latencyMs > 2000 ? 'high' : u.latencyMs > 1000 ? 'medium' : 'good'}`}
+                              >
                                 {u.latencyMs} ms
                               </span>
                             </td>
                             <td>
-                              <span className="cost-tag">${Number(u.estimatedCost || 0).toFixed(6)}</span>
+                              <span className="cost-tag">
+                                ${Number(u.estimatedCost || 0).toFixed(6)}
+                              </span>
                             </td>
                             <td>
-                              <span className={`tx-status-badge ${u.status === 'SUCCESS' ? 'SUCCESS' : 'CANCELLED'}`}>
+                              <span
+                                className={`tx-status-badge ${u.status === 'SUCCESS' ? 'SUCCESS' : 'CANCELLED'}`}
+                              >
                                 {u.status}
                               </span>
                             </td>
@@ -1494,6 +1927,154 @@ export const AdminDashboard: React.FC = () => {
           ) : null}
         </div>
       </div>
+
+      {/* Modal: Transaction action */}
+      {transactionAction &&
+        (() => {
+          const { transaction, action } = transactionAction;
+          const requiresReason = action !== 'APPROVE';
+          const title =
+            action === 'APPROVE'
+              ? 'Duyệt giao dịch'
+              : action === 'REJECT'
+                ? 'Từ chối giao dịch'
+                : action === 'REVERSE_DEPOSIT'
+                  ? 'Thu hồi giao dịch nạp tiền'
+                  : 'Hoàn tiền giao dịch';
+          const confirmLabel =
+            action === 'APPROVE'
+              ? 'Xác nhận duyệt'
+              : action === 'REJECT'
+                ? 'Xác nhận từ chối'
+                : action === 'REVERSE_DEPOSIT'
+                  ? 'Xác nhận thu hồi'
+                  : 'Xác nhận hoàn tiền';
+          const impactMessage =
+            action === 'APPROVE'
+              ? 'Giao dịch nạp tiền sẽ được hoàn tất và số dư người dùng được cập nhật.'
+              : action === 'REJECT'
+                ? 'Giao dịch sẽ bị hủy và không thể duyệt lại từ màn hình này.'
+                : action === 'REVERSE_DEPOSIT'
+                  ? 'Số tiền đã nạp sẽ bị trừ khỏi ví. Thao tác thất bại nếu số dư hiện tại không đủ.'
+                  : 'Số tiền của giao dịch mua gói sẽ được hoàn lại vào ví người dùng.';
+
+          return (
+            <div className="modal-overlay" role="presentation" onMouseDown={closeTransactionAction}>
+              <div
+                className="modal-box transaction-action-modal glass-panel animate-slide-up"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="transaction-action-title"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <div className="modal-title-row">
+                  <div>
+                    <h3 id="transaction-action-title">{title}</h3>
+                    <p>Kiểm tra thông tin trước khi xác nhận thao tác tài chính.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="modal-close-button"
+                    aria-label="Đóng popup"
+                    onClick={closeTransactionAction}
+                    disabled={processingTransaction}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleTransactionActionSubmit} className="admin-form">
+                  <div className="transaction-action-summary">
+                    <div>
+                      <span>Mã giao dịch</span>
+                      <strong>#{transaction.transactionId}</strong>
+                    </div>
+                    <div>
+                      <span>Người dùng</span>
+                      <strong>{transaction.username}</strong>
+                    </div>
+                    <div>
+                      <span>Loại</span>
+                      <strong>{transaction.type}</strong>
+                    </div>
+                    <div>
+                      <span>Số tiền</span>
+                      <strong className="transaction-action-amount">
+                        {transaction.amount.toLocaleString('vi-VN')}đ
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Ngân hàng</span>
+                      <strong>{transaction.bankId || '—'}</strong>
+                    </div>
+                    <div>
+                      <span>Mã đối soát</span>
+                      <strong>{transaction.referenceCode || '—'}</strong>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`transaction-impact ${action === 'APPROVE' ? 'safe' : 'warning'}`}
+                  >
+                    {impactMessage}
+                  </div>
+
+                  {requiresReason && (
+                    <div className="form-group">
+                      <label htmlFor="transaction-action-reason">
+                        {action === 'REJECT'
+                          ? 'Lý do từ chối'
+                          : action === 'REVERSE_DEPOSIT'
+                            ? 'Lý do thu hồi'
+                            : 'Lý do hoàn tiền'}
+                      </label>
+                      <textarea
+                        id="transaction-action-reason"
+                        className="input-control"
+                        rows={4}
+                        maxLength={500}
+                        required
+                        autoFocus
+                        value={transactionActionReason}
+                        onChange={(event) => {
+                          setTransactionActionReason(event.target.value);
+                          setTransactionActionError('');
+                        }}
+                        placeholder="Nhập lý do rõ ràng để phục vụ đối soát..."
+                        disabled={processingTransaction}
+                      />
+                      <small>{transactionActionReason.length}/500 ký tự</small>
+                    </div>
+                  )}
+
+                  {transactionActionError && (
+                    <div className="error-alert">{transactionActionError}</div>
+                  )}
+
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={closeTransactionAction}
+                      disabled={processingTransaction}
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="submit"
+                      className={action === 'APPROVE' ? 'btn-primary' : 'btn-danger'}
+                      disabled={
+                        processingTransaction || (requiresReason && !transactionActionReason.trim())
+                      }
+                    >
+                      {processingTransaction ? <Loader className="spin" size={16} /> : confirmLabel}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* Modal: Create User */}
       {showCreateUserModal && (
@@ -2090,6 +2671,70 @@ export const AdminDashboard: React.FC = () => {
           margin-bottom: 1.25rem;
         }
 
+        .community-analytics-section {
+          margin: 0.25rem 0 1.25rem;
+        }
+
+        .community-analytics-heading {
+          align-items: flex-end;
+          margin-bottom: 0.75rem;
+        }
+
+        .community-analytics-heading h3 {
+          margin-bottom: 0.2rem;
+        }
+
+        .section-subtitle {
+          margin: 0;
+          color: var(--text-muted);
+          font-size: 0.82rem;
+        }
+
+        .analytics-load-warning {
+          margin: 0.35rem 0 0;
+          color: #fbbf24;
+          font-size: 0.78rem;
+        }
+
+        .community-stats-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .community-stats-grid .stat-details {
+          min-width: 0;
+        }
+
+        .community-stats-grid small {
+          display: block;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 100%;
+        }
+
+        .analytics-toolbar .input-control {
+          min-width: 170px;
+          flex: 1;
+        }
+
+        .analytics-all-time-btn {
+          white-space: nowrap;
+          min-height: 42px;
+        }
+
+        .analytics-metric-switch,
+        .document-analytics-title {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+
+        .analytics-empty-cell {
+          text-align: center;
+          padding: 2rem !important;
+          color: var(--text-muted);
+        }
+
         .stat-box {
           display: flex;
           align-items: center;
@@ -2409,6 +3054,67 @@ export const AdminDashboard: React.FC = () => {
           position: relative;
         }
 
+        .transaction-action-modal {
+          position: relative;
+        }
+
+        .transaction-action-summary {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 0.65rem;
+          padding: 1rem;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.035);
+        }
+
+        .transaction-action-summary > div {
+          display: flex;
+          flex-direction: column;
+          gap: 0.2rem;
+          min-width: 0;
+        }
+
+        .transaction-action-summary span {
+          color: var(--text-muted);
+          font-size: 0.75rem;
+        }
+
+        .transaction-action-summary strong {
+          overflow-wrap: anywhere;
+        }
+
+        .transaction-action-amount {
+          color: var(--success);
+          font-size: 1.05rem;
+        }
+
+        .transaction-impact {
+          margin: 1rem 0;
+          padding: 0.8rem 0.9rem;
+          border: 1px solid;
+          border-radius: 10px;
+          font-size: 0.88rem;
+          line-height: 1.5;
+        }
+
+        .transaction-impact.safe {
+          color: #86efac;
+          border-color: rgba(34, 197, 94, 0.3);
+          background: rgba(34, 197, 94, 0.09);
+        }
+
+        .transaction-impact.warning {
+          color: #fca5a5;
+          border-color: rgba(239, 68, 68, 0.3);
+          background: rgba(239, 68, 68, 0.09);
+        }
+
+        .transaction-action-modal textarea.input-control {
+          resize: vertical;
+          min-height: 100px;
+        }
+
         .modal-title-row {
           display: flex;
           align-items: flex-start;
@@ -2440,6 +3146,12 @@ export const AdminDashboard: React.FC = () => {
           color: var(--text-secondary);
           cursor: pointer;
           padding: 0.25rem;
+        }
+
+        @media (max-width: 520px) {
+          .transaction-action-summary {
+            grid-template-columns: 1fr;
+          }
         }
 
         /* Tables & Lists */
@@ -2942,7 +3654,8 @@ export const AdminDashboard: React.FC = () => {
 
         @media (max-width: 900px) {
           .dashboard-activity-grid,
-          .ai-charts-grid {
+          .ai-charts-grid,
+          .community-stats-grid {
             grid-template-columns: 1fr;
           }
         }

@@ -273,4 +273,173 @@ public class AdminAnalyticsService : IAdminAnalyticsService
             ViewCount = doc.ViewCount ?? 0
         };
     }
+
+    public async Task<CommunityAnalyticsSummaryDto> GetCommunityAnalyticsSummaryAsync(
+        DateTime? startDate,
+        DateTime? endDate,
+        CancellationToken cancellationToken = default)
+    {
+        var reportedAccounts = await GetReportedAccountsAsync(1, 1, null, startDate, endDate, cancellationToken: cancellationToken);
+        var downloadedDocuments = await GetDocumentEngagementRankingAsync("downloads", 1, 1, null, startDate, endDate, cancellationToken: cancellationToken);
+        var bookmarkedDocuments = await GetDocumentEngagementRankingAsync("bookmarks", 1, 1, null, startDate, endDate, cancellationToken: cancellationToken);
+
+        return new CommunityAnalyticsSummaryDto
+        {
+            MostReportedAccount = reportedAccounts.Items.FirstOrDefault(),
+            MostDownloadedDocument = downloadedDocuments.Items.FirstOrDefault(),
+            MostBookmarkedDocument = bookmarkedDocuments.Items.FirstOrDefault()
+        };
+    }
+
+    public async Task<PagedResult<ReportedAccountAnalyticsDto>> GetReportedAccountsAsync(
+        int pageNumber,
+        int pageSize,
+        string? search,
+        DateTime? startDate,
+        DateTime? endDate,
+        string? sortBy = null,
+        string? sortDirection = null,
+        CancellationToken cancellationToken = default)
+    {
+        pageNumber = Math.Max(1, pageNumber);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var reports = _dbContext.DocumentReports.AsNoTracking().AsQueryable();
+        if (startDate.HasValue) reports = reports.Where(r => r.CreatedAt >= startDate.Value);
+        if (endDate.HasValue)
+        {
+            var exclusiveEnd = endDate.Value.Date.AddDays(1);
+            reports = reports.Where(r => r.CreatedAt < exclusiveEnd);
+        }
+
+        var confirmedStatuses = new[] { "VIOLATION_CONFIRMED", "ACTION_TAKEN", "ACTIONED", "UPHELD" };
+        var query = reports
+            .Where(r => r.Document != null && r.Document.User != null)
+            .GroupBy(r => new
+            {
+                r.Document.UserId,
+                r.Document.User.Username,
+                r.Document.User.Email,
+                r.Document.User.Status
+            })
+            .Select(group => new ReportedAccountAnalyticsDto
+            {
+                UserId = group.Key.UserId,
+                Username = group.Key.Username,
+                Email = group.Key.Email,
+                Status = group.Key.Status ?? string.Empty,
+                ReportedDocumentCount = group.Select(r => r.DocumentId).Distinct().Count(),
+                TotalReports = group.Count(),
+                PendingReports = group.Count(r => r.Status == null || r.Status == "PENDING"),
+                ConfirmedReports = group.Count(r => confirmedStatuses.Contains(r.Status!))
+            });
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var normalizedSearch = search.Trim().ToLower();
+            query = query.Where(row => row.Username.ToLower().Contains(normalizedSearch) ||
+                                       (row.Email != null && row.Email.ToLower().Contains(normalizedSearch)));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var descending = !string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
+        var normalizedSort = sortBy?.Trim().ToLowerInvariant();
+        IOrderedQueryable<ReportedAccountAnalyticsDto> orderedQuery = normalizedSort switch
+        {
+            "rank" => descending ? query.OrderBy(row => row.TotalReports) : query.OrderByDescending(row => row.TotalReports),
+            "username" => descending ? query.OrderByDescending(row => row.Username) : query.OrderBy(row => row.Username),
+            "reporteddocumentcount" => descending ? query.OrderByDescending(row => row.ReportedDocumentCount) : query.OrderBy(row => row.ReportedDocumentCount),
+            "pendingreports" => descending ? query.OrderByDescending(row => row.PendingReports) : query.OrderBy(row => row.PendingReports),
+            "confirmedreports" => descending ? query.OrderByDescending(row => row.ConfirmedReports) : query.OrderBy(row => row.ConfirmedReports),
+            "status" => descending ? query.OrderByDescending(row => row.Status) : query.OrderBy(row => row.Status),
+            _ => descending ? query.OrderByDescending(row => row.TotalReports) : query.OrderBy(row => row.TotalReports)
+        };
+        var items = await orderedQuery
+            .ThenByDescending(row => row.ReportedDocumentCount)
+            .ThenBy(row => row.UserId)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+        return new PagedResult<ReportedAccountAnalyticsDto>(items, totalCount, pageNumber, pageSize);
+    }
+
+    public async Task<PagedResult<DocumentEngagementAnalyticsDto>> GetDocumentEngagementRankingAsync(
+        string metric,
+        int pageNumber,
+        int pageSize,
+        string? search,
+        DateTime? startDate,
+        DateTime? endDate,
+        string? sortBy = null,
+        string? sortDirection = null,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedMetric = metric.Trim().ToLowerInvariant();
+        if (normalizedMetric is not ("downloads" or "bookmarks"))
+            throw new ArgumentException("Metric must be 'downloads' or 'bookmarks'.", nameof(metric));
+
+        pageNumber = Math.Max(1, pageNumber);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var documents = _dbContext.Documents.AsNoTracking().Where(d => d.IsDeleted != true);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var normalizedSearch = search.Trim().ToLower();
+            documents = documents.Where(d => d.Title.ToLower().Contains(normalizedSearch) ||
+                                             d.User.Username.ToLower().Contains(normalizedSearch));
+        }
+
+        var rows = documents.Select(document => new DocumentEngagementAnalyticsDto
+        {
+            DocumentId = document.DocumentId,
+            Title = document.Title,
+            OwnerUserId = document.UserId,
+            OwnerUsername = document.User.Username ?? string.Empty,
+            FileExtension = document.FileExtension,
+            SharingPermission = document.SharingPermission ?? string.Empty,
+            UniqueDownloads = _dbContext.DocumentActivities
+                .Where(activity => activity.DocumentId == document.DocumentId &&
+                                   activity.ActivityType == "DOWNLOAD" &&
+                                   activity.UserId != document.UserId &&
+                                   (!startDate.HasValue || activity.CreatedAt >= startDate.Value) &&
+                                   (!endDate.HasValue || activity.CreatedAt < endDate.Value.Date.AddDays(1)))
+                .Select(activity => activity.UserId)
+                .Distinct()
+                .Count(),
+            UniqueBookmarks = _dbContext.Bookmarks
+                .Where(bookmark => bookmark.DocumentId == document.DocumentId &&
+                                   bookmark.UserId != document.UserId &&
+                                   (!startDate.HasValue || bookmark.CreatedAt >= startDate.Value) &&
+                                   (!endDate.HasValue || bookmark.CreatedAt < endDate.Value.Date.AddDays(1)))
+                .Select(bookmark => bookmark.UserId)
+                .Distinct()
+                .Count(),
+            ViewCount = document.ViewCount ?? 0
+        });
+
+        rows = normalizedMetric == "downloads"
+            ? rows.Where(row => row.UniqueDownloads > 0)
+            : rows.Where(row => row.UniqueBookmarks > 0);
+        var descending = !string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
+        var normalizedSort = sortBy?.Trim().ToLowerInvariant();
+        IOrderedQueryable<DocumentEngagementAnalyticsDto> orderedRows = normalizedSort switch
+        {
+            "rank" when normalizedMetric == "downloads" => descending ? rows.OrderBy(row => row.UniqueDownloads) : rows.OrderByDescending(row => row.UniqueDownloads),
+            "rank" => descending ? rows.OrderBy(row => row.UniqueBookmarks) : rows.OrderByDescending(row => row.UniqueBookmarks),
+            "title" => descending ? rows.OrderByDescending(row => row.Title) : rows.OrderBy(row => row.Title),
+            "ownerusername" => descending ? rows.OrderByDescending(row => row.OwnerUsername) : rows.OrderBy(row => row.OwnerUsername),
+            "uniquedownloads" => descending ? rows.OrderByDescending(row => row.UniqueDownloads) : rows.OrderBy(row => row.UniqueDownloads),
+            "uniquebookmarks" => descending ? rows.OrderByDescending(row => row.UniqueBookmarks) : rows.OrderBy(row => row.UniqueBookmarks),
+            "viewcount" => descending ? rows.OrderByDescending(row => row.ViewCount) : rows.OrderBy(row => row.ViewCount),
+            "sharingpermission" => descending ? rows.OrderByDescending(row => row.SharingPermission) : rows.OrderBy(row => row.SharingPermission),
+            _ when normalizedMetric == "downloads" => rows.OrderByDescending(row => row.UniqueDownloads),
+            _ => rows.OrderByDescending(row => row.UniqueBookmarks)
+        };
+
+        var totalCount = await orderedRows.CountAsync(cancellationToken);
+        var items = await orderedRows
+            .ThenBy(row => row.DocumentId)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+        return new PagedResult<DocumentEngagementAnalyticsDto>(items, totalCount, pageNumber, pageSize);
+    }
 }

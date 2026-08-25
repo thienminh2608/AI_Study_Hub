@@ -77,6 +77,7 @@ export interface DocumentVersion {
   createdByName: string;
   createdAt: string;
   isCurrent: boolean;
+  aiParsingStatus: string;
 }
 
 export interface StorageQuota {
@@ -648,6 +649,31 @@ export const api = {
       if (endDate) params.set('endDate', endDate);
       const query = params.toString();
       return request<any>(`/admin/dashboard${query ? `?${query}` : ''}`, { method: 'GET' });
+    },
+    getCommunityAnalyticsSummary: (startDate?: string, endDate?: string) => {
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const query = params.toString();
+      return request<any>(`/admin/analytics/community/summary${query ? `?${query}` : ''}`, { method: 'GET' });
+    },
+    getReportedAccounts: (page = 1, pageSize = 8, search = '', startDate = '', endDate = '', sortBy = '', sortDirection = '') => {
+      const params = new URLSearchParams({ pageNumber: String(page), pageSize: String(pageSize) });
+      if (search) params.set('search', search);
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      if (sortBy) params.set('sortBy', sortBy);
+      if (sortDirection) params.set('sortDirection', sortDirection);
+      return request<any>(`/admin/analytics/accounts/reported?${params.toString()}`, { method: 'GET' });
+    },
+    getDocumentEngagementRanking: (metric: 'downloads' | 'bookmarks', page = 1, pageSize = 8, search = '', startDate = '', endDate = '', sortBy = '', sortDirection = '') => {
+      const params = new URLSearchParams({ metric, pageNumber: String(page), pageSize: String(pageSize) });
+      if (search) params.set('search', search);
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      if (sortBy) params.set('sortBy', sortBy);
+      if (sortDirection) params.set('sortDirection', sortDirection);
+      return request<any>(`/admin/analytics/documents/ranking?${params.toString()}`, { method: 'GET' });
     },
     getUsers: (page = 1, pageSize = 8, search = '', status = '') => {
       const params = new URLSearchParams();

@@ -53,6 +53,13 @@ public class DocumentController : ControllerBase
         return userId;
     }
 
+    private bool TryGetCurrentUserId(out int userId)
+    {
+        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
+        userId = 0;
+        return claim != null && int.TryParse(claim.Value, out userId);
+    }
+
     [HttpPost("upload")]
     public async Task<IActionResult> Upload(IFormFile file, [FromQuery] int? folderId)
     {
@@ -478,8 +485,13 @@ public class DocumentController : ControllerBase
         if (doc == null)
             return NotFound(new { message = "Không tìm thấy tài liệu." });
 
-        int userId = GetCurrentUserId();
-        doc.ViewCount = await _documentService.IncrementViewCountAsync(doc.DocumentId, userId);
+        // A share link is intentionally accessible without a JWT. Only create a
+        // user activity when the viewer is authenticated because DocumentActivity
+        // requires a real user id.
+        if (TryGetCurrentUserId(out int userId))
+        {
+            doc.ViewCount = await _documentService.IncrementViewCountAsync(doc.DocumentId, userId);
+        }
         return Ok(doc);
     }
 

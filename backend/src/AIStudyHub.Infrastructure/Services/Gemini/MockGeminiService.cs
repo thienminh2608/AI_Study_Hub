@@ -36,7 +36,11 @@ public partial class MockGeminiService : IGeminiService
             .MessageContent ?? "Hello";
 
         string mockResponse;
-        if (lastUserMessage.Contains("polymorphism", StringComparison.OrdinalIgnoreCase) || lastUserMessage.Contains("đa hình", StringComparison.OrdinalIgnoreCase))
+        if (lastUserMessage.Contains("Hãy dùng SEARCH", StringComparison.OrdinalIgnoreCase))
+        {
+            mockResponse = "SEARCH";
+        }
+        else if (lastUserMessage.Contains("polymorphism", StringComparison.OrdinalIgnoreCase) || lastUserMessage.Contains("đa hình", StringComparison.OrdinalIgnoreCase))
         {
             mockResponse = "RESPONSE: [MOCK] Đa hình (Polymorphism) là một trong bốn tính chất cốt lõi của lập trình hướng đối tượng (OOP). Nó cho phép các đối tượng thuộc các lớp khác nhau phản hồi cùng một thông điệp (hàm gọi) theo cách riêng của chúng.";
         }

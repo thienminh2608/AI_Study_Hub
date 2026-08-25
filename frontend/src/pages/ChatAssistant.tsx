@@ -59,11 +59,18 @@ interface ChatCitation {
   createdAt?: string;
 }
 
+interface AiQuota {
+  aiPromptsToday: number;
+  aiPromptLimitPerDay: number;
+}
+
 export const ChatAssistant: React.FC = () => {
   const { confirm, notify } = useUiFeedback();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [citationsByMessageId, setCitationsByMessageId] = useState<Record<number, ChatCitation[]>>({});
+  const [citationsByMessageId, setCitationsByMessageId] = useState<Record<number, ChatCitation[]>>(
+    {},
+  );
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -83,8 +90,21 @@ export const ChatAssistant: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [agentAction, setAgentAction] = useState<string | null>(null); // Displays AI Agent running loops
   const [retryableMessageId, setRetryableMessageId] = useState<number | null>(null);
+  const [aiQuota, setAiQuota] = useState<AiQuota | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const loadAiQuota = useCallback(async () => {
+    try {
+      const data = await api.documentExtra.getStorageQuota();
+      setAiQuota({
+        aiPromptsToday: data.aiPromptsToday ?? 0,
+        aiPromptLimitPerDay: data.aiPromptLimitPerDay ?? 0,
+      });
+    } catch (err) {
+      console.error('Error loading AI quota:', err);
+    }
+  }, []);
 
   // Load Sessions
   const loadSessions = useCallback(async () => {
@@ -143,6 +163,10 @@ export const ChatAssistant: React.FC = () => {
       })
       .catch((err) => console.error('Error loading documents for chat:', err));
   }, [searchParams, setSearchParams, loadSessions]);
+
+  useEffect(() => {
+    loadAiQuota();
+  }, [loadAiQuota]);
 
   useEffect(() => {
     if (currentSessionId) {
@@ -262,10 +286,11 @@ export const ChatAssistant: React.FC = () => {
       notify(
         err instanceof ApiRequestError && err.code === 'AI_QUOTA_EXHAUSTED'
           ? err.message
-          : (err.message || 'Gặp lỗi trong quá trình giao tiếp với AI.'),
+          : err.message || 'Gặp lỗi trong quá trình giao tiếp với AI.',
         'error',
       );
     } finally {
+      loadAiQuota();
       setSending(false);
     }
   };
@@ -417,6 +442,15 @@ export const ChatAssistant: React.FC = () => {
                   {sessions.find((s) => s.sessionId === currentSessionId)?.sessionName ||
                     'Trợ lý học tập AI'}
                 </h4>
+                {aiQuota && (
+                  <div
+                    className={`ai-quota-badge ${aiQuota.aiPromptsToday >= aiQuota.aiPromptLimitPerDay ? 'exhausted' : ''}`}
+                    title={`Đã dùng ${aiQuota.aiPromptsToday}/${aiQuota.aiPromptLimitPerDay} lượt trong chu kỳ 24 giờ`}
+                  >
+                    Còn {Math.max(0, aiQuota.aiPromptLimitPerDay - aiQuota.aiPromptsToday)}/
+                    {aiQuota.aiPromptLimitPerDay} lượt
+                  </div>
+                )}
               </div>
 
               {/* Messages Panel */}
@@ -460,26 +494,34 @@ export const ChatAssistant: React.FC = () => {
                           {isBot && <Bot size={28} className="chat-avatar bot" />}
                           <div className={`message-bubble glass-card ${isBot ? 'bot' : 'user'}`}>
                             {renderMessageContent(
-                              (m.citations?.length || citationsByMessageId[m.messageId]?.length)
+                              m.citations?.length || citationsByMessageId[m.messageId]?.length
                                 ? stripSourceSuffix(m.messageContent)
                                 : m.messageContent,
                             )}
-                            {((m.citations && m.citations.length > 0) || citationsByMessageId[m.messageId]?.length) ? (
+                            {(m.citations && m.citations.length > 0) ||
+                            citationsByMessageId[m.messageId]?.length ? (
                               <div className="message-citations">
-                                {(m.citations && m.citations.length > 0 ? m.citations : citationsByMessageId[m.messageId]).map((citation, cIdx) => (
+                                {(m.citations && m.citations.length > 0
+                                  ? m.citations
+                                  : citationsByMessageId[m.messageId]
+                                ).map((citation, cIdx) => (
                                   <button
                                     key={citation.citationId ?? citation.chunkId ?? cIdx}
                                     type="button"
                                     className="citation-chip"
                                     onClick={() => {
                                       if (citation.citationId) {
-                                        navigate(`/document/${citation.documentId}?citation=${citation.citationId}`);
+                                        navigate(
+                                          `/document/${citation.documentId}?citation=${citation.citationId}`,
+                                        );
                                       } else if (citation.snippet) {
                                         setActiveCitation(citation);
                                       } else {
                                         navigate(
                                           `/document/${citation.documentId}?chunk=${citation.chunkId}&start=${citation.startOffset}&end=${citation.endOffset}` +
-                                            (citation.pageNumber || citation.page ? `&page=${citation.pageNumber || citation.page}` : ''),
+                                            (citation.pageNumber || citation.page
+                                              ? `&page=${citation.pageNumber || citation.page}`
+                                              : ''),
                                         );
                                       }
                                     }}
@@ -487,7 +529,9 @@ export const ChatAssistant: React.FC = () => {
                                     <LinkIcon size={12} />
                                     {citation.pageNumber || citation.page
                                       ? `Trang ${citation.pageNumber || citation.page}`
-                                      : (citation.chunkId ? `Chunk ${citation.chunkId}` : 'Trích dẫn')}
+                                      : citation.chunkId
+                                        ? `Chunk ${citation.chunkId}`
+                                        : 'Trích dẫn'}
                                   </button>
                                 ))}
                               </div>
@@ -499,7 +543,11 @@ export const ChatAssistant: React.FC = () => {
                                 disabled={sending}
                                 onClick={() => sendQuestion(m.messageContent, m.messageId)}
                               >
-                                {sending ? <Loader size={13} className="spin" /> : <RotateCcw size={13} />}
+                                {sending ? (
+                                  <Loader size={13} className="spin" />
+                                ) : (
+                                  <RotateCcw size={13} />
+                                )}
                                 Thử lại câu hỏi
                               </button>
                             )}
@@ -1007,6 +1055,31 @@ export const ChatAssistant: React.FC = () => {
 
         .citation-chip:hover {
           background: rgba(0, 180, 216, 0.16);
+        }
+
+        .chat-header-bar h4 {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .ai-quota-badge {
+          flex-shrink: 0;
+          margin-left: auto;
+          padding: 0.35rem 0.7rem;
+          border: 1px solid rgba(0, 180, 216, 0.3);
+          border-radius: 999px;
+          background: rgba(0, 180, 216, 0.1);
+          color: var(--accent-blue);
+          font-size: 0.78rem;
+          font-weight: 700;
+        }
+
+        .ai-quota-badge.exhausted {
+          border-color: rgba(239, 68, 68, 0.35);
+          background: rgba(239, 68, 68, 0.1);
+          color: var(--danger);
         }
 
         .retry-message-btn {

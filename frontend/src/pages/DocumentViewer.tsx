@@ -4,7 +4,16 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type SubjectTreeNode } from '../services/api';
 import { useUiFeedback } from '../context/UiFeedbackContext';
 import { useAuth } from '../context/AuthContext';
-import { ArrowLeft, Trash2, Share2, AlertOctagon, Loader, Download, History, Pencil } from 'lucide-react';
+import {
+  ArrowLeft,
+  Trash2,
+  Share2,
+  AlertOctagon,
+  Loader,
+  Download,
+  History,
+  Pencil,
+} from 'lucide-react';
 import { FileTypeIcon } from '../components/FileTypeIcon';
 import { OriginalDocumentPreview } from '../components/OriginalDocumentPreview';
 import { ManageAccessModal } from '../components/ManageAccessModal';
@@ -49,6 +58,8 @@ interface DocumentDetails {
   publicReviewBlocked?: boolean;
   appealStatus?: string;
   extractionCoveragePercent?: number | null;
+  imageContentDetected?: boolean;
+  unreadImageContentWarning?: boolean;
 }
 
 const flattenSubjectTree = (nodes: SubjectTreeNode[]): SubjectTreeNode[] =>
@@ -73,7 +84,8 @@ const SearchableSelect: React.FC<{
   const containerRef = useRef<HTMLDivElement | null>(null);
   const selected = options.find((option) => option.value === value);
   const filtered = options.filter((option) =>
-    option.label.toLocaleLowerCase('vi').includes(search.trim().toLocaleLowerCase('vi')));
+    option.label.toLocaleLowerCase('vi').includes(search.trim().toLocaleLowerCase('vi')),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -86,8 +98,13 @@ const SearchableSelect: React.FC<{
 
   return (
     <div className={`searchable-select ${open ? 'open' : ''}`} ref={containerRef}>
-      <button type="button" className="searchable-select-trigger input-control" onClick={() => setOpen((current) => !current)}>
-        <span>{selected?.label || placeholder}</span><span aria-hidden="true">⌄</span>
+      <button
+        type="button"
+        className="searchable-select-trigger input-control"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>{selected?.label || placeholder}</span>
+        <span aria-hidden="true">⌄</span>
       </button>
       {open && (
         <div className="searchable-select-menu">
@@ -103,12 +120,18 @@ const SearchableSelect: React.FC<{
                 type="button"
                 key={option.value}
                 className={option.value === value ? 'active' : ''}
-                onClick={() => { onChange(option.value); setSearch(''); setOpen(false); }}
+                onClick={() => {
+                  onChange(option.value);
+                  setSearch('');
+                  setOpen(false);
+                }}
               >
                 {option.label}
               </button>
             ))}
-            {!filtered.length && <span className="searchable-select-empty">Không có kết quả phù hợp</span>}
+            {!filtered.length && (
+              <span className="searchable-select-empty">Không có kết quả phù hợp</span>
+            )}
           </div>
         </div>
       )}
@@ -130,7 +153,10 @@ export const DocumentViewer: React.FC = () => {
   const citationParam = searchParams.get('citation');
   const highlightStart = Number(searchParams.get('start'));
   const highlightEnd = Number(searchParams.get('end'));
-  const hasHighlight = Number.isFinite(highlightStart) && Number.isFinite(highlightEnd) && highlightEnd > highlightStart;
+  const hasHighlight =
+    Number.isFinite(highlightStart) &&
+    Number.isFinite(highlightEnd) &&
+    highlightEnd > highlightStart;
   const highlightRef = useRef<HTMLElement | null>(null);
   const highlightPageParam = Number(searchParams.get('page'));
   const hasHighlightPage = Number.isFinite(highlightPageParam) && highlightPageParam > 0;
@@ -142,7 +168,9 @@ export const DocumentViewer: React.FC = () => {
 
   // Citation Resolution
   const [citationMetadata, setCitationMetadata] = useState<any | null>(null);
-  const [resolvedHighlight, setResolvedHighlight] = useState<{ start: number; end: number } | null>(null);
+  const [resolvedHighlight, setResolvedHighlight] = useState<{ start: number; end: number } | null>(
+    null,
+  );
   const [showCitationMismatchModal, setShowCitationMismatchModal] = useState(false);
 
   // Edit & Share
@@ -194,10 +222,13 @@ export const DocumentViewer: React.FC = () => {
         } else {
           setViewMode('original');
         }
-        api.document.getReportReasons().then((reasons) => {
-          setReportReasons(reasons || []);
-          if (reasons?.length) setReportReason(reasons[0].reasonCode);
-        }).catch(() => {});
+        api.document
+          .getReportReasons()
+          .then((reasons) => {
+            setReportReasons(reasons || []);
+            if (reasons?.length) setReportReason(reasons[0].reasonCode);
+          })
+          .catch(() => {});
       } else {
         // Load via document ID
         const [details, reasons] = await Promise.all([
@@ -220,14 +251,21 @@ export const DocumentViewer: React.FC = () => {
 
               if (resolved.documentVersionId) {
                 try {
-                  const vData = await api.document.getTextByVersion(resolved.documentId, resolved.documentVersionId);
+                  const vData = await api.document.getTextByVersion(
+                    resolved.documentId,
+                    resolved.documentVersionId,
+                  );
                   targetExtractedText = vData.fullText || '';
                 } catch {
-                  const tData = await api.document.getText(resolved.documentId).catch(() => ({ extractedText: '' }));
+                  const tData = await api.document
+                    .getText(resolved.documentId)
+                    .catch(() => ({ extractedText: '' }));
                   targetExtractedText = tData.extractedText || '';
                 }
               } else {
-                const tData = await api.document.getText(resolved.documentId).catch(() => ({ extractedText: '' }));
+                const tData = await api.document
+                  .getText(resolved.documentId)
+                  .catch(() => ({ extractedText: '' }));
                 targetExtractedText = tData.extractedText || '';
               }
 
@@ -238,7 +276,10 @@ export const DocumentViewer: React.FC = () => {
               let matched = false;
               if (e > s && e <= targetExtractedText.length) {
                 const slice = targetExtractedText.slice(s, e);
-                if (slice.includes(snippet.slice(0, Math.min(snippet.length, 30))) || snippet.includes(slice.slice(0, Math.min(slice.length, 30)))) {
+                if (
+                  slice.includes(snippet.slice(0, Math.min(snippet.length, 30))) ||
+                  snippet.includes(slice.slice(0, Math.min(slice.length, 30)))
+                ) {
                   setResolvedHighlight({ start: s, end: e });
                   matched = true;
                 }
@@ -267,7 +308,9 @@ export const DocumentViewer: React.FC = () => {
             }
           } catch (citErr: any) {
             notify(citErr.message || 'Không thể giải mã trích dẫn.', 'error');
-            const tData = await api.document.getText(documentId).catch(() => ({ extractedText: '' }));
+            const tData = await api.document
+              .getText(documentId)
+              .catch(() => ({ extractedText: '' }));
             targetExtractedText = tData.extractedText || '';
           }
         } else {
@@ -298,7 +341,9 @@ export const DocumentViewer: React.FC = () => {
   }, [loadDocumentDetails]);
 
   const activeHighlight = useMemo(() => {
-    return resolvedHighlight || (hasHighlight ? { start: highlightStart, end: highlightEnd } : null);
+    return (
+      resolvedHighlight || (hasHighlight ? { start: highlightStart, end: highlightEnd } : null)
+    );
   }, [resolvedHighlight, hasHighlight, highlightStart, highlightEnd]);
 
   useEffect(() => {
@@ -376,8 +421,11 @@ export const DocumentViewer: React.FC = () => {
       if (!subjectTree.length) setSubjectTree(tree);
       const currentSubject = doc.subject || 'Khác';
       const matchingRoot = tree.find((root) => root.name === currentSubject);
-      const containingRoot = matchingRoot || tree.find((root) =>
-        flattenSubjectTree(root.children || []).some((child) => child.name === currentSubject));
+      const containingRoot =
+        matchingRoot ||
+        tree.find((root) =>
+          flattenSubjectTree(root.children || []).some((child) => child.name === currentSubject),
+        );
       const root = containingRoot || tree.find((item) => item.name === 'Khác') || tree[0];
       setEditRootSubjectId(root?.subjectId ?? null);
       setEditChildSubject(matchingRoot ? '' : currentSubject);
@@ -412,22 +460,29 @@ export const DocumentViewer: React.FC = () => {
         }
       } else if (showNewSubjectInput && selectedRoot) {
         if (newSubjectName.trim()) {
-          const resolved = await api.subjects.resolve(newSubjectName.trim(), selectedRoot.subjectId);
+          const resolved = await api.subjects.resolve(
+            newSubjectName.trim(),
+            selectedRoot.subjectId,
+          );
           targetSubject = resolved.subject;
           pendingSubjectRequested = 'child';
         } else {
           targetSubject = selectedRoot.name;
         }
       }
-      const updated = await api.document.updateMetadata(doc.documentId, editTitle.trim(), targetSubject);
-      setDoc((current) => current ? { ...current, ...updated } : updated);
+      const updated = await api.document.updateMetadata(
+        doc.documentId,
+        editTitle.trim(),
+        targetSubject,
+      );
+      setDoc((current) => (current ? { ...current, ...updated } : updated));
       setShowEditMetadataModal(false);
       notify(
         pendingSubjectRequested === 'root'
           ? 'Đã cập nhật tài liệu và gửi môn học mới tới Moderator để duyệt.'
           : pendingSubjectRequested === 'child'
             ? 'Đã cập nhật tài liệu và gửi chuyên mục mới tới Moderator để duyệt.'
-          : 'Đã cập nhật tên và môn học của tài liệu.',
+            : 'Đã cập nhật tên và môn học của tài liệu.',
         'success',
       );
     } catch (error: any) {
@@ -517,7 +572,7 @@ export const DocumentViewer: React.FC = () => {
             )}
 
             {/* Report */}
-            {!isOwner && (
+            {user && !isOwner && (
               <button
                 onClick={() => setShowReportModal(true)}
                 className="btn-secondary report-btn"
@@ -641,11 +696,19 @@ export const DocumentViewer: React.FC = () => {
                 Văn bản trích xuất (AI)
               </button>
             </div>
-            {typeof doc.extractionCoveragePercent === 'number' && doc.extractionCoveragePercent < 1 && (
-              <div className="coverage-warning">
+            {typeof doc.extractionCoveragePercent === 'number' &&
+              doc.extractionCoveragePercent < 1 && (
+                <div className="coverage-warning">
+                  <AlertOctagon size={16} />
+                  Chỉ trích xuất được khoảng {Math.round(doc.extractionCoveragePercent * 100)}% nội
+                  dung. Một số trang có thể chứa ảnh/nội dung quét chưa được đọc.
+                </div>
+               )}
+            {doc.imageContentDetected && doc.unreadImageContentWarning && (
+              <div className="coverage-warning" role="alert">
                 <AlertOctagon size={16} />
-                Chỉ trích xuất được khoảng {Math.round(doc.extractionCoveragePercent * 100)}% nội
-                dung. Một số trang có thể chứa ảnh/nội dung quét chưa được đọc.
+                AI đã xử lý phần văn bản của tài liệu. Một số hình ảnh, biểu đồ hoặc nội dung
+                nằm trong ảnh nhúng có thể chưa được nhận dạng.
               </div>
             )}
             {viewMode === 'original' ? (
@@ -711,14 +774,19 @@ export const DocumentViewer: React.FC = () => {
 
       {showEditMetadataModal &&
         createPortal(
-          <div className="viewport-modal-overlay" onMouseDown={() => !savingMetadata && setShowEditMetadataModal(false)}>
+          <div
+            className="viewport-modal-overlay"
+            onMouseDown={() => !savingMetadata && setShowEditMetadataModal(false)}
+          >
             <form
               className="modal-box glass-panel metadata-edit-modal animate-slide-up"
               onMouseDown={(event) => event.stopPropagation()}
               onSubmit={handleSaveMetadata}
             >
               <div className="metadata-modal-heading">
-                <span><Pencil size={20} /></span>
+                <span>
+                  <Pencil size={20} />
+                </span>
                 <div>
                   <h3>Chỉnh sửa thông tin tài liệu</h3>
                   <p>Đổi tên và phân loại tài liệu mà không làm thay đổi thư mục lưu trữ.</p>
@@ -742,11 +810,16 @@ export const DocumentViewer: React.FC = () => {
               <div className="form-group">
                 <label>Môn học chính</label>
                 <SearchableSelect
-                  value={showNewRootSubjectInput ? OTHER_SUBJECT_VALUE : String(editRootSubjectId ?? '')}
+                  value={
+                    showNewRootSubjectInput ? OTHER_SUBJECT_VALUE : String(editRootSubjectId ?? '')
+                  }
                   placeholder="Chọn môn học"
                   searchPlaceholder="Nhập để tìm môn học..."
                   options={[
-                    ...subjectTree.map((subject) => ({ value: String(subject.subjectId), label: subject.name })),
+                    ...subjectTree.map((subject) => ({
+                      value: String(subject.subjectId),
+                      label: subject.name,
+                    })),
                     { value: OTHER_SUBJECT_VALUE, label: 'Thêm môn học mới' },
                   ]}
                   onChange={(value) => {
@@ -785,7 +858,10 @@ export const DocumentViewer: React.FC = () => {
                       maxLength={100}
                     />
                   </div>
-                  <small>Nếu không nhập môn học, tài liệu sẽ được phân loại là “Khác” và nội dung chuyên mục sẽ không được tạo.</small>
+                  <small>
+                    Nếu không nhập môn học, tài liệu sẽ được phân loại là “Khác” và nội dung chuyên
+                    mục sẽ không được tạo.
+                  </small>
                 </div>
               )}
               {selectedEditRoot && !showNewRootSubjectInput && (
@@ -797,7 +873,10 @@ export const DocumentViewer: React.FC = () => {
                     searchPlaceholder="Nhập để tìm chuyên mục..."
                     options={[
                       { value: '', label: 'Không có chuyên mục' },
-                      ...availableEditChildren.map((subject) => ({ value: subject.name, label: subject.name })),
+                      ...availableEditChildren.map((subject) => ({
+                        value: subject.name,
+                        label: subject.name,
+                      })),
                       { value: OTHER_SUBJECT_VALUE, label: 'Thêm chuyên mục mới' },
                     ]}
                     onChange={(value) => {
@@ -824,9 +903,18 @@ export const DocumentViewer: React.FC = () => {
                   <small>Chuyên mục mới sẽ được gửi tới Moderator để duyệt.</small>
                 </div>
               )}
-              {metadataError && <span className="form-error" role="alert">{metadataError}</span>}
+              {metadataError && (
+                <span className="form-error" role="alert">
+                  {metadataError}
+                </span>
+              )}
               <div className="modal-actions">
-                <button type="button" className="btn-secondary" onClick={() => setShowEditMetadataModal(false)} disabled={savingMetadata}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setShowEditMetadataModal(false)}
+                  disabled={savingMetadata}
+                >
                   Hủy
                 </button>
                 <button
@@ -838,7 +926,13 @@ export const DocumentViewer: React.FC = () => {
                     (!showNewRootSubjectInput && !editRootSubjectId)
                   }
                 >
-                  {savingMetadata ? <><Loader className="spin" size={16} /> Đang lưu...</> : 'Lưu thay đổi'}
+                  {savingMetadata ? (
+                    <>
+                      <Loader className="spin" size={16} /> Đang lưu...
+                    </>
+                  ) : (
+                    'Lưu thay đổi'
+                  )}
                 </button>
               </div>
             </form>
@@ -1071,20 +1165,33 @@ export const DocumentViewer: React.FC = () => {
           </div>,
           document.body,
         )}
-      {showCitationMismatchModal && citationMetadata &&
+      {showCitationMismatchModal &&
+        citationMetadata &&
         createPortal(
-          <div className="viewport-modal-overlay" onMouseDown={() => setShowCitationMismatchModal(false)}>
+          <div
+            className="viewport-modal-overlay"
+            onMouseDown={() => setShowCitationMismatchModal(false)}
+          >
             <div
               className="modal-box glass-panel animate-slide-up"
               onMouseDown={(event) => event.stopPropagation()}
               style={{ maxWidth: '520px' }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}
+              >
                 <AlertOctagon size={24} style={{ color: '#f59e0b', flexShrink: 0 }} />
                 <h3 style={{ margin: 0 }}>Bản ghi trích dẫn AI</h3>
               </div>
-              <p style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '0.9rem', marginBottom: '12px' }}>
-                Trích dẫn được ghi nhận từ phiên bản <strong>v{citationMetadata.versionNumberSnapshot ?? 1}</strong>:
+              <p
+                style={{
+                  color: 'var(--text-muted, #94a3b8)',
+                  fontSize: '0.9rem',
+                  marginBottom: '12px',
+                }}
+              >
+                Trích dẫn được ghi nhận từ phiên bản{' '}
+                <strong>v{citationMetadata.versionNumberSnapshot ?? 1}</strong>:
               </p>
               <div
                 style={{
@@ -1104,7 +1211,8 @@ export const DocumentViewer: React.FC = () => {
                 "{citationMetadata.snippet}"
               </div>
               <p style={{ fontSize: '0.84rem', color: '#f59e0b', margin: '0 0 16px 0' }}>
-                Vị trí trích dẫn đã thay đổi hoặc không tìm thấy khớp hoàn chỉnh trong văn bản trích xuất hiện tại.
+                Vị trí trích dẫn đã thay đổi hoặc không tìm thấy khớp hoàn chỉnh trong văn bản trích
+                xuất hiện tại.
               </p>
               <div className="modal-actions">
                 <button className="btn-primary" onClick={() => setShowCitationMismatchModal(false)}>

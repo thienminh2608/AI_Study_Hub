@@ -15,6 +15,7 @@ public class DocumentVersionDto
     public string CreatedByName { get; set; } = null!;
     public DateTime CreatedAt { get; set; }
     public bool IsCurrent { get; set; }
+    public string AiParsingStatus { get; set; } = "PENDING";
 }
 
 public class CreateVersionRequest

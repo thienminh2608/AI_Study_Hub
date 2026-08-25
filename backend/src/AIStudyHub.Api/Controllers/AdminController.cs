@@ -57,6 +57,41 @@ public class AdminController : ControllerBase
         return Ok(contributors);
     }
 
+    [HttpGet("analytics/community/summary")]
+    public async Task<IActionResult> GetCommunityAnalyticsSummary([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+    {
+        return Ok(await _analyticsService.GetCommunityAnalyticsSummaryAsync(startDate, endDate));
+    }
+
+    [HttpGet("analytics/accounts/reported")]
+    public async Task<IActionResult> GetReportedAccounts(
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 8,
+        [FromQuery] string? search = null,
+        [FromQuery] DateTime? startDate = null,
+        [FromQuery] DateTime? endDate = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDirection = null)
+    {
+        return Ok(await _analyticsService.GetReportedAccountsAsync(pageNumber, pageSize, search, startDate, endDate, sortBy, sortDirection));
+    }
+
+    [HttpGet("analytics/documents/ranking")]
+    public async Task<IActionResult> GetDocumentEngagementRanking(
+        [FromQuery] string metric = "downloads",
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 8,
+        [FromQuery] string? search = null,
+        [FromQuery] DateTime? startDate = null,
+        [FromQuery] DateTime? endDate = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDirection = null)
+    {
+        if (metric is not ("downloads" or "bookmarks"))
+            return BadRequest(new { message = "Chỉ hỗ trợ thống kê downloads hoặc bookmarks." });
+        return Ok(await _analyticsService.GetDocumentEngagementRankingAsync(metric, pageNumber, pageSize, search, startDate, endDate, sortBy, sortDirection));
+    }
+
     [HttpGet("analytics/users/{userId}/contribution-score")]
     public async Task<IActionResult> GetUserContributionScore(int userId)
     {

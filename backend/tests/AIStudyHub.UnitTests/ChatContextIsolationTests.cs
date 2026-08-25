@@ -295,6 +295,45 @@ public class ChatContextIsolationTests : IDisposable
     }
 
     [Fact]
+    public async Task AttachedDocument_InsufficientContext_IsAccepted_Without_Forcing_View()
+    {
+        await SeedDefaultTierAsync();
+        var user = new User { UserId = 14, Username = "unrelated-user", Email = "unrelated@test.com", Role = "STUDENT", TierId = 1 };
+        var document = new Document
+        {
+            DocumentId = 140, UserId = 14, Title = "Giáo trình Đại số", FileExtension = "txt", CloudStorageUrl = "algebra.txt",
+            AiParsingStatus = "READY", GeneralAccess = "PUBLIC", CurrentVersionId = 1401
+        };
+        _db.Users.Add(user);
+        _db.Documents.Add(document);
+        await _db.SaveChangesAsync();
+        _db.DocumentVersions.Add(new DocumentVersion
+        {
+            VersionId = 1401, DocumentId = 140, VersionNumber = 1, CloudStorageUrl = "algebra-v1.txt",
+            FileExtension = "txt", CreatedByUserId = 14
+        });
+        await _db.SaveChangesAsync();
+
+        var session = await _chatService.CreateSessionAsync(14, new CreateSessionDto { DocumentId = 140 });
+        var calls = 0;
+        _geminiFake.ResponseFactory = _ =>
+        {
+            calls++;
+            return new GeminiResponseDto
+            {
+                Content = "{\"answer\":\"\",\"citations\":[],\"insufficientContext\":true}"
+            };
+        };
+
+        var result = await _chatService.ProcessUserMessageAsync(14, session.SessionId,
+            new AskQuestionDto { MessageContent = "Thời tiết hôm nay thế nào?", DocumentId = 140 });
+
+        Assert.Equal("Không tìm thấy nội dung liên quan đến câu hỏi của bạn trong tài liệu.", result.Response);
+        Assert.Empty(result.Citations);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task UnattachedInventoryQuestion_CanAnswerAfterSearch_WithoutViewingAChunk()
     {
         await SeedDefaultTierAsync();
@@ -382,7 +421,13 @@ public class ChatContextIsolationTests : IDisposable
         // User attaches Doc A and asks question in Epoch 1
         await _chatService.SetAttachedDocumentAsync(2, session.SessionId, 11);
 
-        _geminiFake.ResponseFactory = (history) => new GeminiResponseDto { Content = "RESPONSE: Công thức bí mật là Apple Pie." };
+        var epoch1Calls = 0;
+        _geminiFake.ResponseFactory = _ => ++epoch1Calls == 1
+            ? new GeminiResponseDto { Content = "VIEW/11" }
+            : new GeminiResponseDto
+            {
+                Content = "{\"answer\":\"Công thức bí mật là Apple Pie [CHUNK:1].\",\"citations\":[{\"chunkId\":1}],\"insufficientContext\":false}"
+            };
 
         await _chatService.ProcessUserMessageAsync(2, session.SessionId, new AskQuestionDto { MessageContent = "Bí mật trong Doc A là gì?" });
 
@@ -390,10 +435,16 @@ public class ChatContextIsolationTests : IDisposable
         await _chatService.SetAttachedDocumentAsync(2, session.SessionId, 22);
 
         List<ChatMessageDto>? promptPassedToGeminiInEpoch2 = null;
+        var epoch2Calls = 0;
         _geminiFake.ResponseFactory = (history) =>
         {
             promptPassedToGeminiInEpoch2 = history.ToList();
-            return new GeminiResponseDto { Content = "RESPONSE: Nội dung Beta là thông tin chung." };
+            return ++epoch2Calls == 1
+                ? new GeminiResponseDto { Content = "VIEW/22" }
+                : new GeminiResponseDto
+                {
+                    Content = "{\"answer\":\"Nội dung Beta là thông tin chung [CHUNK:2].\",\"citations\":[{\"chunkId\":2}],\"insufficientContext\":false}"
+                };
         };
 
         await _chatService.ProcessUserMessageAsync(2, session.SessionId, new AskQuestionDto { MessageContent = "Doc B nói gì?" });

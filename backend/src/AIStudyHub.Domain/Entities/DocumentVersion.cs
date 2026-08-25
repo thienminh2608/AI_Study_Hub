@@ -13,6 +13,7 @@ public class DocumentVersion
     public string? ChangeSummary { get; set; }
     public int CreatedByUserId { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.Now;
+    public string AiParsingStatus { get; set; } = "PENDING";
 
     public virtual Document Document { get; set; } = null!;
     public virtual User CreatedByUser { get; set; } = null!;

@@ -94,6 +94,7 @@ public class AuthHardeningUnitTests : IDisposable
         public bool SendTemporaryPassword(string email, string temporaryPassword) => true;
         public bool SendPremiumExpiryWarning(string email, string username, int daysLeft) => true;
         public bool SendPremiumDowngraded(string email, string username) => true;
+        public Task<bool> SendDocumentSharedNotificationAsync(string toEmail, string recipientName, string sharedByName, string documentTitle, string role, DateTime sharedAt, string documentUrl) => Task.FromResult(true);
     }
 
     [Fact]

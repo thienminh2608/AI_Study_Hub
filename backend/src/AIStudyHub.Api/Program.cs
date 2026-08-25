@@ -157,12 +157,19 @@ if (!app.Environment.IsEnvironment("Testing"))
                 file_extension NVARCHAR(10) NOT NULL,
                 file_size_mb DECIMAL(5,2) NOT NULL,
                 change_summary NVARCHAR(500) NULL,
+                ai_parsing_status VARCHAR(20) NOT NULL CONSTRAINT DF_document_versions_ai_status DEFAULT 'PENDING',
                 created_by_user_id INT NOT NULL,
                 created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
                 CONSTRAINT UQ_document_versions UNIQUE(document_id, version_number),
                 CONSTRAINT FK_document_versions_document FOREIGN KEY(document_id) REFERENCES documents(document_id) ON DELETE CASCADE,
                 CONSTRAINT FK_document_versions_user FOREIGN KEY(created_by_user_id) REFERENCES users(user_id)
             );
+        END
+        IF OBJECT_ID('document_versions', 'U') IS NOT NULL
+        BEGIN
+            IF COL_LENGTH('document_versions', 'ai_parsing_status') IS NULL
+                ALTER TABLE document_versions ADD ai_parsing_status VARCHAR(20) NOT NULL CONSTRAINT DF_document_versions_ai_status DEFAULT 'PENDING';
+
         END
         IF OBJECT_ID('audit_logs', 'U') IS NULL
         BEGIN
@@ -440,6 +447,30 @@ if (!app.Environment.IsEnvironment("Testing"))
             IF COL_LENGTH('document_extracted_text', 'image_content_detected') IS NULL ALTER TABLE document_extracted_text ADD image_content_detected BIT NOT NULL CONSTRAINT DF_doc_ext_img DEFAULT 0;
             IF COL_LENGTH('document_extracted_text', 'unread_image_content_warning') IS NULL ALTER TABLE document_extracted_text ADD unread_image_content_warning NVARCHAR(500) NULL;
             IF COL_LENGTH('document_extracted_text', 'ocr_region_count') IS NULL ALTER TABLE document_extracted_text ADD ocr_region_count INT NOT NULL CONSTRAINT DF_doc_ext_ocr DEFAULT 0;
+
+            DECLARE @legacyExtractedTextUnique SYSNAME;
+            SELECT TOP 1 @legacyExtractedTextUnique = kc.name
+            FROM sys.key_constraints kc
+            INNER JOIN sys.index_columns ic
+                ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
+            WHERE kc.parent_object_id = OBJECT_ID('document_extracted_text')
+              AND kc.type = 'UQ'
+            GROUP BY kc.name
+            HAVING COUNT(*) = 1
+               AND MAX(CASE WHEN COL_NAME(ic.object_id, ic.column_id) = 'document_id' THEN 1 ELSE 0 END) = 1;
+
+            IF @legacyExtractedTextUnique IS NOT NULL
+                EXEC(N'ALTER TABLE document_extracted_text DROP CONSTRAINT [' + @legacyExtractedTextUnique + N']');
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('document_extracted_text') AND name = 'UQ_document_extracted_text_doc_ver')
+                EXEC(N'CREATE UNIQUE INDEX UQ_document_extracted_text_doc_ver
+                    ON document_extracted_text(document_id, document_version_id)
+                    WHERE document_version_id IS NOT NULL');
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('document_extracted_text') AND name = 'UQ_document_extracted_text_doc_legacy')
+                EXEC(N'CREATE UNIQUE INDEX UQ_document_extracted_text_doc_legacy
+                    ON document_extracted_text(document_id)
+                    WHERE document_version_id IS NULL');
         END
 
         IF OBJECT_ID('document_chunks', 'U') IS NOT NULL
@@ -451,6 +482,27 @@ if (!app.Environment.IsEnvironment("Testing"))
             IF COL_LENGTH('document_chunks', 'bounding_box_width') IS NULL ALTER TABLE document_chunks ADD bounding_box_width FLOAT NULL;
             IF COL_LENGTH('document_chunks', 'bounding_box_height') IS NULL ALTER TABLE document_chunks ADD bounding_box_height FLOAT NULL;
             IF COL_LENGTH('document_chunks', 'ocr_confidence') IS NULL ALTER TABLE document_chunks ADD ocr_confidence FLOAT NULL;
+
+            IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = 'UQ_document_chunks_document_index')
+                ALTER TABLE document_chunks DROP CONSTRAINT UQ_document_chunks_document_index;
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID('document_chunks')
+                  AND name = 'UQ_document_chunks_document_version_index')
+                CREATE UNIQUE INDEX UQ_document_chunks_document_version_index
+                    ON document_chunks(document_id, document_version_id, chunk_index)
+                    WHERE document_version_id IS NOT NULL;
+
+            EXEC(N'
+                UPDATE v
+                SET ai_parsing_status = CASE
+                    WHEN EXISTS (SELECT 1 FROM document_chunks c WHERE c.document_version_id = v.version_id) THEN ''READY''
+                    WHEN d.current_version_id = v.version_id THEN ISNULL(d.ai_parsing_status, ''PENDING'')
+                    ELSE ISNULL(v.ai_parsing_status, ''PENDING'')
+                END
+                FROM document_versions v
+                INNER JOIN documents d ON d.document_id = v.document_id;
+            ');
         END
 
         IF OBJECT_ID('document_ocr_regions', 'U') IS NULL

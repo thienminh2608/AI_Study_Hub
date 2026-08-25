@@ -367,6 +367,7 @@ public partial class StudyHubDbContext : DbContext, IStudyHubDbContext
             entity.Property(e => e.ChangeSummary).HasMaxLength(500).HasColumnName("change_summary");
             entity.Property(e => e.CreatedByUserId).HasColumnName("created_by_user_id");
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getdate())").HasColumnName("created_at");
+            entity.Property(e => e.AiParsingStatus).HasMaxLength(20).HasDefaultValue("PENDING").HasColumnName("ai_parsing_status");
             entity.HasOne(e => e.Document).WithMany(p => p.DocumentVersions).HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.CreatedByUser).WithMany(p => p.DocumentVersions).HasForeignKey(e => e.CreatedByUserId).OnDelete(DeleteBehavior.NoAction);
         });
