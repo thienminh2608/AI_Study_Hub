@@ -68,6 +68,17 @@ public class TransactionController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateTransaction([FromBody] CreateTransactionDto dto)
     {
+        if (dto.Amount < 2_000 || dto.Amount > int.MaxValue || decimal.Truncate(dto.Amount) != dto.Amount)
+            return BadRequest(new
+            {
+                message = "Số tiền nạp tối thiểu là 2.000đ và phải là số nguyên hợp lệ."
+            });
+        if (string.IsNullOrWhiteSpace(dto.BankId) || string.IsNullOrWhiteSpace(dto.ReferenceCode))
+            return BadRequest(new
+            {
+                message = "Vui lòng nhập đầy đủ ngân hàng và mã giao dịch để đối soát."
+            });
+
         try
         {
             int userId = GetCurrentUserId();

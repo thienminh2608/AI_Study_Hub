@@ -235,22 +235,23 @@ export const ModeratorDashboard: React.FC = () => {
     setTab(nextTab);
     setSearchParams({ tab: nextTab });
   };
-  const openDocument = async (id: number, report?: any) => {
+  const openDocument = async (id: number, report?: any, appeal?: any) => {
     setDetailLoading(true);
     setError('');
-    setActiveAction(report ? 'confirm-violation' : 'approve');
+    setActiveAction(appeal ? 'restore' : report ? 'confirm-violation' : 'approve');
     setNote('');
     setDecisionError('');
     try {
       const [value, textEvidence] = await Promise.all([
         api.moderation.getDocument(id),
-        report
-          ? api.moderation.getReportTextEvidence(report.reportId).catch(() => null)
+        report || appeal
+          ? api.moderation.getReportTextEvidence((report || appeal).reportId).catch(() => null)
           : Promise.resolve(null),
       ]);
       setDetail({
         ...value,
         report,
+        appeal,
         evidenceText: textEvidence?.extractedText || null,
         isVersionPinned: textEvidence?.isVersionPinned ?? false,
         isLegacyFallback: textEvidence?.isLegacyFallback ?? false,
@@ -268,7 +269,8 @@ export const ModeratorDashboard: React.FC = () => {
       activeAction === 'request-changes' ||
       activeAction === 'reject' ||
       activeAction === 'confirm-violation' ||
-      activeAction === 'temporarily-hide';
+      activeAction === 'temporarily-hide' ||
+      activeAction === 'uphold';
     if (noteRequired && !note.trim()) {
       setDecisionError(requiredNoteMessage(activeAction));
       return;
@@ -277,7 +279,9 @@ export const ModeratorDashboard: React.FC = () => {
     setError('');
     setDecisionError('');
     try {
-      if (detail.report) {
+      if (detail.appeal) {
+        await api.moderation.resolveAppeal(detail.appeal.appealId, activeAction, note.trim());
+      } else if (detail.report) {
         await api.moderation.resolveReport(detail.report.reportId, activeAction, note.trim());
       } else {
         await api.moderation.reviewDocument(detail.document.documentId, activeAction, note.trim());
@@ -594,19 +598,28 @@ export const ModeratorDashboard: React.FC = () => {
                       <td>
                         <div className="row-actions textual" onClick={(e) => e.stopPropagation()}>
                           {x.status === 'PENDING' && (
-                            <button
-                              onClick={async () => {
-                                setError('');
-                                try {
-                                  await api.moderation.assignReport(x.reportId);
-                                  await load();
-                                } catch (e: any) {
-                                  setError(e.message || 'Không thể nhận báo cáo.');
-                                }
-                              }}
-                            >
-                              Nhận xử lý
-                            </button>
+                            <>
+                              <button
+                                className="btn-review-row"
+                                onClick={() => openDocument(x.documentId, x)}
+                              >
+                                <Eye size={15} />
+                                <span>Xem tài liệu</span>
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  setError('');
+                                  try {
+                                    await api.moderation.assignReport(x.reportId);
+                                    await load();
+                                  } catch (e: any) {
+                                    setError(e.message || 'Không thể nhận báo cáo.');
+                                  }
+                                }}
+                              >
+                                Nhận xử lý
+                              </button>
+                            </>
                           )}
                           {x.status === 'IN_REVIEW' && (
                             <button
@@ -632,7 +645,11 @@ export const ModeratorDashboard: React.FC = () => {
                   ))}
                 {tab === 'appeals' &&
                   filtered.map((x) => (
-                    <tr key={x.appealId}>
+                    <tr
+                      key={x.appealId}
+                      className="clickable-row"
+                      onClick={() => openDocument(x.documentId, undefined, x)}
+                    >
                       <td>
                         <div className="primary-cell">
                           <span className="file-mark appeal">
@@ -654,9 +671,16 @@ export const ModeratorDashboard: React.FC = () => {
                       </td>
                       <td>{formatDate(x.createdAt)}</td>
                       <td>
-                        <div className="row-actions textual">
+                        <div className="row-actions textual" onClick={(e) => e.stopPropagation()}>
                           {x.status === 'PENDING' ? (
                             <>
+                              <button
+                                className="btn-review-row"
+                                onClick={() => openDocument(x.documentId, undefined, x)}
+                              >
+                                <Eye size={15} />
+                                <span>Xem & xử lý</span>
+                              </button>
                               <button
                                 className="success"
                                 onClick={() =>
@@ -865,12 +889,35 @@ export const ModeratorDashboard: React.FC = () => {
                   </section>
                 )}
 
+                {detail.appeal && (
+                  <section className="report-detail-box appeal-detail-box">
+                    <small>NỘI DUNG GIẢI TRÌNH</small>
+                    <p>{detail.appeal.explanation}</p>
+                    <span>
+                      Người gửi: {detail.appeal.submittedByName || 'Không xác định'} · Báo cáo #{detail.appeal.reportId}
+                    </span>
+                    {detail.appeal.evidenceUrl && (
+                      <p>
+                        Bằng chứng bổ sung:{' '}
+                        <a
+                          href={detail.appeal.evidenceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="preview-full-link"
+                        >
+                          {detail.appeal.evidenceUrl}
+                        </a>
+                      </p>
+                    )}
+                  </section>
+                )}
+
                 <section className="preview-box-enhanced">
                   <div className="original-file-preview-container custom-scroll" style={{ padding: 0 }}>
                     <OriginalDocumentPreview
                       documentId={detail.document.documentId}
                       fileExtension={detail.document.fileExtension}
-                      evidenceReportId={detail.report?.reportId}
+                      evidenceReportId={detail.report?.reportId || detail.appeal?.reportId}
                       showToolbar={true}
                     />
                   </div>
@@ -897,7 +944,45 @@ export const ModeratorDashboard: React.FC = () => {
                 </div>
 
                 {/* Queue Review Actions */}
-                {!detail.report ? (
+                {detail.appeal ? (
+                  detail.appeal.status === 'PENDING' ? (
+                    <div className="decision-selector">
+                      <button
+                        type="button"
+                        className={`decision-option-btn approve ${activeAction === 'restore' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveAction('restore');
+                          setDecisionError('');
+                        }}
+                      >
+                        <RotateCcw size={18} />
+                        <div>
+                          <strong>Chấp thuận giải trình</strong>
+                          <small>Khôi phục tài liệu về chế độ riêng tư</small>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className={`decision-option-btn reject ${activeAction === 'uphold' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveAction('uphold');
+                          setDecisionError('');
+                        }}
+                      >
+                        <XCircle size={18} />
+                        <div>
+                          <strong>Bác giải trình</strong>
+                          <small>Giữ nguyên quyết định xử lý vi phạm</small>
+                        </div>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="decision-banner safe">
+                      <strong>Giải trình đã được xử lý</strong>
+                      <p>{detail.appeal.reviewNote || 'Không có ghi chú xử lý.'}</p>
+                    </div>
+                  )
+                ) : !detail.report ? (
                   <div className="decision-selector">
                     <button
                       type="button"
@@ -995,10 +1080,14 @@ export const ModeratorDashboard: React.FC = () => {
                 )}
 
                 {/* Comment / Note Box */}
-                <div className="comment-note-box">
+                {(!detail.appeal || detail.appeal.status === 'PENDING') && <div className="comment-note-box">
                   <label className="comment-label">
                     <span>
-                      {activeAction === 'approve'
+                      {activeAction === 'restore'
+                        ? 'Ghi chú chấp thuận (Tùy chọn)'
+                        : activeAction === 'uphold'
+                          ? 'Căn cứ bác giải trình'
+                      : activeAction === 'approve'
                         ? 'Ghi chú phê duyệt (Tùy chọn)'
                         : activeAction === 'request-changes'
                           ? 'Nội dung yêu cầu chỉnh sửa'
@@ -1009,7 +1098,8 @@ export const ModeratorDashboard: React.FC = () => {
                     {(activeAction === 'request-changes' ||
                       activeAction === 'reject' ||
                       activeAction === 'confirm-violation' ||
-                      activeAction === 'temporarily-hide') && <em className="required-star">*</em>}
+                      activeAction === 'temporarily-hide' ||
+                      activeAction === 'uphold') && <em className="required-star">*</em>}
                   </label>
                   <textarea
                     className="comment-textarea"
@@ -1020,7 +1110,11 @@ export const ModeratorDashboard: React.FC = () => {
                       if (e.target.value.trim()) setDecisionError('');
                     }}
                     placeholder={
-                      activeAction === 'approve'
+                      activeAction === 'restore'
+                        ? 'Ghi chú lý do chấp thuận giải trình nếu cần...'
+                        : activeAction === 'uphold'
+                          ? 'Nêu rõ căn cứ giữ nguyên quyết định xử lý...'
+                      : activeAction === 'approve'
                         ? 'Nhập ghi chú thêm cho tài liệu nếu cần...'
                         : activeAction === 'request-changes'
                           ? 'Chỉ rõ các phần cần sửa (VD: Nội dung trang 2 bị thiếu, sai môn học...)'
@@ -1030,7 +1124,7 @@ export const ModeratorDashboard: React.FC = () => {
                     }
                   />
                   {decisionError && <span className="decision-error-text">{decisionError}</span>}
-                </div>
+                </div>}
 
                 {/* Panel Footer Submit */}
                 <div className="side-panel-footer">
@@ -1042,10 +1136,10 @@ export const ModeratorDashboard: React.FC = () => {
                   >
                     Đóng
                   </button>
-                  <button
+                  {(!detail.appeal || detail.appeal.status === 'PENDING') && <button
                     type="button"
                     className={`btn-primary submit-decision-btn ${
-                      activeAction === 'reject' || activeAction === 'confirm-violation'
+                      activeAction === 'reject' || activeAction === 'confirm-violation' || activeAction === 'uphold'
                         ? 'btn-danger'
                         : activeAction === 'request-changes' || activeAction === 'temporarily-hide'
                           ? 'btn-warning'
@@ -1061,7 +1155,7 @@ export const ModeratorDashboard: React.FC = () => {
                     ) : (
                       'Xác nhận quyết định'
                     )}
-                  </button>
+                  </button>}
                 </div>
               </div>
             </div>

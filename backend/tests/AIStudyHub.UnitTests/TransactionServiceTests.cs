@@ -85,7 +85,9 @@ public class TransactionServiceTests : IDisposable
         var result = await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto
         {
             Amount = 50_000m,
-            Type = "DEPOSIT"
+            Type = "DEPOSIT",
+            BankId = "VCB",
+            ReferenceCode = "REF-VALID-1"
         });
 
         Assert.True(result);
@@ -100,7 +102,9 @@ public class TransactionServiceTests : IDisposable
         var result = await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto
         {
             Amount = 0,
-            Type = "DEPOSIT"
+            Type = "DEPOSIT",
+            BankId = "VCB",
+            ReferenceCode = "REF-ZERO"
         });
 
         Assert.False(result);
@@ -115,7 +119,45 @@ public class TransactionServiceTests : IDisposable
         var result = await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto
         {
             Amount = -100,
-            Type = "DEPOSIT"
+            Type = "DEPOSIT",
+            BankId = "VCB",
+            ReferenceCode = "REF-NEGATIVE"
+        });
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public async Task CreateTransaction_WithAmountBelowMinimum_ReturnsFalse()
+    {
+        var user = await SeedUser();
+        var (service, _, _) = CreateServices();
+
+        var result = await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto
+        {
+            Amount = 1_999m,
+            Type = "DEPOSIT",
+            BankId = "VCB",
+            ReferenceCode = "REF-BELOW-MINIMUM"
+        });
+
+        Assert.False(result);
+    }
+
+    [Theory]
+    [InlineData("", "REF-VALID")]
+    [InlineData("VCB", "")]
+    public async Task CreateTransaction_WithMissingReconciliationData_ReturnsFalse(string bankId, string referenceCode)
+    {
+        var user = await SeedUser();
+        var (service, _, _) = CreateServices();
+
+        var result = await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto
+        {
+            Amount = 50_000m,
+            Type = "DEPOSIT",
+            BankId = bankId,
+            ReferenceCode = referenceCode
         });
 
         Assert.False(result);
@@ -130,7 +172,9 @@ public class TransactionServiceTests : IDisposable
         await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto
         {
             Amount = 50_000m,
-            Type = "DEPOSIT"
+            Type = "DEPOSIT",
+            BankId = "VCB",
+            ReferenceCode = "REF-PENDING"
         });
 
         using var ctx = _factory.CreateContext();
@@ -144,7 +188,7 @@ public class TransactionServiceTests : IDisposable
     {
         var user = await SeedUser();
         var (service, _, _) = CreateServices();
-        await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto { Amount = 50_000m, Type = "DEPOSIT" });
+        await service.CreateTransactionAsync(user.UserId, new CreateTransactionDto { Amount = 50_000m, Type = "DEPOSIT", BankId = "VCB", ReferenceCode = "REF-APPROVE" });
         int transactionId;
         using (var ctx = _factory.CreateContext()) transactionId = ctx.Transactions.Single().TransactionId;
 

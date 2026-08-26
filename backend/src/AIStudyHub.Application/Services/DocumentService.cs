@@ -174,6 +174,7 @@ public class DocumentService : IDocumentService
         // Rename physical file from temp to final
         string oldUrl = doc.CloudStorageUrl;
         string newUrl = RenamePhysicalFile(oldUrl, userId, finalTitle, doc.FileExtension);
+        await SyncRenamedVersionPathsAsync(doc.DocumentId, oldUrl, newUrl);
 
         doc.Title = finalTitle;
         doc.Subject = subject;
@@ -360,7 +361,9 @@ public class DocumentService : IDocumentService
             counter++;
         }
 
-        string newUrl = RenamePhysicalFile(pendingDoc.CloudStorageUrl, userId, uniqueTitle, pendingDoc.FileExtension);
+        string oldUrl = pendingDoc.CloudStorageUrl;
+        string newUrl = RenamePhysicalFile(oldUrl, userId, uniqueTitle, pendingDoc.FileExtension);
+        await SyncRenamedVersionPathsAsync(pendingDoc.DocumentId, oldUrl, newUrl);
 
         pendingDoc.Title = uniqueTitle;
         pendingDoc.Subject = subject;
@@ -963,6 +966,19 @@ public class DocumentService : IDocumentService
         _fileStorage.MoveFile(tempRelativePath, finalRelativePath);
 
         return $"/{UploadFolder}/{userId}/{finalFileName}";
+    }
+
+    private async Task SyncRenamedVersionPathsAsync(int documentId, string oldUrl, string newUrl)
+    {
+        if (string.Equals(oldUrl, newUrl, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var versions = await _dbContext.DocumentVersions
+            .Where(v => v.DocumentId == documentId && v.CloudStorageUrl == oldUrl)
+            .ToListAsync();
+
+        foreach (var version in versions)
+            version.CloudStorageUrl = newUrl;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

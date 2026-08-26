@@ -113,10 +113,27 @@ public class ModerationController : ControllerBase
     [HttpGet("documents/{id}")]
     public async Task<IActionResult> DocumentDetail(int id)
     {
-        var doc = await _db.Documents.AsNoTracking().FirstOrDefaultAsync(d => d.DocumentId == id);
-        if (doc == null || doc.ModerationStatus == "NOT_REQUESTED")
-            return NotFound();
-        return Ok(await _documents.GetDocumentDetailAsync(id));
+        var moderationContext = await _db.Documents.AsNoTracking()
+            .Where(d => d.DocumentId == id && !d.IsDeleted)
+            .Select(d => new
+            {
+                d.ModerationStatus,
+                HasReport = d.DocumentReports.Any()
+            })
+            .FirstOrDefaultAsync();
+
+        if (moderationContext == null)
+            return NotFound(new { message = "Không tìm thấy tài liệu." });
+
+        // A restored appeal resets the document to NOT_REQUESTED, but its report and
+        // appeal remain valid moderation history that moderators must still inspect.
+        if (moderationContext.ModerationStatus == "NOT_REQUESTED" && !moderationContext.HasReport)
+            return NotFound(new { message = "Tài liệu không có hồ sơ kiểm duyệt liên quan." });
+
+        var detail = await _documents.GetDocumentDetailAsync(id);
+        return detail == null
+            ? NotFound(new { message = "Không tìm thấy chi tiết tài liệu." })
+            : Ok(detail);
     }
 
     [HttpPost("documents/{id}/{decision}")]
@@ -397,6 +414,20 @@ public class ModerationController : ControllerBase
             return NotFound(new { message = "Tài liệu không có đường dẫn tệp hợp lệ." });
 
         string relativePath = cloudUrl.TrimStart('/');
+        if (!_fileStorage.FileExists(relativePath)
+            && report.ReportedVersionId.HasValue
+            && report.Document.CurrentVersionId == report.ReportedVersionId
+            && !string.IsNullOrWhiteSpace(report.Document.CloudStorageUrl)
+            && _fileStorage.FileExists(report.Document.CloudStorageUrl.TrimStart('/')))
+        {
+            // Legacy uploads could create the baseline version while the file still had
+            // its temporary name, then rename only Document.CloudStorageUrl on confirm.
+            // Falling back is safe only when the report points to the current version.
+            cloudUrl = report.Document.CloudStorageUrl;
+            extension = report.Document.FileExtension;
+            relativePath = cloudUrl.TrimStart('/');
+        }
+
         if (!_fileStorage.FileExists(relativePath))
         {
             return NotFound(new { message = "Tệp bằng chứng vật lý không tồn tại trên hệ thống lưu trữ." });
@@ -481,7 +512,9 @@ public class ModerationController : ControllerBase
     }
 
     [HttpGet("appeals")]
-    public async Task<IActionResult> Appeals() => Ok(await _db.ModerationAppeals.AsNoTracking().Include(a => a.Report).ThenInclude(r => r.Document)
+    public async Task<IActionResult> Appeals() => Ok(await _db.ModerationAppeals.AsNoTracking()
+        .Include(a => a.Report).ThenInclude(r => r.Document)
+        .Include(a => a.SubmittedByUser)
         .OrderByDescending(a => a.CreatedAt).Select(a => new
         {
             a.AppealId,
@@ -490,8 +523,11 @@ public class ModerationController : ControllerBase
             a.EvidenceUrl,
             a.Status,
             a.CreatedAt,
+            a.ReviewedAt,
+            a.ReviewNote,
+            SubmittedByName = a.SubmittedByUser.Username,
             a.Report.DocumentId,
-            a.Report.Document.Title,
+            DocumentTitle = a.Report.Document.Title,
             a.Report.ReportType
         }).ToListAsync());
 

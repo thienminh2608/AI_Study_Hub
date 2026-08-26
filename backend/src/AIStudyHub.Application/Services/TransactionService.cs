@@ -122,9 +122,11 @@ public class TransactionService : ITransactionService
 
     public async Task<bool> CreateTransactionAsync(int userId, CreateTransactionDto dto)
     {
-        if (dto.Amount <= 0 || dto.Amount > int.MaxValue || decimal.Truncate(dto.Amount) != dto.Amount)
+        if (dto.Amount < 2_000 || dto.Amount > int.MaxValue || decimal.Truncate(dto.Amount) != dto.Amount)
             return false;
         if (!"DEPOSIT".Equals(dto.Type?.Trim(), StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (string.IsNullOrWhiteSpace(dto.BankId) || string.IsNullOrWhiteSpace(dto.ReferenceCode))
             return false;
 
         var tx = new Transaction

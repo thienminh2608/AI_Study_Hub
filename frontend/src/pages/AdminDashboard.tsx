@@ -2051,7 +2051,7 @@ export const AdminDashboard: React.FC = () => {
                     <div className="error-alert">{transactionActionError}</div>
                   )}
 
-                  <div className="modal-actions">
+                  <div className="modal-actions transaction-modal-actions">
                     <button
                       type="button"
                       className="btn-secondary"
@@ -3115,6 +3115,66 @@ export const AdminDashboard: React.FC = () => {
           min-height: 100px;
         }
 
+        .transaction-action-modal .transaction-modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          align-items: center;
+          gap: 0.75rem;
+          padding-top: 0.25rem;
+        }
+
+        .transaction-action-modal .transaction-modal-actions button {
+          min-width: 132px;
+          min-height: 44px;
+          justify-content: center;
+        }
+
+        .transaction-action-modal .btn-danger {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+          padding: 0.75rem 1.5rem;
+          border: 1px solid rgba(248, 113, 113, 0.7);
+          border-radius: var(--radius-sm);
+          background: linear-gradient(135deg, #dc2626, #ef4444);
+          color: #fff;
+          font-weight: 700;
+          cursor: pointer;
+          box-shadow: 0 8px 22px rgba(220, 38, 38, 0.25);
+          transition: var(--transition-normal);
+        }
+
+        .transaction-action-modal .btn-danger:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: #fca5a5;
+          box-shadow: 0 10px 28px rgba(239, 68, 68, 0.4);
+          filter: brightness(1.06);
+        }
+
+        .transaction-action-modal .btn-danger:active:not(:disabled) {
+          transform: translateY(0);
+          box-shadow: 0 4px 14px rgba(220, 38, 38, 0.28);
+        }
+
+        .transaction-action-modal .btn-danger:focus-visible {
+          outline: 2px solid #fca5a5;
+          outline-offset: 3px;
+        }
+
+        .transaction-action-modal .transaction-modal-actions button:disabled {
+          cursor: not-allowed;
+          transform: none;
+          box-shadow: none;
+          opacity: 0.58;
+        }
+
+        .transaction-action-modal .btn-danger:disabled {
+          border-color: rgba(248, 113, 113, 0.3);
+          background: rgba(239, 68, 68, 0.13);
+          color: #fca5a5;
+        }
+
         .modal-title-row {
           display: flex;
           align-items: flex-start;
@@ -3151,6 +3211,16 @@ export const AdminDashboard: React.FC = () => {
         @media (max-width: 520px) {
           .transaction-action-summary {
             grid-template-columns: 1fr;
+          }
+
+          .transaction-action-modal .transaction-modal-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .transaction-action-modal .transaction-modal-actions button {
+            width: 100%;
+            min-width: 0;
           }
         }
 

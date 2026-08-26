@@ -127,9 +127,20 @@ export const Wallet: React.FC = () => {
 
   const transferContent =
     `${transferConfig?.transferContentPrefix || 'AIStudyHub'} ${user?.username || ''}`.trim();
+  const parsedCustomAmount = customAmount.trim() ? Number(customAmount) : 0;
+  const selectedAmount = amount ?? parsedCustomAmount;
+  const hasAmountInput = amount !== null || customAmount.trim() !== '';
+  const isValidAmount =
+    Number.isInteger(selectedAmount) && selectedAmount >= 2_000 && selectedAmount <= 2_147_483_647;
+  const isTransferConfigReady = Boolean(
+    transferConfig?.isActive &&
+      transferConfig.bankCode?.trim() &&
+      transferConfig.accountNumber?.trim() &&
+      transferConfig.accountName?.trim(),
+  );
   const qrUrl =
-    amount && transferConfig?.isActive && transferConfig.bankCode && transferConfig.accountNumber
-      ? `https://img.vietqr.io/image/${encodeURIComponent(transferConfig.bankCode)}-${encodeURIComponent(transferConfig.accountNumber)}-${encodeURIComponent(transferConfig.qrTemplate || 'compact2')}.png?amount=${amount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(transferConfig.accountName || '')}`
+    isValidAmount && isTransferConfigReady
+      ? `https://img.vietqr.io/image/${encodeURIComponent(transferConfig!.bankCode!)}-${encodeURIComponent(transferConfig!.accountNumber!)}-${encodeURIComponent(transferConfig!.qrTemplate || 'compact2')}.png?amount=${selectedAmount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(transferConfig!.accountName || '')}`
       : '';
 
   const handleSubmitTransaction = async (e: React.FormEvent) => {
@@ -137,10 +148,13 @@ export const Wallet: React.FC = () => {
     setError('');
     setSuccess('');
 
-    const targetAmount = amount || (customAmount ? parseInt(customAmount, 10) : 0);
-
-    if (!targetAmount || targetAmount < 2000) {
+    if (!isValidAmount) {
       setError('Vui lòng chọn hoặc nhập số tiền nạp tối thiểu là 2,000đ.');
+      return;
+    }
+
+    if (!isTransferConfigReady) {
+      setError('Cấu hình chuyển khoản hiện chưa sẵn sàng. Vui lòng thử lại sau.');
       return;
     }
 
@@ -155,13 +169,13 @@ export const Wallet: React.FC = () => {
 
     try {
       await api.transaction.create({
-        amount: targetAmount,
+        amount: selectedAmount,
         type: 'DEPOSIT',
         bankId: bankId.trim(),
         referenceCode: referenceCode.trim(),
       });
       setSuccess(
-        `Đã gửi yêu cầu nạp ${targetAmount.toLocaleString('vi-VN')}đ. Vui lòng đợi Quản trị viên phê duyệt.`,
+        `Đã gửi yêu cầu nạp ${selectedAmount.toLocaleString('vi-VN')}đ. Vui lòng đợi Quản trị viên phê duyệt.`,
       );
       setAmount(null);
       setCustomAmount('');
@@ -231,6 +245,7 @@ export const Wallet: React.FC = () => {
                 setError('');
                 setSuccess('');
                 setAmount(null);
+                setCustomAmount('');
                 setShowDepositModal(true);
               }}
             >
@@ -294,6 +309,7 @@ export const Wallet: React.FC = () => {
                 <input
                   type="number"
                   min="2000"
+                  max="2147483647"
                   step="1000"
                   className="input-control"
                   placeholder="Ví dụ: 50000"
@@ -311,17 +327,21 @@ export const Wallet: React.FC = () => {
               <div className="deposit-summary" style={{ marginTop: '12px' }}>
                 <span>Số tiền nạp</span>
                 <strong>
-                  {amount
-                    ? `${amount.toLocaleString('vi-VN')}đ`
-                    : customAmount
-                      ? `${parseInt(customAmount || '0', 10).toLocaleString('vi-VN')}đ`
-                      : 'Chưa chọn'}
+                  {hasAmountInput && Number.isFinite(selectedAmount)
+                    ? `${selectedAmount.toLocaleString('vi-VN')}đ`
+                    : 'Chưa chọn'}
                 </strong>
               </div>
 
               <>
-                {(amount || customAmount) &&
-                  (transferConfig?.isActive && qrUrl ? (
+                {hasAmountInput &&
+                  (transferConfig === null ? (
+                    <div className="transfer-config-loading">
+                      <Loader className="spin" size={18} /> Đang tải cấu hình chuyển khoản...
+                    </div>
+                  ) : !isValidAmount ? (
+                    <div className="error-alert">Số tiền nạp tối thiểu là 2.000đ và phải là số nguyên.</div>
+                  ) : isTransferConfigReady && qrUrl ? (
                     <section className="transfer-qr-panel" aria-live="polite">
                       <img src={qrUrl} alt={`Mã QR chuyển khoản`} />
                       <div className="transfer-details">
@@ -340,10 +360,10 @@ export const Wallet: React.FC = () => {
                     </section>
                   ) : (
                     <div className="error-alert">
-                      Admin chưa bật cấu hình chuyển khoản. Vui lòng thử lại sau.
+                      Cấu hình chuyển khoản chưa được bật hoặc chưa đầy đủ. Vui lòng thử lại sau.
                     </div>
                   ))}
-                {(amount || customAmount) && transferConfig?.isActive && (
+                {hasAmountInput && isValidAmount && isTransferConfigReady && (
                   <div
                     className="reconciliation-inputs"
                     style={{
@@ -410,8 +430,8 @@ export const Wallet: React.FC = () => {
                 className="btn-primary tx-submit"
                 disabled={
                   submitting ||
-                  (!amount && (!customAmount || parseInt(customAmount, 10) < 2000)) ||
-                  !transferConfig?.isActive
+                  !isValidAmount ||
+                  !isTransferConfigReady
                 }
                 style={{ marginTop: '16px', width: '100%' }}
               >
