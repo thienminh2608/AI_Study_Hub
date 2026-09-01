@@ -11,6 +11,13 @@ using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Keep the transport/form limit above the 50 MiB business file limit so
+// multipart headers and boundaries do not cause otherwise valid uploads to be
+// rejected before they reach DocumentController.
+const long MaxUploadRequestSizeBytes = 55L * 1024 * 1024;
+builder.WebHost.ConfigureKestrel(options =>
+    options.Limits.MaxRequestBodySize = MaxUploadRequestSizeBytes);
+
 // 0. Validate Startup Configuration (Fail-Closed)
 ValidateStartupConfiguration(builder.Configuration, builder.Environment);
 
@@ -50,7 +57,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
-    options.MultipartBodyLengthLimit = 50L * 1024 * 1024);
+    options.MultipartBodyLengthLimit = MaxUploadRequestSizeBytes);
 
 // 4. Configure Swagger with JWT Support
 builder.Services.AddSwaggerGen(c =>

@@ -8,6 +8,8 @@ namespace AIStudyHub.Infrastructure.Services.Storage;
 
 public class LocalFileStorage : IFileStorage
 {
+    private const int MoveRetryCount = 10;
+    private const int MaxMoveRetryDelayMs = 500;
     private readonly IWebHostEnvironment _env;
 
     public LocalFileStorage(IWebHostEnvironment env)
@@ -53,15 +55,33 @@ public class LocalFileStorage : IFileStorage
         string sourcePhysical = GetPhysicalPath(sourceRelativePath);
         string destPhysical = GetPhysicalPath(destRelativePath);
 
-        if (File.Exists(sourcePhysical))
-        {
-            string directory = Path.GetDirectoryName(destPhysical) ?? "";
-            if (!Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
+        if (!File.Exists(sourcePhysical))
+            return;
 
-            File.Move(sourcePhysical, destPhysical, overwrite: true);
+        string directory = Path.GetDirectoryName(destPhysical) ?? "";
+        if (!Directory.Exists(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        for (int attempt = 1; attempt <= MoveRetryCount; attempt++)
+        {
+            try
+            {
+                File.Move(sourcePhysical, destPhysical, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < MoveRetryCount)
+            {
+                // Extraction, preview, antivirus, or another request may hold a
+                // short-lived read handle. On Windows that prevents rename even
+                // though reading is allowed. Retry only I/O contention; access
+                // and path errors must still surface immediately.
+                if (!File.Exists(sourcePhysical) && File.Exists(destPhysical))
+                    return;
+
+                Thread.Sleep(Math.Min(50 * attempt, MaxMoveRetryDelayMs));
+            }
         }
     }
 

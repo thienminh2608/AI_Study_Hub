@@ -1110,8 +1110,9 @@ public class DocumentService : IDocumentService
                     sb.AppendLine($"--- Worksheet: {sheet.Name} ---");
                     const int maxRows = 10_000;
                     const int maxColumns = 250;
-                    int rows = Math.Min(sheet.Dimension?.Rows ?? 0, maxRows);
-                    int cols = Math.Min(sheet.Dimension?.Columns ?? 0, maxColumns);
+                    var (detectedRows, detectedColumns) = GetWorksheetBounds(sheet);
+                    int rows = Math.Min(detectedRows, maxRows);
+                    int cols = Math.Min(detectedColumns, maxColumns);
                     for (int r = 1; r <= rows; r++)
                     {
                         var rowVals = new List<string>();
@@ -1140,6 +1141,27 @@ public class DocumentService : IDocumentService
             // ProcessExtractionAsync will mark the document FAILED and the worker can retry it.
             throw new InvalidDataException($"Unable to extract XLSX content from '{Path.GetFileName(filePath)}'.", ex);
         }
+    }
+
+    private static (int Rows, int Columns) GetWorksheetBounds(ExcelWorksheet sheet)
+    {
+        if (sheet.Dimension != null)
+            return (sheet.Dimension.Rows, sheet.Dimension.Columns);
+
+        // Some valid XLSX producers omit the optional worksheet <dimension>
+        // element. EPPlus still loads their cells, but Dimension remains null.
+        int maxRow = 0;
+        int maxColumn = 0;
+        foreach (var cell in sheet.Cells)
+        {
+            if (cell.Value == null && string.IsNullOrWhiteSpace(cell.Text))
+                continue;
+
+            maxRow = Math.Max(maxRow, cell.Start.Row);
+            maxColumn = Math.Max(maxColumn, cell.Start.Column);
+        }
+
+        return (maxRow, maxColumn);
     }
 
     private static ExtractionResult CreateOfficeExtractionResult(string text, string filePath, string mediaPrefix)
@@ -1172,7 +1194,11 @@ public class DocumentService : IDocumentService
         {
             byte[] pdfBytes = File.ReadAllBytes(filePath);
             bool hasPdfImages = Regex.IsMatch(Encoding.ASCII.GetString(pdfBytes), @"/Subtype\s*/Image\b");
-            using (var document = PdfDocument.Open(filePath))
+            // Parse the same in-memory snapshot used by OCR. The upload flow can
+            // rename the temporary file while the background job is running;
+            // reopening by path after ReadAllBytes creates a race that used to
+            // turn a valid PDF into an empty successful extraction.
+            using (var document = PdfDocument.Open(pdfBytes))
             {
                 var sb = new StringBuilder();
                 int totalPages = 0;
@@ -1225,8 +1251,9 @@ public class DocumentService : IDocumentService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error extracting PDF: {ex.Message}");
-            return new ExtractionResult("", null);
+            // Let the durable processing queue retry transient storage/parser
+            // failures instead of persisting a placeholder and marking READY.
+            throw new InvalidDataException($"Unable to extract PDF content from '{Path.GetFileName(filePath)}'.", ex);
         }
     }
 

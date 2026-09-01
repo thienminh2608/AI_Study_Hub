@@ -125,6 +125,14 @@ public class DocumentController : ControllerBase
             await _queue.EnqueueJobAsync(doc.DocumentId);
             return Ok(doc);
         }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Could not finalize document {DocumentId} because its file is still in use.", documentId);
+            return Conflict(new
+            {
+                message = "Tệp vẫn đang được hệ thống xử lý. Vui lòng thử xác nhận lại sau vài giây."
+            });
+        }
         catch (Exception ex)
         {
             return BadRequest(new
@@ -143,6 +151,14 @@ public class DocumentController : ControllerBase
             var doc = await _documentService.ReplaceDocumentAsync(userId, pendingDocId, duplicateDocId, title, subject, sharingPermission, folderId);
             return Ok(doc);
         }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Could not replace document {DuplicateDocumentId} with pending document {PendingDocumentId} because the file is still in use.", duplicateDocId, pendingDocId);
+            return Conflict(new
+            {
+                message = "Tệp vẫn đang được hệ thống xử lý. Vui lòng thử lại sau vài giây."
+            });
+        }
         catch (Exception ex)
         {
             return BadRequest(new
@@ -160,6 +176,14 @@ public class DocumentController : ControllerBase
             int userId = GetCurrentUserId();
             var doc = await _documentService.KeepBothDocumentsAsync(userId, pendingDocId, title, subject, sharingPermission, folderId);
             return Ok(doc);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Could not keep pending document {PendingDocumentId} because the file is still in use.", pendingDocId);
+            return Conflict(new
+            {
+                message = "Tệp vẫn đang được hệ thống xử lý. Vui lòng thử lại sau vài giây."
+            });
         }
         catch (Exception ex)
         {

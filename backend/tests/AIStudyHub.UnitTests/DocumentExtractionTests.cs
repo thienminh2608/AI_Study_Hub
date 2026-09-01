@@ -38,6 +38,32 @@ public class DocumentExtractionTests
     }
 
     [Fact]
+    public void ExtractTextFromXlsx_ReadsCellsWhenWorksheetDimensionIsMissing()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"aistudyhub-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            ExcelPackage.License.SetNonCommercialPersonal("AIStudyHub Tests");
+            using (var package = new ExcelPackage())
+            {
+                var sheet = package.Workbook.Worksheets.Add("Khong dimension");
+                sheet.Cells[1, 1].Value = "MSSV";
+                sheet.Cells[2, 1].Value = "SE173602";
+                package.SaveAs(new FileInfo(path));
+            }
+
+            RemoveWorksheetDimension(path, "xl/worksheets/sheet1.xml");
+
+            var extracted = Extract(path, "xlsx");
+
+            Assert.Contains("--- Worksheet: Khong dimension ---", extracted);
+            Assert.Contains("MSSV", extracted);
+            Assert.Contains("SE173602", extracted);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
     public void ExtractTextFromPptx_ReadsTextFromSlides()
     {
         var path = Path.Combine(Path.GetTempPath(), $"aistudyhub-{Guid.NewGuid():N}.pptx");
@@ -67,6 +93,21 @@ public class DocumentExtractionTests
         finally { if (File.Exists(path)) File.Delete(path); }
     }
 
+    [Fact]
+    public void ExtractTextFromPdf_InvalidStructureThrowsInsteadOfReturningEmptyText()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"aistudyhub-{Guid.NewGuid():N}.pdf");
+        try
+        {
+            File.WriteAllText(path, "%PDF-1.4\nnot a valid PDF body", Encoding.ASCII);
+
+            var exception = Assert.ThrowsAny<Exception>(() => Extract(path, "pdf"));
+
+            Assert.Contains("Unable to extract PDF content", exception.ToString());
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
     private static string Extract(string path, string extension)
     {
         var service = new DocumentService(null!, null!, null!, null!, new AIStudyHub.Infrastructure.Services.Gemini.MockGeminiService(), null!);
@@ -76,6 +117,26 @@ public class DocumentExtractionTests
         var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
         var textProperty = result.GetType().GetProperty("Text")!;
         return (string)textProperty.GetValue(result)!;
+    }
+
+    private static void RemoveWorksheetDimension(string path, string entryName)
+    {
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
+        var entry = archive.GetEntry(entryName)!;
+        string xml;
+        using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+            xml = reader.ReadToEnd();
+
+        xml = System.Text.RegularExpressions.Regex.Replace(
+            xml,
+            @"<dimension\b[^>]*/>",
+            "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        entry.Delete();
+        var replacement = archive.CreateEntry(entryName);
+        using var writer = new StreamWriter(replacement.Open(), new UTF8Encoding(false));
+        writer.Write(xml);
     }
 
     [Fact]
